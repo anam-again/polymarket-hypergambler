@@ -66,7 +66,7 @@ export class EarlyBuyer extends QuantBot implements QuantBotRun {
             
             if (!this.sellDone) {
                 this.tradeResults.forEach(async (trade) => {
-                    if (trade.tradeStatus === TradeStatus.SOLD) {
+                    if (trade.tradeStatus === TradeStatus.EXECUTED) {
                         await this.makeOrder(
                             'followup-sell',
                             this.btcDirection === BtcDirection.UP ? orderBooks.BtcUpTokenId : orderBooks.BtcDownTokenId,

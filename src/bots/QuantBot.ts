@@ -22,7 +22,7 @@ enum LogLevel {
 
 export enum TradeStatus {
   LIVE = 'LIVE',
-  SOLD = 'SOLD', // Same as matched
+  EXECUTED = 'EXECUTED',
   EXPIRED = 'EXPIRED',
   CANCELED = 'CANCELED',
 }
@@ -114,8 +114,8 @@ export class QuantBot {
         }
 
         if (this.PROD_MODE && tradeResult.tradeStatus === TradeStatus.LIVE && liveResult && liveResult.status === 'MATCHED') {
-          this.writeTradeUpdate(tradeResult, `${tradeResult.tradeStatus} -> ${TradeStatus.SOLD}`)
-          tradeResult.tradeStatus = TradeStatus.SOLD;
+          this.writeTradeUpdate(tradeResult, `${tradeResult.tradeStatus} -> ${TradeStatus.EXECUTED}`)
+          tradeResult.tradeStatus = TradeStatus.EXECUTED;
           // Track position only when order is matched
           this.insertOrAddToLiveClobIdAmounts(tradeResult.clobTokenId, tradeResult.amount, tradeResult.side);
           if (tradeResult.side === Side.BUY) {
@@ -140,8 +140,8 @@ export class QuantBot {
             if (tradeResult.targetBuyPrice) {
               const liveSellPrice = await this.marketInfo.getPrice(tradeResult.clobTokenId, tradeResult.side);
               if (liveSellPrice <= tradeResult.targetBuyPrice) {
-                this.writeTradeUpdate(tradeResult, `${tradeResult.tradeStatus} -> ${TradeStatus.SOLD}`)
-                tradeResult.tradeStatus = TradeStatus.SOLD;
+                this.writeTradeUpdate(tradeResult, `${tradeResult.tradeStatus} -> ${TradeStatus.EXECUTED}`)
+                tradeResult.tradeStatus = TradeStatus.EXECUTED;
                 // Track position only when order is matched
                 this.insertOrAddToLiveClobIdAmounts(tradeResult.clobTokenId, tradeResult.amount, tradeResult.side);
                 tradeResult.finalValue = -(tradeResult.amount * tradeResult.targetBuyPrice);
@@ -154,8 +154,8 @@ export class QuantBot {
             if (tradeResult.targetSellPrice) {
               const liveBuyPrice = await this.marketInfo.getPrice(tradeResult.clobTokenId, tradeResult.side);
               if (liveBuyPrice >= tradeResult.targetSellPrice) {
-                this.writeTradeUpdate(tradeResult, `${tradeResult.tradeStatus} -> ${TradeStatus.SOLD}`)
-                tradeResult.tradeStatus = TradeStatus.SOLD;
+                this.writeTradeUpdate(tradeResult, `${tradeResult.tradeStatus} -> ${TradeStatus.EXECUTED}`)
+                tradeResult.tradeStatus = TradeStatus.EXECUTED;
                 // Track position only when order is matched
                 this.insertOrAddToLiveClobIdAmounts(tradeResult.clobTokenId, tradeResult.amount, tradeResult.side);
                 tradeResult.finalValue = tradeResult.amount * tradeResult.targetSellPrice;
@@ -219,7 +219,7 @@ export class QuantBot {
         this.liveClobIdAmounts = {};
         // Write value of succeeded trades
         for (const tradeResult of this.tradeResults) {
-          if (tradeResult.tradeStatus !== TradeStatus.SOLD) continue;
+          if (tradeResult.tradeStatus !== TradeStatus.EXECUTED) continue;
           this.writeAuditedTrade(tradeResult);
         }
         // Done with hourly audit writing, clear all trades.
