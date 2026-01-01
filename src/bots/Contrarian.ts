@@ -119,7 +119,7 @@ export class Contrarian extends QuantBot implements QuantBotRun {
             if (!this.sellDone) {
                 for (const trade of this.tradeResults) {
                     if (trade.tradeStatus === TradeStatus.EXECUTED) {
-                        const order = await this.makeOrder(
+                        await this.makeOrder(
                             'followup-sell',
                             trade.clobTokenId,
                             this.targetSellPrice,

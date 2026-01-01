@@ -79,7 +79,8 @@ export class QuantBot {
     this.currentHour = now.getHours();
     this.lastCleanupHour = now.getHours();
     this.liveClobIdAmounts = {}
-    console.log(`${this.name} initialized...`)
+    console.log(`[${this.PROD_MODE ? "PROD" : "TEST"}]${this.name} initialized...`)
+    this.writeLog('Initialized...', LogLevel.INFO);
   }
 
   /**
@@ -118,21 +119,21 @@ export class QuantBot {
           tradeResult.tradeStatus = TradeStatus.EXECUTED;
           // Track position only when order is matched
           this.insertOrAddToLiveClobIdAmounts(tradeResult.clobTokenId, tradeResult.amount, tradeResult.side);
+          const livePrice = parseFloat(liveResult.price);
           if (tradeResult.side === Side.BUY) {
-            if (tradeResult.targetBuyPrice) {
-              tradeResult.finalValue = tradeResult.amount * tradeResult.targetBuyPrice
+            if (tradeResult.targetBuyPrice && livePrice) {
+              tradeResult.finalValue = -(tradeResult.amount * livePrice)
             } else {
-              this.writeError(`trade: ${tradeResult.orderId} does not have targetBuyPrice but is BUY order`)
+              this.writeError(`trade: ${tradeResult.orderId} does not have targetBuyPrice/livePrice but is BUY order, livePrice: ${livePrice}`)
             }
           } else {
             // SELL order
-            if (tradeResult.targetSellPrice) {
-              tradeResult.finalValue = tradeResult.amount * tradeResult.targetSellPrice
+            if (tradeResult.targetSellPrice && livePrice) {
+              tradeResult.finalValue = tradeResult.amount * livePrice
             } else {
-              this.writeError(`trade: ${tradeResult.orderId} does not have targetSellPrice but is SELL order`)
+              this.writeError(`trade: ${tradeResult.orderId} does not have targetSellPrice/livePrice but is SELL order, livePrice: ${livePrice}`)
             }
           }
-          tradeResult.finalValue = tradeResult.amount
         }
 
         if (!this.PROD_MODE && tradeResult.tradeStatus === TradeStatus.LIVE) {
@@ -175,6 +176,9 @@ export class QuantBot {
         this.lastCleanupHour = currentHour;
         // Every hour
         // Expire still living trades
+        this.tradeResults = this.tradeResults.sort((a, b) => {
+          return a.createdAt - b.createdAt;
+        })
         for (const tradeResult of this.tradeResults) {
           if (tradeResult.tradeStatus === TradeStatus.LIVE) {
             this.writeTradeUpdate(tradeResult, `${tradeResult.tradeStatus} -> ${TradeStatus.EXPIRED} `)
@@ -297,7 +301,7 @@ export class QuantBot {
   }
 
   public writeAuditedTrade(trade: TradeOrder) {
-    let message = [
+    const message = [
       Date.now(),
       this.name,
       trade.orderId,
