@@ -96,6 +96,10 @@ function StrategyDetail({ strategy, startTime, endTime, mode }) {
             <h3>W/L</h3>
             <div className="value">{stats.winningTrades}/{stats.losingTrades}</div>
           </div>
+          <div className="stat-card small">
+            <h3>Expired</h3>
+            <div className="value">{stats.expiredTrades}</div>
+          </div>
         </div>
       )}
 

@@ -31,21 +31,29 @@ function LiveLogs({ mode = 'all' }) {
     modeRef.current = mode;
   }, [mode]);
 
-  // Fetch log files list
+  // Fetch log files list - refetch when mode changes
   useEffect(() => {
-    fetch('/api/log-files')
+    const modeParam = mode && mode !== 'all' ? `?mode=${mode}` : '';
+    fetch(`/api/log-files${modeParam}`)
       .then(res => res.json())
-      .then(setLogFiles)
+      .then(files => {
+        setLogFiles(files);
+        // Reset source selection if current source is not in new list
+        if (selectedSource !== 'all' && !files.includes(selectedSource)) {
+          setSelectedSource('all');
+        }
+      })
       .catch(console.error);
-  }, []);
+  }, [mode]);
 
-  // Fetch initial logs
+  // Fetch initial logs - refetch when source or mode changes
   useEffect(() => {
     async function fetchInitialLogs() {
       setLoading(true);
       try {
+        const modeParam = mode && mode !== 'all' ? `&mode=${mode}` : '';
         const url = selectedSource === 'all'
-          ? '/api/live-logs?limit=100'
+          ? `/api/live-logs?limit=100${modeParam}`
           : `/api/logs/${encodeURIComponent(selectedSource)}?limit=100`;
 
         const res = await fetch(url);
@@ -59,7 +67,7 @@ function LiveLogs({ mode = 'all' }) {
     }
 
     fetchInitialLogs();
-  }, [selectedSource]);
+  }, [selectedSource, mode]);
 
   // WebSocket connection - only run once on mount
   useEffect(() => {
@@ -90,14 +98,37 @@ function LiveLogs({ mode = 'all' }) {
                   filteredEntries = filteredEntries.filter(e => e.source === source);
                 }
 
-                // Filter out TEST logs when in PROD mode
+                // Filter by mode based on source name (PROD = 'prod' in name, TEST = no 'prod')
+                if (currentMode === 'PROD') {
+                  filteredEntries = filteredEntries.filter(e =>
+                    e.source.toLowerCase().includes('prod')
+                  );
+                } else if (currentMode === 'TEST') {
+                  filteredEntries = filteredEntries.filter(e =>
+                    !e.source.toLowerCase().includes('prod')
+                  );
+                }
+
+                // Also filter out TEST level logs when in PROD mode
                 if (currentMode === 'PROD') {
                   filteredEntries = filteredEntries.filter(e => e.level !== 'TEST');
                 }
 
                 if (filteredEntries.length === 0) return prevLogs;
 
-                const updated = [...filteredEntries, ...prevLogs].slice(0, MAX_LOGS);
+                // Deduplicate - create a set of existing log keys
+                const existingKeys = new Set(
+                  prevLogs.map(log => `${log.timestamp}-${log.source}-${log.message}`)
+                );
+
+                // Filter out entries that already exist
+                const newEntries = filteredEntries.filter(
+                  entry => !existingKeys.has(`${entry.timestamp}-${entry.source}-${entry.message}`)
+                );
+
+                if (newEntries.length === 0) return prevLogs;
+
+                const updated = [...newEntries, ...prevLogs].slice(0, MAX_LOGS);
                 return updated;
               });
             }
@@ -137,10 +168,16 @@ function LiveLogs({ mode = 'all' }) {
     };
   }, []);
 
-  // Filter logs by level and mode
-  // When mode is PROD, exclude TEST level logs
+  // Filter logs by level, mode, and source
   const filteredLogs = logs.filter(log => {
-    // Apply mode filter - exclude TEST logs when in PROD mode
+    // Filter by mode based on source name (PROD = 'prod' in name, TEST = no 'prod')
+    if (mode === 'PROD' && !log.source.toLowerCase().includes('prod')) {
+      return false;
+    }
+    if (mode === 'TEST' && log.source.toLowerCase().includes('prod')) {
+      return false;
+    }
+    // Also exclude TEST level logs when in PROD mode
     if (mode === 'PROD' && log.level === 'TEST') {
       return false;
     }

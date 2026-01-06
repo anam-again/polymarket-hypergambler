@@ -1,5 +1,8 @@
 import { Side } from "@polymarket/clob-client";
-import { QuantBot, QuantBotProps, QuantBotRun, TradeStatus } from "./QuantBot.js";
+
+import cron from 'node-cron';
+
+import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
 
 interface ContrarianProps extends QuantBotProps {
     targetSize: number;
@@ -17,8 +20,11 @@ export class Contrarian extends QuantBot implements QuantBotRun {
     private targetBuyPrice!: number;
     private lookbackHours!: number;
 
-    private buyDone: boolean = false;
-    private sellDone: boolean = false;
+    private buyOrder: TradeOrder | undefined = undefined;
+    private sellOrder: TradeOrder | undefined = undefined;
+    private isTie: boolean = false;
+
+    private doNothing: boolean = false;
 
     constructor(props: ContrarianProps) {
         super(props);
@@ -28,23 +34,8 @@ export class Contrarian extends QuantBot implements QuantBotRun {
         this.targetSellPrice = props.targetSellPrice;
         this.targetBuyPrice = props.targetBuyPrice;
         this.lookbackHours = props.lookbackHours;
-    }
 
-    public async resetOnHour() {
-        this.buyDone = false;
-        this.sellDone = false;
-    }
-
-    public async startHourlyReset() {
-        await this.resetOnHour();
-
-        const now = new Date();
-        const msUntilNextHour = (60 - now.getMinutes()) * 60 * 1000 - now.getSeconds() * 1000 - now.getMilliseconds();
-
-        setTimeout(() => {
-            this.resetOnHour();
-            setInterval(this.resetOnHour.bind(this), 60 * 60 * 1000);
-        }, msUntilNextHour);
+        this.doNothing = false;
     }
 
     /**
@@ -105,44 +96,55 @@ export class Contrarian extends QuantBot implements QuantBotRun {
     }
 
     public async run() {
-        this.startHourlyReset();
+        this.on('hourly', async () => {
+            await this.updateOrders();
+            await this.auditAndReset()
+            this.buyOrder = undefined;
+            this.sellOrder = undefined;
+            this.isTie = false;
+            this.doNothing = false;
+        })
 
-        this.tickWrapper(1000 * 30, 1000 * 5, async () => {
-            const now = new Date();
-            const currentMinute = now.getMinutes();
+        this.tickWrapper(1000 * 5, 1000 * 2, async () => {
+            
+            await this.updateOrders();
 
-            const orderBooks = await this.marketInfo.getLiveData();
-
-            await this.auditOrders();
-
-            // Handle sell orders for matched buys
-            if (!this.sellDone) {
-                for (const trade of this.tradeResults) {
-                    if (trade.tradeStatus === TradeStatus.EXECUTED) {
-                        await this.makeOrder(
-                            'followup-sell',
-                            trade.clobTokenId,
-                            this.targetSellPrice,
-                            this.targetSize,
-                            Side.SELL,
-                        );
-                        this.sellDone = true;
-                    }
-                }
-            }
-
-            // Cancel buy orders after cutoff minute
-            if (currentMinute >= this.cutoffMinute) {
-                this.tradeResults.forEach((tr) => {
-                    if (tr.tradeStatus === TradeStatus.LIVE && tr.side === Side.BUY) {
-                        this.cancelTrade(tr);
-                    }
-                });
+            if (this.doNothing) {
                 return;
             }
 
-            // Only make one buy per hour
-            if (this.buyDone) {
+            const orderBooks = await this.marketInfo.getLiveData();
+
+            const makeSellOrder = async () => {
+                if (!this.sellOrder && this.buyOrder) {
+                    this.sellOrder = await this.makeOrder(
+                        'followup-sell',
+                        this.buyOrder.clobTokenId,
+                        this.targetSellPrice,
+                        this.targetSize,
+                        Side.SELL,
+                    );
+                }
+            }
+
+            if (!this.sellOrder && this.buyOrder && this.buyOrder.status === TradeStatus.MATCHED) {
+                makeSellOrder();
+            }
+
+            const now = new Date();
+            const currentMinute = now.getMinutes();
+
+            if (currentMinute >= this.cutoffMinute) {
+                this.trades.forEach((trade) => {
+                    if (trade.status === TradeStatus.LIVE && trade.side == Side.BUY) {
+                        this.cancelTrade(trade);
+                    }
+                })
+                this.doNothing = true;
+                return;
+            }
+
+            if (this.buyOrder || this.isTie) {
                 return;
             }
 
@@ -156,7 +158,7 @@ export class Contrarian extends QuantBot implements QuantBotRun {
             // Skip betting on ties
             if (previousHours.majority === 'TIE') {
                 this.writeLog(`Previous ${this.lookbackHours} hours: [${previousHours.results.join(', ')}] -> TIE, skipping this hour`);
-                this.buyDone = true; // Prevent retrying this hour
+                this.isTie = true; // Prevent retrying this hour
                 return;
             }
 
@@ -165,23 +167,17 @@ export class Contrarian extends QuantBot implements QuantBotRun {
 
             this.writeLog(`Previous ${this.lookbackHours} hours: [${previousHours.results.join(', ')}] -> majority: ${previousHours.majority}, betting on: ${betDirection}`);
 
-            const canSpendAmount = await this.canSpend(this.targetBuyPrice * this.targetSize);
-            const orderIsPossible = [
-                this.checkIfOrderIsValid(this.targetBuyPrice, this.targetSize),
-                canSpendAmount,
-            ].every((r) => r === true);
-
-            if (orderIsPossible) {
-                const order = await this.makeOrder(
+            if (this.checkIfOrderIsValid(this.targetBuyPrice, this.targetSize) && this.canSpend(this.targetBuyPrice * this.targetSize)) {
+                this.buyOrder = await this.makeOrder(
                     'contrarian-buy',
                     tokenId,
                     this.targetBuyPrice,
                     this.targetSize,
                     Side.BUY,
                 );
-                if (order) {
-                    this.buyDone = true;
-                }
+                this.buyOrder?.on('tradeMatched', () => {
+                    makeSellOrder();
+                })
             }
         });
     }

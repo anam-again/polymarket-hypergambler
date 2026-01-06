@@ -1,7 +1,7 @@
 function TradesTable({ trades }) {
-  const executedTrades = trades.filter(t => t.status === 'EXECUTED');
+  const filteredTrades = trades.filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED');
 
-  if (executedTrades.length === 0) {
+  if (filteredTrades.length === 0) {
     return <div className="no-data">No trades found</div>;
   }
 
@@ -12,6 +12,7 @@ function TradesTable({ trades }) {
           <tr>
             <th>Date</th>
             <th>Trade ID</th>
+            <th>Status</th>
             <th>Side</th>
             <th>Size</th>
             <th>Buy Price</th>
@@ -20,10 +21,11 @@ function TradesTable({ trades }) {
           </tr>
         </thead>
         <tbody>
-          {executedTrades.map((trade, index) => (
-            <tr key={`${trade.tradeId}-${index}`}>
+          {filteredTrades.map((trade, index) => (
+            <tr key={`${trade.tradeId}-${index}`} className={trade.status === 'EXPIRED' ? 'expired-row' : ''}>
               <td>{new Date(trade.timestamp).toLocaleString()}</td>
               <td className="trade-id">{trade.tradeId}</td>
+              <td className={trade.status === 'EXPIRED' ? 'expired' : 'matched'}>{trade.status}</td>
               <td className={trade.side === 'BUY' ? 'buy' : 'sell'}>{trade.side}</td>
               <td>{trade.size}</td>
               <td>{trade.buyPrice === -1 ? '-' : trade.buyPrice.toFixed(2)}</td>

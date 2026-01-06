@@ -1,15 +1,13 @@
 import { ClobClient, OpenOrder, OrderResponse, OrderType, Side } from "@polymarket/clob-client";
-import { appendFileSync } from "fs";
 
-import { MarketInfo } from "./MarketInfo.js";
+import { appendFileSync, Stats } from "fs";
+import cron from 'node-cron';
 
-export interface QuantBotProps {
-  name: string;
-  hourlyDollarLimit: number;
-  client: ClobClient;
-  marketInfo: MarketInfo;
-  PROD_MODE: boolean;
-}
+import { MarketInfo } from "../nonBots/MarketInfo.js";
+
+// ============================================================================
+// Enums
+// ============================================================================
 
 enum LogLevel {
   INFO = "INFO",
@@ -22,52 +20,148 @@ enum LogLevel {
 
 export enum TradeStatus {
   LIVE = 'LIVE',
-  EXECUTED = 'EXECUTED',
+  MATCHED = 'MATCHED',
   EXPIRED = 'EXPIRED',
   CANCELED = 'CANCELED',
+  PARTIAL = 'PARTIAL',
 }
 
+// ============================================================================
+// Interfaces
+// ============================================================================
+
+export interface QuantBotProps {
+  name: string;
+  hourlyDollarLimit: number;
+  client: ClobClient;
+  marketInfo: MarketInfo;
+  PROD_MODE: boolean;
+}
 
 export interface QuantBotRun {
   run(): void;
 }
 
-interface TradeOrder {
-  orderId: string,
-  createdAt: number,
-  targetBuyPrice?: number,
-  finalValue?: number,
-  targetSellPrice?: number,
-  amount: number,
-  totalCost: number,
-  isProd: boolean,
-  clobTokenId: string,
-  tradeStatus: TradeStatus,
-  side: Side,
+export interface TradeOrderProps {
+  orderId: string;
+  name: string;
+  createdAt: number;
+  targetBuyPrice?: number;
+  finalValue?: number;
+  targetSellPrice?: number;
+  amount: number;
+  totalCost: number;
+  isProd: boolean;
+  clobTokenId: string;
+  status: TradeStatus;
+  side: Side;
+}
+
+// ============================================================================
+// TradeOrder Class
+// ============================================================================
+
+type TradeOrderEvents = {
+  audited: () => void;
+  tradeMatched: () => void;
+  tradePartial: () => void;
+  tradeLive: () => void;
+  tradeExpired: () => void;
+  tradeCanceled: () => void;
+}
+
+export class TradeOrder {
+  orderId: string;
+  name: string;
+  createdAt: number;
+  targetBuyPrice?: number;
+  finalValue?: number;
+  targetSellPrice?: number;
+  amount: number;
+  totalCost: number;
+  isProd: boolean;
+  clobTokenId: string;
+  status: TradeStatus;
+  side: Side;
+
+  private listeners: { [K in keyof TradeOrderEvents]?: TradeOrderEvents[K][] } = {};
+
+  constructor(props: TradeOrderProps) {
+    this.orderId = props.orderId;
+    this.name = props.name;
+    this.createdAt = props.createdAt;
+    this.targetBuyPrice = props.targetBuyPrice;
+    this.finalValue = props.finalValue;
+    this.targetSellPrice = props.targetSellPrice;
+    this.amount = props.amount;
+    this.totalCost = props.totalCost;
+    this.isProd = props.isProd;
+    this.clobTokenId = props.clobTokenId;
+    this.status = props.status;
+    this.side = props.side;
+  }
+
+  // --- Event Methods ---
+
+  on<K extends keyof TradeOrderEvents>(event: K, listener: TradeOrderEvents[K]) {
+    if (!this.listeners[event]) {
+      this.listeners[event] = [];
+    }
+    this.listeners[event]!.push(listener);
+  }
+
+  emit<K extends keyof TradeOrderEvents>(event: K, ...args: Parameters<TradeOrderEvents[K]>) {
+    this.listeners[event]?.forEach(listener => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (listener as any)(...args);
+    });
+  }
+
+  off<K extends keyof TradeOrderEvents>(event: K, listener: TradeOrderEvents[K]) {
+    const list = this.listeners[event];
+    if (list) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      this.listeners[event] = list.filter(l => l !== listener) as any;
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+  once<K extends keyof TradeOrderEvents>(event: K, listener: Function) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const wrapper = (...args: any[]) => {
+      listener(...args);
+      this.off(event, wrapper);
+    };
+    this.on(event, wrapper);
+  }
+}
+
+// ============================================================================
+// QuantBot Class
+// ============================================================================
+
+type QuantBotEvents = {
+  hourly: () => void;
 }
 
 export class QuantBot {
+
+  // --- Properties ---
+
   private name!: string;
   private hourlyDollarLimit!: number;
   private PROD_MODE!: boolean;
 
   public marketInfo!: MarketInfo;
   public client!: ClobClient;
+  public trades: TradeOrder[] = [];
 
-  // Rate limiter state
   private spentThisHour: number = 0;
-  private currentHour: number = new Date().getHours();
+  private orderOperationPending: Promise<void> | null = null;
+  private makeOrderPending: Promise<TradeOrder | undefined> | null = null;
+  private listeners: { [K in keyof QuantBotEvents]?: QuantBotEvents[K][] } = {};
 
-  // Used for auditing, should only read in other funcs
-  public tradeResults: TradeOrder[] = [];
-
-  // Track last hour when dead trades were cleaned up
-  private lastCleanupHour: number = new Date().getHours();
-
-  private liveClobIdAmounts: Record<string, number>;
-
-  // Mutex for auditOrders
-  private auditPending: Promise<void> | null = null;
+  // --- Constructor ---
 
   constructor(props: QuantBotProps) {
     this.PROD_MODE = props.PROD_MODE;
@@ -75,186 +169,240 @@ export class QuantBot {
     this.hourlyDollarLimit = props.hourlyDollarLimit;
     this.marketInfo = props.marketInfo;
     this.client = props.client;
-    const now = new Date();
-    this.currentHour = now.getHours();
-    this.lastCleanupHour = now.getHours();
-    this.liveClobIdAmounts = {}
-    console.log(`[${this.PROD_MODE ? "PROD" : "TEST"}]${this.name} initialized...`)
+
+    console.log(`[${this.PROD_MODE ? "PROD" : "TEST"}] ${this.name} initialized...`);
     this.writeLog('Initialized...', LogLevel.INFO);
+
+    cron.schedule('0 * * * *', () => {
+      this.emit('hourly');
+    });
   }
 
-  /**
-   * Resets the rate limiter if the current hour has changed.
-   * Called automatically before checking or recording spend.
-   * Also audits orders
-   */
-  private async resetIfNewHour(): Promise<void> {
-    const now = new Date();
-    const hour = now.getHours();
-    if (hour !== this.currentHour) {
-      await this.auditOrders();
-      this.spentThisHour = 0;
-      this.currentHour = hour;
-      this.writeLog(`Rate limiter reset at hour ${hour}:00, usingUrl=${this.marketInfo.getBitcoinHourlyUrl(this.marketInfo.getCurrentEstTimestamp())}`);
+  // -------------------------------------------------------------------------
+  // Event Methods
+  // -------------------------------------------------------------------------
+
+  on<K extends keyof QuantBotEvents>(event: K, listener: QuantBotEvents[K]) {
+    if (!this.listeners[event]) {
+      this.listeners[event] = [];
+    }
+    this.listeners[event]!.push(listener);
+  }
+
+  emit<K extends keyof QuantBotEvents>(event: K, ...args: Parameters<QuantBotEvents[K]>) {
+    this.listeners[event]?.forEach(listener => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (listener as any)(...args);
+    });
+  }
+
+  off<K extends keyof QuantBotEvents>(event: K, listener: QuantBotEvents[K]) {
+    const list = this.listeners[event];
+    if (list) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      this.listeners[event] = list.filter(l => l !== listener) as any;
     }
   }
 
-  public async auditOrders(): Promise<void> {
-    // If audit is already in progress, wait for it to complete
-    if (this.auditPending) {
-      return this.auditPending;
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+  once<K extends keyof QuantBotEvents>(event: K, listener: Function) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const wrapper = (...args: any[]) => {
+      listener(...args);
+      this.off(event, wrapper);
+    };
+    this.on(event, wrapper);
+  }
+
+  // -------------------------------------------------------------------------
+  // Order Management
+  // -------------------------------------------------------------------------
+
+  public async makeOrder(
+    name: string,
+    clobTokenId: string,
+    price: number,
+    amount: number,
+    side: Side
+  ): Promise<TradeOrder | undefined> {
+    // Wait for any pending makeOrder to complete
+    if (this.makeOrderPending) {
+      await this.makeOrderPending;
     }
 
-    const auditPromise = (async () => {
-      for (const tradeResult of this.tradeResults) {
-
-        let liveResult: OpenOrder | undefined = undefined;
-
-        if (this.PROD_MODE) {
-          liveResult = await this.client.getOrder(tradeResult.orderId);
-        }
-
-        if (this.PROD_MODE && tradeResult.tradeStatus === TradeStatus.LIVE && liveResult && liveResult.status === 'MATCHED') {
-          this.writeTradeUpdate(tradeResult, `${tradeResult.tradeStatus} -> ${TradeStatus.EXECUTED}`)
-          tradeResult.tradeStatus = TradeStatus.EXECUTED;
-          // Track position only when order is matched
-          this.insertOrAddToLiveClobIdAmounts(tradeResult.clobTokenId, tradeResult.amount, tradeResult.side);
-          const livePrice = parseFloat(liveResult.price);
-          if (tradeResult.side === Side.BUY) {
-            if (tradeResult.targetBuyPrice && livePrice) {
-              tradeResult.finalValue = -(tradeResult.amount * livePrice)
-            } else {
-              this.writeError(`trade: ${tradeResult.orderId} does not have targetBuyPrice/livePrice but is BUY order, livePrice: ${livePrice}`)
-            }
-          } else {
-            // SELL order
-            if (tradeResult.targetSellPrice && livePrice) {
-              tradeResult.finalValue = tradeResult.amount * livePrice
-            } else {
-              this.writeError(`trade: ${tradeResult.orderId} does not have targetSellPrice/livePrice but is SELL order, livePrice: ${livePrice}`)
-            }
-          }
-        }
-
-        if (!this.PROD_MODE && tradeResult.tradeStatus === TradeStatus.LIVE) {
-          if (tradeResult.side === Side.BUY) {
-            if (tradeResult.targetBuyPrice) {
-              const liveSellPrice = await this.marketInfo.getPrice(tradeResult.clobTokenId, tradeResult.side);
-              if (liveSellPrice <= tradeResult.targetBuyPrice) {
-                this.writeTradeUpdate(tradeResult, `${tradeResult.tradeStatus} -> ${TradeStatus.EXECUTED}`)
-                tradeResult.tradeStatus = TradeStatus.EXECUTED;
-                // Track position only when order is matched
-                this.insertOrAddToLiveClobIdAmounts(tradeResult.clobTokenId, tradeResult.amount, tradeResult.side);
-                tradeResult.finalValue = -(tradeResult.amount * tradeResult.targetBuyPrice);
-              }
-            } else {
-              this.writeError(`trade: ${tradeResult.orderId} does not have targetBuyPrice but is BUY order`)
-            }
-          } else {
-            // Side === SELL
-            if (tradeResult.targetSellPrice) {
-              const liveBuyPrice = await this.marketInfo.getPrice(tradeResult.clobTokenId, tradeResult.side);
-              if (liveBuyPrice >= tradeResult.targetSellPrice) {
-                this.writeTradeUpdate(tradeResult, `${tradeResult.tradeStatus} -> ${TradeStatus.EXECUTED}`)
-                tradeResult.tradeStatus = TradeStatus.EXECUTED;
-                // Track position only when order is matched
-                this.insertOrAddToLiveClobIdAmounts(tradeResult.clobTokenId, tradeResult.amount, tradeResult.side);
-                tradeResult.finalValue = tradeResult.amount * tradeResult.targetSellPrice;
-              }
-            } else {
-              this.writeError(`trade: ${tradeResult.orderId} does not have targetSellPrice but is SELL order`)
-            }
-          }
-        }
-
+    const orderPromise = (async (): Promise<TradeOrder | undefined> => {
+      const matchedTrade = this.trades.find((trade) => {
+        return trade.name === name;
+      });
+      if (matchedTrade) {
+        return matchedTrade;
       }
 
-      // Only remove dead trades once at the start of each hour (e.g., 13:00)
-      const currentHour = new Date().getHours();
-      if (currentHour !== this.lastCleanupHour) {
-        this.writeLog('Doing hourly cleanup audit')
-        this.lastCleanupHour = currentHour;
-        // Every hour
-        // Expire still living trades
-        this.tradeResults = this.tradeResults.sort((a, b) => {
-          return a.createdAt - b.createdAt;
-        })
-        for (const tradeResult of this.tradeResults) {
-          if (tradeResult.tradeStatus === TradeStatus.LIVE) {
-            this.writeTradeUpdate(tradeResult, `${tradeResult.tradeStatus} -> ${TradeStatus.EXPIRED} `)
-            tradeResult.tradeStatus = TradeStatus.EXPIRED;
-          }
+      const totalCost = price * amount;
+
+      if (side === Side.BUY && !this.canSpend(totalCost)) {
+        this.writeLog(`Not enough budget to spend: ${totalCost}+${this.spentThisHour}/${this.hourlyDollarLimit}`);
+        return undefined;
+      }
+
+      const result = await this.createOrder(clobTokenId, price, amount, side);
+
+      const errRes = result as unknown as { error: string; status: number };
+      if ((result.errorMsg && result.errorMsg.length > 0) || result.success === false || result.status === '400' || errRes.error || errRes.status === 400) {
+        this.writeError(`Order error: ${JSON.stringify(result)}`);
+        return undefined;
+      }
+
+      this.writeLog(JSON.stringify(result));
+
+      const trade = new TradeOrder({
+        amount,
+        name: name,
+        clobTokenId,
+        createdAt: Date.now(),
+        isProd: this.PROD_MODE,
+        orderId: result.orderID,
+        status: TradeStatus.LIVE,
+        totalCost,
+        side,
+        targetBuyPrice: side === Side.BUY ? price : undefined,
+        targetSellPrice: side === Side.SELL ? price : undefined,
+        finalValue: undefined,
+      });
+
+      this.recordSpend(totalCost, side);
+      this.trades.push(trade);
+      this.writeLog(`${trade.orderId}, ${name}, ${side}, ${clobTokenId}, ${result.orderID}, ${amount}, ${price}`, LogLevel.ORDER);
+
+      console.log('order created: ', trade.name)
+      return trade;
+    })();
+
+    this.makeOrderPending = orderPromise.finally(() => {
+      this.makeOrderPending = null;
+    }) as Promise<TradeOrder | undefined>;
+
+    return this.makeOrderPending;
+  }
+
+  public async cancelTrade(trade: TradeOrder): Promise<boolean> {
+    try {
+      if (this.PROD_MODE) {
+        await this.client.cancelOrder({ orderID: trade.orderId });
+      }
+
+      this.updateTradeStatus(trade, TradeStatus.CANCELED);
+      this.recordSpend(-trade.totalCost, trade.side);
+
+      this.spentThisHour -= trade.totalCost;
+      if (this.spentThisHour < 0) {
+        this.spentThisHour = 0;
+      }
+
+      return true;
+    } catch (e) {
+      this.writeError(e);
+      return false;
+    }
+  }
+
+  public async updateOrders(): Promise<void> {
+    if (this.orderOperationPending) {
+      await this.orderOperationPending;
+    }
+
+    const updatePromise = (async () => {
+      for (const trade of this.trades) {
+        if (this.PROD_MODE) {
+          await this.updateProdOrder(trade);
+        } else {
+          await this.updateTestOrder(trade);
         }
-        const previousHourUrl = this.marketInfo.getBitcoinHourlyUrl(this.marketInfo.getCurrentEstTimestamp() - (60 * 30 * 1000));
-        const previousMarket = await this.marketInfo.getMarketInfo(previousHourUrl);
-        const winningIndex = previousMarket.outcomePrices.reduce((maxIdx, curr, idx, arr) =>
-          parseFloat(curr) > parseFloat(arr[maxIdx]) ? idx : maxIdx,
-          0);
-        const winningClob = previousMarket.clobTokenIds[winningIndex];
-        Object.entries(this.liveClobIdAmounts).forEach(([k, v]) => {
-          if (k === winningClob) {
-            this.writeLog(`${k} expired (win) with ${v} units for $${v}`)
-            this.writeAuditedTrade({
-              amount: v,
-              clobTokenId: k,
-              createdAt: Date.now(),
-              isProd: this.PROD_MODE,
-              orderId: 'undefined',
-              side: Side.BUY,
-              totalCost: -1,
-              tradeStatus: TradeStatus.EXPIRED,
-              finalValue: v,
-            })
-          } else {
-            this.writeLog(`${k} expired (loss) with ${v} units for $0`)
-            this.writeAuditedTrade({
-              amount: v,
-              clobTokenId: k,
-              createdAt: Date.now(),
-              isProd: this.PROD_MODE,
-              orderId: 'expiry',
-              side: Side.BUY,
-              totalCost: -1,
-              tradeStatus: TradeStatus.EXPIRED,
-              finalValue: 0,
-            })
-          }
-        })
-        this.liveClobIdAmounts = {};
-        // Write value of succeeded trades
-        for (const tradeResult of this.tradeResults) {
-          if (tradeResult.tradeStatus !== TradeStatus.EXECUTED) continue;
-          this.writeAuditedTrade(tradeResult);
-        }
-        // Done with hourly audit writing, clear all trades.
-        this.tradeResults = [];
       }
     })();
 
-    // Use .finally() to ensure cleanup happens AFTER assignment
-    this.auditPending = auditPromise.finally(() => {
-      this.auditPending = null;
+    this.orderOperationPending = updatePromise.finally(() => {
+      this.orderOperationPending = null;
     });
-    return this.auditPending;
+
+    return this.orderOperationPending;
   }
 
-  /**
-   * Checks if spending the given amount would exceed the hourly limit.
-   * @param amount - The dollar amount to check.
-   * @returns true if the spend is allowed, false otherwise.
-   */
-  public async canSpend(amount: number): Promise<boolean> {
-    await this.resetIfNewHour();
+  public checkIfOrderIsValid(price: number, amount: number): boolean {
+    if (amount < 5) {
+      this.writeLog(`Unable to make order, order size: ${amount} is too small.`);
+      return false;
+    }
+    if (price * amount < 1.00) {
+      this.writeLog(`Unable to make order, order price: ${price * amount} is too small.`);
+      return false;
+    }
+    return true;
+  }
+
+  // -------------------------------------------------------------------------
+  // Audit & Reset
+  // -------------------------------------------------------------------------
+
+  public async auditAndReset(): Promise<void> {
+    if (this.orderOperationPending) {
+      await this.orderOperationPending;
+    }
+
+    const auditPromise = (async () => {
+      const now = new Date();
+      this.spentThisHour = 0;
+      this.writeLog(`Doing reset at hour ${now.getHours()}:${now.getMinutes()}, usingUrl=${this.marketInfo.getBitcoinHourlyUrl(this.marketInfo.getCurrentEstTimestamp())}`);
+
+      // Expire still living trades
+      this.trades.sort((a, b) => a.createdAt - b.createdAt);
+      for (const trade of this.trades) {
+        if (trade.status === TradeStatus.LIVE) {
+          this.updateTradeStatus(trade, TradeStatus.EXPIRED);
+        }
+      }
+
+      // Determine winning clob from previous hour
+      const previousHourUrl = this.marketInfo.getBitcoinHourlyUrl(
+        this.marketInfo.getCurrentEstTimestamp() - (60 * 30 * 1000)
+      );
+      const previousMarket = await this.marketInfo.getMarketInfo(previousHourUrl);
+      const winningIndex = previousMarket.outcomePrices.reduce(
+        (maxIdx, curr, idx, arr) => (parseFloat(curr) > parseFloat(arr[maxIdx]) ? idx : maxIdx),
+        0
+      );
+      const winningClob = previousMarket.clobTokenIds[winningIndex];
+
+      // Settle expired positions
+      this.settleExpiredPositions(winningClob);
+
+      // Write completed trades
+      for (const trade of this.trades) {
+        if (trade.status === TradeStatus.MATCHED) {
+          this.writeCompletedTrade(trade);
+        }
+      }
+
+      this.trades = [];
+    })();
+
+    this.orderOperationPending = auditPromise.finally(() => {
+      this.orderOperationPending = null;
+    });
+
+    return this.orderOperationPending;
+  }
+
+  // -------------------------------------------------------------------------
+  // Budget Management
+  // -------------------------------------------------------------------------
+
+  public canSpend(amount: number): boolean {
     return (this.spentThisHour + amount) <= this.hourlyDollarLimit;
   }
 
-  /**
-   * Records a spend amount against the hourly limit.
-   * @param amount - The dollar amount spent.
-   * @returns true if the spend was recorded, false if it would exceed the limit.
-   */
-  public async recordSpend(amount: number): Promise<boolean> {
-    await this.resetIfNewHour();
+  public recordSpend(amount: number, side: Side): boolean {
+    if (side === Side.SELL) return true;
     if ((this.spentThisHour + amount) > this.hourlyDollarLimit) {
       this.writeLog(`Rate limit exceeded: tried to spend $${amount}, already spent $${this.spentThisHour}/${this.hourlyDollarLimit}`);
       return false;
@@ -264,30 +412,15 @@ export class QuantBot {
     return true;
   }
 
-  /**
-   * Returns the remaining budget for the current hour.
-   */
-  public async getRemainingBudget(): Promise<number> {
-    await this.resetIfNewHour();
-    return Math.max(0, this.hourlyDollarLimit - this.spentThisHour);
-  }
-
-  /**
-   * Returns the amount spent in the current hour.
-   */
-  public async getSpentThisHour(): Promise<number> {
-    await this.resetIfNewHour();
-    return this.spentThisHour;
-  }
+  // -------------------------------------------------------------------------
+  // Logging
+  // -------------------------------------------------------------------------
 
   public writeLog(message: string, logLevel = LogLevel.INFO): void {
     const timestamp = new Date().toISOString();
     const logLine = `[${logLevel}] ${timestamp}\t ${message}\n`;
-    appendFileSync(`./logs/${this.name}.log`, logLine);
-  }
-
-  public writeOrder(message: string): void {
-    this.writeLog(message, LogLevel.ORDER);
+    const prodTest = this.PROD_MODE ? 'prod' : 'test';
+    appendFileSync(`./logs/${prodTest}-${this.name}.log`, logLine);
   }
 
   public writeError(e: unknown): void {
@@ -300,12 +433,12 @@ export class QuantBot {
     }
   }
 
-  public writeAuditedTrade(trade: TradeOrder) {
+  public writeCompletedTrade(trade: TradeOrder): void {
     const message = [
       Date.now(),
       this.name,
       trade.orderId,
-      trade.tradeStatus,
+      trade.status,
       trade.createdAt,
       trade.amount,
       trade.targetBuyPrice || -1,
@@ -317,149 +450,16 @@ export class QuantBot {
       trade.side,
     ].join(', ') + "\n";
 
-    this.writeOrder(message);
     appendFileSync(`./logs/tradeAudit.log`, message);
-    this.writeLog(message, this.PROD_MODE ? LogLevel.COMPLETED : LogLevel.TEST);
+    this.writeLog(message, LogLevel.COMPLETED);
   }
 
-  public writeTradeUpdate(trade: TradeOrder, updateMessage: string) {
-    const message = `${trade.orderId} ${updateMessage}`;
-    this.writeLog(message, this.PROD_MODE ? LogLevel.UPDATE : LogLevel.TEST);
-  }
-
-  public checkIfOrderIsValid(price: number, amount: number) {
-    if (amount < 5) {
-      this.writeLog(`Unable to make order, order size: ${amount} is too small.`);
-      return false;
-    } else if (price * amount < 1.00) {
-      this.writeLog(`Unable to make order, order price: ${price * amount} is too small.`);
-    }
-    return true;
-  }
-
-  public insertOrAddToLiveClobIdAmounts(clobId: string, amount: number, side: Side) {
-    if (this.liveClobIdAmounts[clobId]) {
-      this.liveClobIdAmounts[clobId] += side === Side.BUY ? amount : -amount;
-    } else {
-      this.liveClobIdAmounts[clobId] = side === Side.BUY ? amount : -amount;
-    }
-  }
-
-  public async makeOrder(orderId: string, clobTokenId: string, price: number, amount: number, side: Side): Promise<TradeOrder | null> {
-    const totalCost = price * amount;
-
-    // Only BUY orders cost money - record spend BEFORE placing order to prevent race conditions
-    if (side === Side.BUY) {
-      if (!(await this.recordSpend(totalCost))) {
-        this.writeLog(`Not enough budget to spend: ${totalCost}+${this.spentThisHour}/${this.hourlyDollarLimit}`);
-        return null;
-      }
-    }
-
-    if (this.PROD_MODE) {
-      try {
-        const result: OrderResponse = await this.client.createAndPostOrder(
-          {
-            tokenID: clobTokenId,
-            price: price,
-            side: side,
-            size: amount,
-            feeRateBps: 0,
-
-          },
-          { tickSize: "0.01", negRisk: false },
-          OrderType.GTC,
-        );
-        this.writeLog(JSON.stringify(result));
-        const tradeResult = {
-          amount,
-          clobTokenId: clobTokenId,
-          createdAt: Date.now(),
-          isProd: this.PROD_MODE,
-          orderId: result.orderID,
-          tradeStatus: TradeStatus.LIVE,
-          totalCost,
-          side,
-          targetBuyPrice: side === Side.BUY ? price : undefined,
-          targetSellPrice: side === Side.SELL ? price : undefined,
-          finalValue: undefined,
-        }
-        this.tradeResults.push(tradeResult);
-        this.writeLog(`${orderId}, ${side}, ${clobTokenId}, ${result.orderID}, ${amount}, ${price}`, LogLevel.ORDER);
-        await this.auditOrders();
-        return tradeResult;
-      } catch (e) {
-        // Rollback spend on failure for BUY orders
-        if (side === Side.BUY) {
-          this.spentThisHour -= totalCost;
-          this.writeLog(`Rolled back spend of $${totalCost} due to order failure`);
-        }
-        this.writeError(e);
-        return null;
-      }
-    } else {
-      // test mode
-      const result: OrderResponse = {
-        errorMsg: 'test',
-        makingAmount: 'test',
-        orderID: `test-${Math.random().toString(36).substring(2, 22)}`,
-        status: 'LIVE',
-        success: true,
-        takingAmount: 'test',
-        transactionsHashes: ['test'],
-      };
-      const tradeResult = {
-        amount,
-        targetBuyPrice: side === Side.BUY ? price : undefined,
-        targetSellPrice: side === Side.SELL ? price : undefined,
-        finalValue: undefined,
-        clobTokenId: clobTokenId,
-        createdAt: Date.now(),
-        isProd: this.PROD_MODE,
-        orderId: result.orderID,
-        totalCost,
-        tradeStatus: TradeStatus.LIVE,
-        side,
-      }
-      this.tradeResults.push(tradeResult);
-      this.writeLog(`${orderId}, ${side}, ${clobTokenId}, ${result.orderID}, ${amount}, ${price}`, LogLevel.TEST);
-      await this.auditOrders();
-      return tradeResult;
-    }
-  }
-
-  public async cancelTrade(tradeOrder: TradeOrder): Promise<boolean> {
-
-    try {
-      if (this.PROD_MODE) {
-        await this.client.cancelOrder({
-          orderID: tradeOrder.orderId
-        });
-      }
-
-      // Update trade status
-      tradeOrder.tradeStatus = TradeStatus.CANCELED;
-
-      // Refund the spend (order was never filled)
-      this.spentThisHour -= tradeOrder.totalCost;
-      if (this.spentThisHour < 0) {
-        this.spentThisHour = 0;
-      }
-
-      this.writeLog(`Cancelled order ${tradeOrder.orderId}, refunded $${tradeOrder.totalCost}`);
-      return true;
-    } catch (e) {
-      this.writeError(e);
-      return false;
-    }
-  }
+  // -------------------------------------------------------------------------
+  // Utilities
+  // -------------------------------------------------------------------------
 
   /**
    * Executes a function repeatedly with a delay and optional jitter.
-   * @param sleepMs - Base delay between executions in milliseconds.
-   * @param jitterMs - Random jitter added to each delay (0 to jitterMs).
-   * @param f - The function to execute on each tick.
-   * @returns A function to stop the ticker.
    */
   public tickWrapper(sleepMs: number, jitterMs: number, f: () => void | Promise<void>): () => void {
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -485,4 +485,147 @@ export class QuantBot {
     };
   }
 
+  // -------------------------------------------------------------------------
+  // Private Helpers
+  // -------------------------------------------------------------------------
+
+  private async createOrder(clobTokenId: string, price: number, amount: number, side: Side): Promise<OrderResponse> {
+    if (this.PROD_MODE) {
+      return await this.client.createAndPostOrder(
+        {
+          tokenID: clobTokenId,
+          price: price,
+          side: side,
+          size: amount,
+          feeRateBps: 0,
+        },
+        { tickSize: "0.01", negRisk: false },
+        OrderType.GTC
+      );
+    }
+
+    return {
+      errorMsg: '',
+      makingAmount: 'test',
+      orderID: `test-${Math.random().toString(36).substring(2, 22)}`,
+      status: 'LIVE',
+      success: true,
+      takingAmount: 'test',
+      transactionsHashes: ['test'],
+    };
+  }
+
+  private async updateProdOrder(trade: TradeOrder): Promise<void> {
+    if (trade.status !== TradeStatus.LIVE) return;
+
+    const liveResult: OpenOrder | undefined = await this.client.getOrder(trade.orderId);
+    if (!liveResult || liveResult.status !== 'MATCHED') return;
+
+    this.writeLog(`LiveResult: ${JSON.stringify(liveResult)}`);
+
+    if (parseFloat(liveResult.size_matched) < trade.amount) {
+      this.updateTradeStatus(trade, TradeStatus.PARTIAL);
+      return;
+    }
+
+    this.updateTradeStatus(trade, TradeStatus.MATCHED);
+
+    const livePrice = parseFloat(liveResult.price);
+    if (trade.side === Side.BUY) {
+      if (trade.targetBuyPrice && livePrice) {
+        trade.finalValue = -(trade.amount * livePrice);
+      } else {
+        this.writeError(`trade: ${trade.orderId} does not have targetBuyPrice/livePrice but is BUY order, livePrice: ${livePrice}`);
+      }
+    } else {
+      if (trade.targetSellPrice && livePrice) {
+        trade.finalValue = trade.amount * livePrice;
+      } else {
+        this.writeError(`trade: ${trade.orderId} does not have targetSellPrice/livePrice but is SELL order, livePrice: ${livePrice}`);
+      }
+    }
+  }
+
+  private async updateTestOrder(trade: TradeOrder): Promise<void> {
+    if (trade.status !== TradeStatus.LIVE) return;
+
+    if (trade.side === Side.BUY) {
+      if (!trade.targetBuyPrice) {
+        this.writeError(`trade: ${trade.orderId} does not have targetBuyPrice but is BUY order`);
+        return;
+      }
+      const liveSellPrice = await this.marketInfo.getPrice(trade.clobTokenId, trade.side);
+      if (liveSellPrice <= trade.targetBuyPrice) {
+        this.updateTradeStatus(trade, TradeStatus.MATCHED);
+        trade.finalValue = -(trade.amount * trade.targetBuyPrice);
+      }
+    } else {
+      if (!trade.targetSellPrice) {
+        this.writeError(`trade: ${trade.orderId} does not have targetSellPrice but is SELL order`);
+        return;
+      }
+      const liveBuyPrice = await this.marketInfo.getPrice(trade.clobTokenId, trade.side);
+      if (liveBuyPrice >= trade.targetSellPrice) {
+        this.updateTradeStatus(trade, TradeStatus.MATCHED);
+        trade.finalValue = trade.amount * trade.targetSellPrice;
+      }
+    }
+  }
+
+  private updateTradeStatus(trade: TradeOrder, newStatus: TradeStatus): void {
+    const message = `${trade.orderId}, ${trade.name}, ${trade.status} -> ${newStatus}`;
+    this.writeLog(message, LogLevel.UPDATE);
+    trade.status = newStatus;
+
+    switch (newStatus) {
+      case TradeStatus.EXPIRED:
+        trade.emit('tradeExpired');
+        break;
+      case TradeStatus.CANCELED:
+        trade.emit('tradeCanceled');
+        break;
+      case TradeStatus.MATCHED:
+        trade.emit('tradeMatched');
+        break;
+      case TradeStatus.LIVE:
+        trade.emit('tradeLive');
+        break;
+      case TradeStatus.PARTIAL:
+        trade.emit('tradePartial');
+        break;
+      default:
+        throw Error(`Unexpected tradestatus submitted: ${newStatus}`);
+    }
+  }
+
+  private settleExpiredPositions(winningClob: string): void {
+    const liveClobIdAmounts: Record<string, number> = {};
+    for (const trade of this.trades) {
+      if (trade.status === TradeStatus.EXPIRED) {
+        liveClobIdAmounts[trade.clobTokenId] = (liveClobIdAmounts[trade.clobTokenId] || 0) + trade.amount;
+      }
+    }
+    for (const [clobId, amount] of Object.entries(liveClobIdAmounts)) {
+      if (amount <= 0) continue;
+      const isWin = clobId === winningClob;
+      const finalValue = isWin ? amount : 0;
+
+      this.writeLog(`${clobId} expired (${isWin ? 'win' : 'loss'}) with ${amount} units for $${finalValue}`);
+
+      const trade = new TradeOrder({
+        amount,
+        name: 'expiry',
+        clobTokenId: clobId,
+        createdAt: Date.now(),
+        isProd: this.PROD_MODE,
+        orderId: 'expiry',
+        side: Side.BUY,
+        totalCost: 0,
+        status: TradeStatus.EXPIRED,
+        finalValue,
+      });
+
+      this.writeCompletedTrade(trade);
+    }
+  }
 }

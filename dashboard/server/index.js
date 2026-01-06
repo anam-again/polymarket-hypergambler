@@ -207,20 +207,21 @@ app.get('/api/stats', (req, res) => {
   trades = filterByTimeRange(trades, startTime, endTime);
   trades = filterByMode(trades, mode);
 
-  const soldTrades = trades.filter(t => t.status === 'EXECUTED');
+  const executedTrades = trades.filter(t => t.status === 'MATCHED');
   const expiredTrades = trades.filter(t => t.status === 'EXPIRED');
+  const completedTrades = trades.filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED');
 
-  const totalPnl = soldTrades.reduce((sum, t) => sum + t.pnl, 0);
-  const winningTrades = soldTrades.filter(t => t.pnl > 0);
-  const losingTrades = soldTrades.filter(t => t.pnl < 0);
+  const totalPnl = completedTrades.reduce((sum, t) => sum + t.pnl, 0);
+  const winningTrades = completedTrades.filter(t => t.pnl > 0);
+  const losingTrades = completedTrades.filter(t => t.pnl < 0);
 
   res.json({
     totalTrades: trades.length,
-    soldTrades: soldTrades.length,
+    soldTrades: executedTrades.length,
     expiredTrades: expiredTrades.length,
     totalPnl: totalPnl.toFixed(2),
-    winRate: soldTrades.length > 0 ? ((winningTrades.length / soldTrades.length) * 100).toFixed(1) : 0,
-    avgPnl: soldTrades.length > 0 ? (totalPnl / soldTrades.length).toFixed(2) : 0,
+    winRate: completedTrades.length > 0 ? ((winningTrades.length / completedTrades.length) * 100).toFixed(1) : 0,
+    avgPnl: completedTrades.length > 0 ? (totalPnl / completedTrades.length).toFixed(2) : 0,
     winningTrades: winningTrades.length,
     losingTrades: losingTrades.length
   });
@@ -232,10 +233,10 @@ app.get('/api/pnl-by-strategy', (req, res) => {
   let trades = parseTradeLog();
   trades = filterByTimeRange(trades, startTime, endTime);
   trades = filterByMode(trades, mode);
-  const soldTrades = trades.filter(t => t.status === 'EXECUTED');
+  const completedTrades = trades.filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED');
 
   const strategyPnl = {};
-  soldTrades.forEach(trade => {
+  completedTrades.forEach(trade => {
     if (!strategyPnl[trade.strategy]) {
       strategyPnl[trade.strategy] = { pnl: 0, trades: 0, wins: 0, losses: 0 };
     }
@@ -263,17 +264,18 @@ app.get('/api/cumulative-pnl', (req, res) => {
   let trades = parseTradeLog();
   trades = filterByTimeRange(trades, startTime, endTime);
   trades = filterByMode(trades, mode);
-  const soldTrades = trades.filter(t => t.status === 'EXECUTED').sort((a, b) => a.timestamp - b.timestamp);
+  const completedTrades = trades.filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED').sort((a, b) => a.timestamp - b.timestamp);
 
   let cumulative = 0;
-  const result = soldTrades.map(trade => {
+  const result = completedTrades.map(trade => {
     cumulative += trade.pnl;
     return {
       timestamp: trade.timestamp,
       date: new Date(trade.timestamp).toLocaleString(),
       pnl: trade.pnl,
       cumulative: parseFloat(cumulative.toFixed(2)),
-      strategy: trade.strategy
+      strategy: trade.strategy,
+      status: trade.status
     };
   });
 
@@ -286,10 +288,10 @@ app.get('/api/trades-by-side', (req, res) => {
   let trades = parseTradeLog();
   trades = filterByTimeRange(trades, startTime, endTime);
   trades = filterByMode(trades, mode);
-  const soldTrades = trades.filter(t => t.status === 'EXECUTED');
+  const completedTrades = trades.filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED');
 
-  const buyTrades = soldTrades.filter(t => t.side === 'BUY');
-  const sellTrades = soldTrades.filter(t => t.side === 'SELL');
+  const buyTrades = completedTrades.filter(t => t.side === 'BUY');
+  const sellTrades = completedTrades.filter(t => t.side === 'SELL');
 
   res.json([
     {
@@ -334,12 +336,13 @@ app.get('/api/strategy/:name/stats', (req, res) => {
   trades = filterByTimeRange(trades, startTime, endTime);
   trades = filterByMode(trades, mode);
   const strategyTrades = trades.filter(t => t.strategy === req.params.name);
-  const soldTrades = strategyTrades.filter(t => t.status === 'EXECUTED');
+  const executedTrades = strategyTrades.filter(t => t.status === 'MATCHED');
   const expiredTrades = strategyTrades.filter(t => t.status === 'EXPIRED');
+  const completedTrades = strategyTrades.filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED');
 
-  const totalPnl = soldTrades.reduce((sum, t) => sum + t.pnl, 0);
-  const winningTrades = soldTrades.filter(t => t.pnl > 0);
-  const losingTrades = soldTrades.filter(t => t.pnl < 0);
+  const totalPnl = completedTrades.reduce((sum, t) => sum + t.pnl, 0);
+  const winningTrades = completedTrades.filter(t => t.pnl > 0);
+  const losingTrades = completedTrades.filter(t => t.pnl < 0);
 
   const avgWin = winningTrades.length > 0
     ? winningTrades.reduce((sum, t) => sum + t.pnl, 0) / winningTrades.length
@@ -351,11 +354,11 @@ app.get('/api/strategy/:name/stats', (req, res) => {
   res.json({
     strategy: req.params.name,
     totalTrades: strategyTrades.length,
-    soldTrades: soldTrades.length,
+    soldTrades: executedTrades.length,
     expiredTrades: expiredTrades.length,
     totalPnl: totalPnl.toFixed(2),
-    winRate: soldTrades.length > 0 ? ((winningTrades.length / soldTrades.length) * 100).toFixed(1) : 0,
-    avgPnl: soldTrades.length > 0 ? (totalPnl / soldTrades.length).toFixed(2) : 0,
+    winRate: completedTrades.length > 0 ? ((winningTrades.length / completedTrades.length) * 100).toFixed(1) : 0,
+    avgPnl: completedTrades.length > 0 ? (totalPnl / completedTrades.length).toFixed(2) : 0,
     avgWin: avgWin.toFixed(2),
     avgLoss: avgLoss.toFixed(2),
     winningTrades: winningTrades.length,
@@ -371,12 +374,12 @@ app.get('/api/strategy/:name/cumulative-pnl', (req, res) => {
   let trades = parseTradeLog();
   trades = filterByTimeRange(trades, startTime, endTime);
   trades = filterByMode(trades, mode);
-  const soldTrades = trades
-    .filter(t => t.strategy === req.params.name && t.status === 'EXECUTED')
+  const completedTrades = trades
+    .filter(t => t.strategy === req.params.name && (t.status === 'MATCHED' || t.status === 'EXPIRED'))
     .sort((a, b) => a.timestamp - b.timestamp);
 
   let cumulative = 0;
-  const result = soldTrades.map(trade => {
+  const result = completedTrades.map(trade => {
     cumulative += trade.pnl;
     return {
       timestamp: trade.timestamp,
@@ -384,7 +387,8 @@ app.get('/api/strategy/:name/cumulative-pnl', (req, res) => {
       pnl: trade.pnl,
       cumulative: parseFloat(cumulative.toFixed(2)),
       tradeId: trade.tradeId,
-      side: trade.side
+      side: trade.side,
+      status: trade.status
     };
   });
 
@@ -397,12 +401,12 @@ app.get('/api/strategy/:name/pnl-distribution', (req, res) => {
   let trades = parseTradeLog();
   trades = filterByTimeRange(trades, startTime, endTime);
   trades = filterByMode(trades, mode);
-  const soldTrades = trades
-    .filter(t => t.strategy === req.params.name && t.status === 'EXECUTED');
+  const completedTrades = trades
+    .filter(t => t.strategy === req.params.name && (t.status === 'MATCHED' || t.status === 'EXPIRED'));
 
   // Group PnL into buckets
   const buckets = {};
-  soldTrades.forEach(trade => {
+  completedTrades.forEach(trade => {
     const bucket = Math.floor(trade.pnl);
     buckets[bucket] = (buckets[bucket] || 0) + 1;
   });
@@ -414,18 +418,33 @@ app.get('/api/strategy/:name/pnl-distribution', (req, res) => {
   res.json(result);
 });
 
+// Filter log files by mode (PROD = files with 'prod' in name, TEST = files without 'prod')
+function filterLogFilesByMode(files, mode) {
+  if (!mode || mode === 'all') return files;
+  if (mode === 'PROD') {
+    return files.filter(f => f.toLowerCase().includes('prod'));
+  }
+  // TEST mode - exclude files with 'prod' in name
+  return files.filter(f => !f.toLowerCase().includes('prod'));
+}
+
 // Get live trading logs from all bot log files
 app.get('/api/live-logs', (req, res) => {
   const logsDir = path.join(__dirname, '../../logs');
   const limit = parseInt(req.query.limit) || 50;
+  const mode = req.query.mode || 'all';
 
   if (!fs.existsSync(logsDir)) {
     return res.json([]);
   }
 
-  const logFiles = fs.readdirSync(logsDir)
-    .filter(f => f.endsWith('.log') && !f.includes('tradeAudit') && !f.includes('Errors'))
-    .map(f => path.join(logsDir, f));
+  let logFiles = fs.readdirSync(logsDir)
+    .filter(f => f.endsWith('.log') && !f.includes('tradeAudit') && !f.includes('Errors'));
+
+  // Filter by mode
+  logFiles = filterLogFilesByMode(logFiles, mode);
+
+  logFiles = logFiles.map(f => path.join(logsDir, f));
 
   const allEntries = [];
 
@@ -464,14 +483,19 @@ app.get('/api/live-logs', (req, res) => {
 // Get list of available log files
 app.get('/api/log-files', (req, res) => {
   const logsDir = path.join(__dirname, '../../logs');
+  const mode = req.query.mode || 'all';
 
   if (!fs.existsSync(logsDir)) {
     return res.json([]);
   }
 
-  const logFiles = fs.readdirSync(logsDir)
-    .filter(f => f.endsWith('.log') && !f.includes('tradeAudit') && !f.includes('Errors'))
-    .map(f => f.replace('.log', ''));
+  let logFiles = fs.readdirSync(logsDir)
+    .filter(f => f.endsWith('.log') && !f.includes('tradeAudit') && !f.includes('Errors'));
+
+  // Filter by mode
+  logFiles = filterLogFilesByMode(logFiles, mode);
+
+  logFiles = logFiles.map(f => f.replace('.log', ''));
 
   res.json(logFiles);
 });

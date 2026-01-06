@@ -607,6 +607,19 @@ body {
   font-weight: 600;
 }
 
+.trades-table .expired {
+  color: #d29922;
+  font-weight: 600;
+}
+
+.trades-table .matched {
+  color: #3fb950;
+}
+
+.trades-table .expired-row {
+  opacity: 0.75;
+}
+
 .no-data {
   text-align: center;
   padding: 40px;

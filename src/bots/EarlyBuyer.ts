@@ -1,5 +1,15 @@
-import { OrderResponse, Side } from "@polymarket/clob-client";
-import { QuantBot, QuantBotProps, QuantBotRun, TradeStatus } from "./QuantBot.js";
+import { Side } from "@polymarket/clob-client";
+
+import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
+
+// ============================================================================
+// Types & Interfaces
+// ============================================================================
+
+export enum BtcDirection {
+    UP = "UP",
+    DOWN = "DOWN",
+}
 
 interface EarlyBuyerProps extends QuantBotProps {
     targetBuyPrice: number;
@@ -9,20 +19,25 @@ interface EarlyBuyerProps extends QuantBotProps {
     btcDirection: BtcDirection;
 }
 
-export enum BtcDirection {
-    UP = "UP",
-    DOWN = "DOWN",
-}
+// ============================================================================
+// EarlyBuyer Class
+// ============================================================================
 
 export class EarlyBuyer extends QuantBot implements QuantBotRun {
 
-    private targetBuyPrice!: number;
-    private targetSize!: number;
-    private cutoffMinute!: number;
-    private targetSellPrice!: number;
-    private btcDirection!: BtcDirection;
+    // --- Properties ---
 
-    private sellDone: boolean = false;
+    private targetBuyPrice: number;
+    private targetSize: number;
+    private cutoffMinute: number;
+    private targetSellPrice: number;
+    private btcDirection: BtcDirection;
+
+    private buyOrder?: TradeOrder;
+    private sellOrder?: TradeOrder;
+    private isPastCutoff: boolean = false;
+
+    // --- Constructor ---
 
     constructor(props: EarlyBuyerProps) {
         super(props);
@@ -34,76 +49,137 @@ export class EarlyBuyer extends QuantBot implements QuantBotRun {
         this.btcDirection = props.btcDirection;
     }
 
-    public async resetOnHour() {
-        this.sellDone = false;
+    // --- Main Run Loop ---
+
+    public async run(): Promise<void> {
+        this.setupHourlyReset();
+        this.startTradingLoop();
     }
 
-    public async startHourlyReset() {
-        await this.resetOnHour();  // Run once now
+    // -------------------------------------------------------------------------
+    // Setup
+    // -------------------------------------------------------------------------
 
-        // Calculate ms until the next hour
-        const now = new Date();
-        const msUntilNextHour = (60 - now.getMinutes()) * 60 * 1000 - now.getSeconds() * 1000 - now.getMilliseconds();
-
-        // Wait until the next hour, then run every hour on the hour
-        setTimeout(() => {
-            this.resetOnHour();
-            setInterval(this.resetOnHour.bind(this), 60 * 60 * 1000);
-        }, msUntilNextHour);
+    private setupHourlyReset(): void {
+        this.on('hourly', async () => {
+            await this.updateOrders();
+            await this.auditAndReset();
+            this.resetState();
+        });
     }
 
-    public async run() {
+    private resetState(): void {
+        this.buyOrder = undefined;
+        this.sellOrder = undefined;
+        this.isPastCutoff = false;
+    }
 
-        this.startHourlyReset();
+    // -------------------------------------------------------------------------
+    // Trading Loop
+    // -------------------------------------------------------------------------
 
-        this.tickWrapper(1000 * 30, 1000 * 5, async () => {
-            const now = new Date();
-            const currentMinute = now.getMinutes();
-
-            const orderBooks = await this.marketInfo.getLiveData();
-
-            await this.auditOrders();
+    private startTradingLoop(): void {
+        this.tickWrapper(1000 * 5, 1000 * 2, async () => {
+            await this.updateOrders();
             
-            if (!this.sellDone) {
-                this.tradeResults.forEach(async (trade) => {
-                    if (trade.tradeStatus === TradeStatus.EXECUTED) {
-                        await this.makeOrder(
-                            'followup-sell',
-                            this.btcDirection === BtcDirection.UP ? orderBooks.BtcUpTokenId : orderBooks.BtcDownTokenId,
-                            this.targetSellPrice,
-                            this.targetSize,
-                            Side.SELL,
-                        )
-                        this.sellDone = true;
-                    }
-                })
-            }
-
-            // Cancel buy orders after the first N mins, and return
-            if (currentMinute >= this.cutoffMinute) {
-                this.tradeResults.forEach((tr) => {
-                    if (tr.tradeStatus === TradeStatus.LIVE && tr.side == Side.BUY) {
-                        this.cancelTrade(tr);
-                    }
-                })
+            if (this.isPastCutoff) {
                 return;
             }
 
-            const canSpendAmount = await this.canSpend(this.targetBuyPrice * this.targetSize);
-            const orderIsPossible = [
-                this.checkIfOrderIsValid(this.targetBuyPrice, this.targetSize),
-                canSpendAmount,
-            ].every((r) => r === true);
+            if (this.shouldCreateSellOrder()) {
+                console.log('regular sell')
+                await this.createSellOrder();
+            }
 
-            if (orderIsPossible) {
-                this.makeOrder(
-                    'init-buy',
-                    this.btcDirection === BtcDirection.UP ? orderBooks.BtcUpTokenId : orderBooks.BtcDownTokenId,
-                    this.targetBuyPrice,
-                    this.targetSize,
-                    Side.BUY,
-                );
+            if (this.isAfterCutoff()) {
+                await this.handleCutoff();
+                return;
+            }
+
+            if (this.shouldCreateBuyOrder()) {
+                await this.createBuyOrder();
             }
         });
+    }
+
+    // -------------------------------------------------------------------------
+    // Order Logic
+    // -------------------------------------------------------------------------
+
+    private shouldCreateBuyOrder(): boolean {
+        if (this.buyOrder) return false;
+        if (!this.checkIfOrderIsValid(this.targetBuyPrice, this.targetSize)) return false;
+        if (!this.canSpend(this.targetBuyPrice * this.targetSize)) return false;
+        return true;
+    }
+
+    private shouldCreateSellOrder(): boolean {
+        if (this.sellOrder) return false;
+        if (!this.buyOrder) return false;
+        if (this.buyOrder.status === TradeStatus.MATCHED) return true;
+        return false;
+    }
+
+    private async createBuyOrder(): Promise<void> {
+        const tokenId = await this.getTargetTokenId();
+
+        this.buyOrder = await this.makeOrder(
+            'init-buy',
+            tokenId,
+            this.targetBuyPrice,
+            this.targetSize,
+            Side.BUY
+        );
+
+        this.buyOrder?.once('tradeMatched', () => {
+            this.createSellOrder();
+        });
+    }
+
+    private async createSellOrder(): Promise<void> {
+        if (this.sellOrder) return;
+
+        const tokenId = await this.getTargetTokenId();
+
+        this.sellOrder = await this.makeOrder(
+            'followup-sell',
+            tokenId,
+            this.targetSellPrice,
+            this.targetSize,
+            Side.SELL
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Cutoff Handling
+    // -------------------------------------------------------------------------
+
+    private isAfterCutoff(): boolean {
+        const currentMinute = new Date().getMinutes();
+        return currentMinute >= this.cutoffMinute;
+    }
+
+    private async handleCutoff(): Promise<void> {
+        this.isPastCutoff = true;
+        await this.cancelLiveBuyOrders();
+    }
+
+    private async cancelLiveBuyOrders(): Promise<void> {
+        for (const trade of this.trades) {
+            if (trade.status === TradeStatus.LIVE && trade.side === Side.BUY) {
+                await this.cancelTrade(trade);
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    private async getTargetTokenId(): Promise<string> {
+        const orderBooks = await this.marketInfo.getLiveData();
+        return this.btcDirection === BtcDirection.UP
+            ? orderBooks.BtcUpTokenId
+            : orderBooks.BtcDownTokenId;
     }
 }
