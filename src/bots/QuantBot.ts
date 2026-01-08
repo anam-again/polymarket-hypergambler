@@ -245,6 +245,11 @@ export class QuantBot {
         return undefined;
       }
 
+      if(this.orderOperationPending) { 
+        // Escape if our subclass entered into makeOrder, but there was a racecondition with clobIds, can often happen if we 
+        // try to place an order during an audit reset (the tickwrapper was running, and slowly progressing past the 'do nothing' due to awaits)
+        return;
+      }
       const result = await this.createOrder(clobTokenId, price, amount, side);
 
       const errRes = result as unknown as { error: string; status: number };
@@ -274,7 +279,6 @@ export class QuantBot {
       this.trades.push(trade);
       this.writeLog(`${trade.orderId}, ${name}, ${side}, ${clobTokenId}, ${result.orderID}, ${amount}, ${price}`, LogLevel.ORDER);
 
-      console.log('order created: ', trade.name)
       return trade;
     })();
 
@@ -408,7 +412,7 @@ export class QuantBot {
       return false;
     }
     this.spentThisHour += amount;
-    this.writeLog(`Spent $${amount}, total this hour: $${this.spentThisHour}/${this.hourlyDollarLimit}`);
+    // this.writeLog(`Spent $${amount}, total this hour: $${this.spentThisHour}/${this.hourlyDollarLimit}`);
     return true;
   }
 
@@ -420,7 +424,7 @@ export class QuantBot {
     const timestamp = new Date().toISOString();
     const logLine = `[${logLevel}] ${timestamp}\t ${message}\n`;
     const prodTest = this.PROD_MODE ? 'prod' : 'test';
-    appendFileSync(`./logs/${prodTest}-${this.name}.log`, logLine);
+    appendFileSync(`./logs/bots/${prodTest}-${this.name}.log`, logLine);
   }
 
   public writeError(e: unknown): void {
@@ -450,7 +454,7 @@ export class QuantBot {
       trade.side,
     ].join(', ') + "\n";
 
-    appendFileSync(`./logs/tradeAudit.log`, message);
+    appendFileSync(`./logs/audits/tradeAudit.log`, message);
     this.writeLog(message, LogLevel.COMPLETED);
   }
 
@@ -599,14 +603,20 @@ export class QuantBot {
   }
 
   private settleExpiredPositions(winningClob: string): void {
-    const liveClobIdAmounts: Record<string, number> = {};
+    const positionsByClob: Record<string, number> = {};
+
     for (const trade of this.trades) {
-      if (trade.status === TradeStatus.EXPIRED) {
-        liveClobIdAmounts[trade.clobTokenId] = (liveClobIdAmounts[trade.clobTokenId] || 0) + trade.amount;
+      if (trade.status === TradeStatus.MATCHED && trade.side === Side.BUY) {
+        positionsByClob[trade.clobTokenId] = (positionsByClob[trade.clobTokenId] || 0) + trade.amount;
+      } else if (trade.status === TradeStatus.MATCHED && trade.side === Side.SELL) {
+        positionsByClob[trade.clobTokenId] = (positionsByClob[trade.clobTokenId] || 0) - trade.amount;
       }
     }
-    for (const [clobId, amount] of Object.entries(liveClobIdAmounts)) {
+
+    // Settle remaining positions (bought but not sold)
+    for (const [clobId, amount] of Object.entries(positionsByClob)) {
       if (amount <= 0) continue;
+
       const isWin = clobId === winningClob;
       const finalValue = isWin ? amount : 0;
 

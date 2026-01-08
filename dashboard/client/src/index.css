@@ -467,6 +467,22 @@ body {
   color: #a371f7;
 }
 
+.log-update .log-level {
+  color: #58a6ff;
+}
+
+.log-update .log-message {
+  color: #58a6ff;
+}
+
+.log-order .log-level {
+  color: #f0883e;
+}
+
+.log-order .log-message {
+  color: #f0883e;
+}
+
 /* Strategy Section */
 .strategy-section {
   margin-top: 40px;

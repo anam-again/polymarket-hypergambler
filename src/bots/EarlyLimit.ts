@@ -1,6 +1,6 @@
 import { Side } from "@polymarket/clob-client";
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
-import { BtcDirection } from "./EarlyBuyer.js";
+import { BtcDirection } from "../types/interfaces.js";
 
 interface EarlyLimitProps extends QuantBotProps {
     btcDirection: BtcDirection;       // Which side to monitor (BTC UP or BTC DOWN)

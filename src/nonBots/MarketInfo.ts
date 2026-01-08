@@ -1,6 +1,6 @@
 import { ClobClient, OrderBookSummary, Side } from "@polymarket/clob-client";
 
-import { appendFileSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync } from "fs";
 
 import { retryWrapper } from "../utils/networking.js";
 
@@ -32,8 +32,12 @@ interface MarketInfoSimple {
 export class MarketInfo {
 
     private static readonly UPDATE_DATA_INTERVAL = 4 * 1000; // 5s
+    private static readonly PRICE_LOG_INTERVAL = 30 * 1000; // 30s
+    private static readonly PRICE_LOG_DIR = './logs/pmarket-price';
+    private static readonly PRICE_LOG_PATH = './logs/pmarket-price/BTCHourlyUPDown.log';
 
     private client!: ClobClient;
+    private priceLogInterval: NodeJS.Timeout | null = null;
 
     private cachedClobTokenIds: string[] = [];
     private clobTokenIdsFetchedAt = 0;
@@ -50,6 +54,10 @@ export class MarketInfo {
         this.getLiveData().catch((e) => {
             this.writeLog(`[ERROR] Failed to initialize live data: ${e}`);
         });
+    }
+
+    public async run(): Promise<void> {
+        this.startPriceLogging();
     }
 
     /**
@@ -99,7 +107,7 @@ export class MarketInfo {
     private writeLog(message: string): void {
         const timestamp = new Date().toISOString();
         const logLine = `${timestamp}\t ${message}\n`;
-        appendFileSync(`./logs/MarketInfoErrors.log`, logLine);
+        appendFileSync(`./logs/pmarket-price/MarketInfoErrors.log`, logLine);
     }
 
     /**
@@ -259,5 +267,59 @@ export class MarketInfo {
             return this.liveDataPending;
         }
         return this.cachedOrderBooks;
+    }
+
+    /**
+     * Starts logging UP/DOWN market prices every 30 seconds.
+     * Prices are written to pmarket-price/BTCHourlyUPDown.log
+     */
+    public startPriceLogging(): void {
+        if (this.priceLogInterval) {
+            return;
+        }
+
+        // Ensure log directory exists
+        if (!existsSync(MarketInfo.PRICE_LOG_DIR)) {
+            mkdirSync(MarketInfo.PRICE_LOG_DIR, { recursive: true });
+        }
+
+        // Log immediately on start
+        this.logCurrentPrices();
+
+        // Then log every 30 seconds
+        this.priceLogInterval = setInterval(() => {
+            this.logCurrentPrices();
+        }, MarketInfo.PRICE_LOG_INTERVAL);
+    }
+
+    /**
+     * Stops the price logging interval.
+     */
+    public stopPriceLogging(): void {
+        if (this.priceLogInterval) {
+            clearInterval(this.priceLogInterval);
+            this.priceLogInterval = null;
+        }
+    }
+
+    /**
+     * Fetches current UP/DOWN prices and writes them to the log file.
+     */
+    private async logCurrentPrices(): Promise<void> {
+        try {
+            const clobTokenIds = await this.getCurrentClobTokenIds();
+            const [upTokenId, downTokenId] = clobTokenIds;
+
+            const [upPrice, downPrice] = await Promise.all([
+                this.getPrice(upTokenId, Side.BUY),
+                this.getPrice(downTokenId, Side.BUY),
+            ]);
+
+            const timestamp = new Date().toISOString();
+            const logLine = `${timestamp},${upPrice},${downPrice}\n`;
+            appendFileSync(MarketInfo.PRICE_LOG_PATH, logLine);
+        } catch (error) {
+            this.writeLog(`[ERROR] Failed to log prices: ${error}`);
+        }
     }
 }

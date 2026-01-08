@@ -194,6 +194,8 @@ function LiveLogs({ mode = 'all' }) {
       case 'WARN': return 'log-warn';
       case 'INFO': return 'log-info';
       case 'TEST': return 'log-test';
+      case 'UPDATE': return 'log-update';
+      case 'ORDER': return 'log-order';
       default: return '';
     }
   };
@@ -235,6 +237,8 @@ function LiveLogs({ mode = 'all' }) {
             <option value="WARN">Warnings</option>
             <option value="INFO">Info</option>
             <option value="TEST">Test</option>
+            <option value="UPDATE">Update</option>
+            <option value="ORDER">Order</option>
           </select>
 
           <button

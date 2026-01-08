@@ -1,7 +1,5 @@
 import { Side } from "@polymarket/clob-client";
 
-import cron from 'node-cron';
-
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
 
 interface ContrarianProps extends QuantBotProps {
@@ -106,7 +104,7 @@ export class Contrarian extends QuantBot implements QuantBotRun {
         })
 
         this.tickWrapper(1000 * 5, 1000 * 2, async () => {
-            
+
             await this.updateOrders();
 
             if (this.doNothing) {

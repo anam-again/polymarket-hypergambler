@@ -81,25 +81,20 @@ function broadcast(data) {
 
 // Watch log files for changes
 const logsDir = path.join(__dirname, '../../logs');
-if (fs.existsSync(logsDir)) {
-  const watcher = chokidar.watch(path.join(logsDir, '*.log'), {
+const botsLogsDir = path.join(logsDir, 'bots');
+const auditsLogsDir = path.join(logsDir, 'audits');
+
+// Watch bot logs
+if (fs.existsSync(botsLogsDir)) {
+  const botsWatcher = chokidar.watch(path.join(botsLogsDir, '*.log'), {
     persistent: true,
     ignoreInitial: true,
     usePolling: true,
     interval: 500
   });
 
-  watcher.on('change', (filePath) => {
+  botsWatcher.on('change', (filePath) => {
     const fileName = path.basename(filePath, '.log');
-
-    // Handle tradeAudit.log changes - broadcast trade data update
-    if (fileName === 'tradeAudit') {
-      broadcast({
-        type: 'trade-update',
-        timestamp: Date.now()
-      });
-      return;
-    }
 
     // Skip error logs for live log streaming
     if (fileName.includes('Errors')) {
@@ -116,7 +111,26 @@ if (fs.existsSync(logsDir)) {
     }
   });
 
-  console.log(`Watching logs directory: ${logsDir}`);
+  console.log(`Watching bot logs directory: ${botsLogsDir}`);
+}
+
+// Watch audit logs
+if (fs.existsSync(auditsLogsDir)) {
+  const auditsWatcher = chokidar.watch(path.join(auditsLogsDir, 'tradeAudit.log'), {
+    persistent: true,
+    ignoreInitial: true,
+    usePolling: true,
+    interval: 500
+  });
+
+  auditsWatcher.on('change', () => {
+    broadcast({
+      type: 'trade-update',
+      timestamp: Date.now()
+    });
+  });
+
+  console.log(`Watching audits directory: ${auditsLogsDir}`);
 }
 
 // WebSocket connection handler
@@ -161,7 +175,7 @@ function getFilters(req) {
 
 // Parse the trade audit log
 function parseTradeLog() {
-  const logPath = path.join(__dirname, '../../logs/tradeAudit.log');
+  const logPath = path.join(__dirname, '../../logs/audits/tradeAudit.log');
 
   if (!fs.existsSync(logPath)) {
     return [];
@@ -213,7 +227,7 @@ app.get('/api/stats', (req, res) => {
 
   const totalPnl = completedTrades.reduce((sum, t) => sum + t.pnl, 0);
   const winningTrades = completedTrades.filter(t => t.pnl > 0);
-  const losingTrades = completedTrades.filter(t => t.pnl < 0);
+  const losingTrades = completedTrades.filter(t => t.pnl <= 0);
 
   res.json({
     totalTrades: trades.length,
@@ -243,7 +257,7 @@ app.get('/api/pnl-by-strategy', (req, res) => {
     strategyPnl[trade.strategy].pnl += trade.pnl;
     strategyPnl[trade.strategy].trades++;
     if (trade.pnl > 0) strategyPnl[trade.strategy].wins++;
-    if (trade.pnl < 0) strategyPnl[trade.strategy].losses++;
+    if (trade.pnl <= 0) strategyPnl[trade.strategy].losses++;
   });
 
   const result = Object.entries(strategyPnl).map(([strategy, data]) => ({
@@ -342,7 +356,7 @@ app.get('/api/strategy/:name/stats', (req, res) => {
 
   const totalPnl = completedTrades.reduce((sum, t) => sum + t.pnl, 0);
   const winningTrades = completedTrades.filter(t => t.pnl > 0);
-  const losingTrades = completedTrades.filter(t => t.pnl < 0);
+  const losingTrades = completedTrades.filter(t => t.pnl <= 0);
 
   const avgWin = winningTrades.length > 0
     ? winningTrades.reduce((sum, t) => sum + t.pnl, 0) / winningTrades.length
@@ -430,21 +444,21 @@ function filterLogFilesByMode(files, mode) {
 
 // Get live trading logs from all bot log files
 app.get('/api/live-logs', (req, res) => {
-  const logsDir = path.join(__dirname, '../../logs');
+  const botsDir = path.join(__dirname, '../../logs/bots');
   const limit = parseInt(req.query.limit) || 50;
   const mode = req.query.mode || 'all';
 
-  if (!fs.existsSync(logsDir)) {
+  if (!fs.existsSync(botsDir)) {
     return res.json([]);
   }
 
-  let logFiles = fs.readdirSync(logsDir)
+  let logFiles = fs.readdirSync(botsDir)
     .filter(f => f.endsWith('.log') && !f.includes('tradeAudit') && !f.includes('Errors'));
 
   // Filter by mode
   logFiles = filterLogFilesByMode(logFiles, mode);
 
-  logFiles = logFiles.map(f => path.join(logsDir, f));
+  logFiles = logFiles.map(f => path.join(botsDir, f));
 
   const allEntries = [];
 
@@ -482,14 +496,14 @@ app.get('/api/live-logs', (req, res) => {
 
 // Get list of available log files
 app.get('/api/log-files', (req, res) => {
-  const logsDir = path.join(__dirname, '../../logs');
+  const botsDir = path.join(__dirname, '../../logs/bots');
   const mode = req.query.mode || 'all';
 
-  if (!fs.existsSync(logsDir)) {
+  if (!fs.existsSync(botsDir)) {
     return res.json([]);
   }
 
-  let logFiles = fs.readdirSync(logsDir)
+  let logFiles = fs.readdirSync(botsDir)
     .filter(f => f.endsWith('.log') && !f.includes('tradeAudit') && !f.includes('Errors'));
 
   // Filter by mode
@@ -502,9 +516,9 @@ app.get('/api/log-files', (req, res) => {
 
 // Get logs for a specific bot/file
 app.get('/api/logs/:source', (req, res) => {
-  const logsDir = path.join(__dirname, '../../logs');
+  const botsDir = path.join(__dirname, '../../logs/bots');
   const limit = parseInt(req.query.limit) || 100;
-  const filePath = path.join(logsDir, `${req.params.source}.log`);
+  const filePath = path.join(botsDir, `${req.params.source}.log`);
 
   if (!fs.existsSync(filePath)) {
     return res.json([]);
