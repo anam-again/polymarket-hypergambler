@@ -1,5 +1,5 @@
 # Always Gamba
-![ALWAYS GAMBA](https://github.com/[anam-again]/[polymarket-hypergambler]/blob/main/src/assets/gamba.png?raw=true)
+![ALWAYS GAMBA](https://github.com/anam-again/polymarket-hypergambler/blob/main/src/assets/gamba.png?raw=true)
 #
 Crack open the goat
 ```bash
@@ -30,4 +30,5 @@ npm run dev
 Run  historical simulator (need to manage and  make bots yourself)
 ```bash
 npm run histSim -- --days 14`
+
 ```
