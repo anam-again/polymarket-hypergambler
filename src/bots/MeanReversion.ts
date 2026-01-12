@@ -185,9 +185,9 @@ export class MeanReversion extends QuantBot implements QuantBotRun {
 
         // Track if mean reversion is occurring
         if (this.tradeDirection === 'UP' && zScore >= -this.exitThreshold) {
-            this.logStats(stats, `Mean reversion progressing: Z-score ${zScore.toFixed(2)} approaching mean`);
+            // this.logStats(stats, `Mean reversion progressing: Z-score ${zScore.toFixed(2)} approaching mean`);
         } else if (this.tradeDirection === 'DOWN' && zScore <= this.exitThreshold) {
-            this.logStats(stats, `Mean reversion progressing: Z-score ${zScore.toFixed(2)} approaching mean`);
+            // this.logStats(stats, `Mean reversion progressing: Z-score ${zScore.toFixed(2)} approaching mean`);
         }
     }
 
@@ -197,7 +197,7 @@ export class MeanReversion extends QuantBot implements QuantBotRun {
 
     private calculateRollingStats(): RollingStats | null {
         const cdMarketData = CDMarketData.getInstance();
-        const recentPrices = cdMarketData.getRecentPrices(this.lookbackPeriods);
+        const recentPrices = cdMarketData.getRecentPrices(this.targetedMarket, this.lookbackPeriods);
 
         if (recentPrices.length < this.lookbackPeriods) {
             return null;
@@ -262,7 +262,7 @@ export class MeanReversion extends QuantBot implements QuantBotRun {
     private async createBuyOrder(): Promise<void> {
         if (this.buyOrder || !this.tradeDirection) return;
 
-        const orderBooks = await this.marketInfo.getLiveData();
+        const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
         const tokenId = this.tradeDirection === 'UP'
             ? orderBooks.BtcUpTokenId
             : orderBooks.BtcDownTokenId;
@@ -290,7 +290,7 @@ export class MeanReversion extends QuantBot implements QuantBotRun {
     private async createSellOrder(): Promise<void> {
         if (this.sellOrder || !this.buyOrder || !this.tradeDirection) return;
 
-        const orderBooks = await this.marketInfo.getLiveData();
+        const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
         const tokenId = this.tradeDirection === 'UP'
             ? orderBooks.BtcUpTokenId
             : orderBooks.BtcDownTokenId;

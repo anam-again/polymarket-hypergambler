@@ -282,6 +282,16 @@ export class MockMarketInfo {
     private findNearestEntry(targetTime: number): UpDownPriceEntry | null {
         if (this.upDownData.length === 0) return null;
 
+        // If target is before all data, return first entry
+        if (targetTime < this.upDownData[0].timestamp) {
+            return this.upDownData[0];
+        }
+
+        // If target is after all data, return last entry
+        if (targetTime > this.upDownData[this.upDownData.length - 1].timestamp) {
+            return this.upDownData[this.upDownData.length - 1];
+        }
+
         let left = 0;
         let right = this.upDownData.length - 1;
         let result: UpDownPriceEntry | null = null;

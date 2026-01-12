@@ -3,6 +3,7 @@ import { ClobClient, OrderBookSummary, Side } from "@polymarket/clob-client";
 import { appendFileSync, existsSync, mkdirSync } from "fs";
 
 import { retryWrapper } from "../utils/networking.js";
+import { TargetedMarket } from "../types/interfaces.js";
 
 interface ParsedDate {
     year: number;
@@ -29,30 +30,44 @@ interface MarketInfoSimple {
     outcomePrices: string[],
 }
 
+const LOG_DIRECTORY = './logs/pmarket-price';
+
+enum LOG_DIR {
+    BITCOIN_HOURLY = './logs/pmarket-price/btc.log',
+    ETHEREUM_HOURLY = './logs/pmarket-price/ethereum.log',
+    SOLANA_HOURLY = './logs/pmarket-price/solana.log',
+    XRP_HOURLY = './logs/pmarket-price/xrp.log',
+}
+
 export class MarketInfo {
 
-    private static readonly UPDATE_DATA_INTERVAL = 4 * 1000; // 5s
+    private static readonly UPDATE_DATA_INTERVAL = 4 * 1000; // 4s
     private static readonly PRICE_LOG_INTERVAL = 30 * 1000; // 30s
-    private static readonly PRICE_LOG_DIR = './logs/pmarket-price';
-    private static readonly PRICE_LOG_PATH = './logs/pmarket-price/BTCHourlyUPDown.log';
+    private static readonly MARKET_INFO_CACHE_TTL = 2 * 1000; // 2s
+    private static readonly MARKET_INFO_CACHE_CLEANUP = 5 * 60 * 60 * 1000; // 5 hours
 
     private client!: ClobClient;
-    private priceLogInterval: NodeJS.Timeout | null = null;
+    private priceLogIntervals: Map<TargetedMarket, NodeJS.Timeout> = new Map();
 
-    private cachedClobTokenIds: string[] = [];
-    private clobTokenIdsFetchedAt = 0;
+    private cachedClobTokenIds: Map<TargetedMarket, string[]> = new Map();
+    private clobTokenIdsFetchedAt: Map<TargetedMarket, number> = new Map();
 
-    private cachedOrderBooks!: BtcOrderBooks;
-    private orderBooksFetchedAt = 0;
-    private liveDataPending: Promise<BtcOrderBooks> | null = null;
+    private cachedOrderBooks: Map<TargetedMarket, BtcOrderBooks> = new Map();
+    private orderBooksFetchedAt: Map<TargetedMarket, number> = new Map();
+    private liveDataPending: Map<TargetedMarket, Promise<BtcOrderBooks>> = new Map();
 
     private priceCache: Map<string, { price: number; fetchedAt: number }> = new Map();
     private pricePending: Map<string, Promise<number>> = new Map();
 
+    private marketInfoCache: Map<string, { data: MarketInfoSimple; fetchedAt: number; lastAccessedAt: number }> = new Map();
+    private marketInfoPending: Map<string, Promise<MarketInfoSimple>> = new Map();
+
     constructor(props: MarketInfoProps) {
         this.client = props.client;
-        this.getLiveData().catch((e) => {
-            this.writeLog(`[ERROR] Failed to initialize live data: ${e}`);
+        Object.values(TargetedMarket).forEach((market) => {
+            this.getLiveData(market).catch((e) => {
+                this.writeLog(`[ERROR] Failed to initialize live data: ${e}`);
+            });
         });
     }
 
@@ -115,7 +130,44 @@ export class MarketInfo {
      * @param timestamp - The timestamp in milliseconds since epoch.
      * @returns The Polymarket gamma API URL for the Bitcoin up/down market.
      */
-    public getBitcoinHourlyUrl(timestamp: number) {
+    public getUrl(timestamp: number, targetMarket: TargetedMarket) {
+        const time = this.parseTimestamp(timestamp);
+        let stringHour = "";
+        if (time.hour === 0) {
+            stringHour = "12am"
+        } else if (time.hour === 12) {
+            stringHour = "12pm"
+        } else if (time.hour > 12) {
+            stringHour = `${time.hour - 12}pm`;
+        } else {
+            stringHour = `${time.hour}am`;
+        }
+
+        let marketString = '';
+        switch (targetMarket) {
+            case TargetedMarket.BITCOIN_HOURLY:
+                marketString = 'bitcoin'
+                break;
+            case TargetedMarket.ETHEREUM_HOURLY:
+                marketString = 'ethereum'
+                break;
+            case TargetedMarket.SOLANA_HOURLY:
+                marketString = 'solana';
+                break;
+            case TargetedMarket.XRP_HOURLY:
+                marketString = 'xrp';
+                break;
+            default:
+                throw Error(`illegal market supplied to getPolymarketUrl: ${targetMarket}`)
+        }
+
+        const stringMonth = this.getMonthName(time.month);
+
+        return `https://gamma-api.polymarket.com/events/slug/${marketString}-up-or-down-${stringMonth}-${time.day}-${stringHour}-et`
+    }
+
+    ///https://polymarket.com/event/ethereum-up-or-down-january-9-7pm-et
+    public getEthereumHourlyUrl(timestamp: number) {
         const time = this.parseTimestamp(timestamp);
         let stringHour = "";
         if (time.hour === 0) {
@@ -130,39 +182,93 @@ export class MarketInfo {
 
         const stringMonth = this.getMonthName(time.month);
 
-        return `https://gamma-api.polymarket.com/events/slug/bitcoin-up-or-down-${stringMonth}-${time.day}-${stringHour}-et`
+        return `https://gamma-api.polymarket.com/events/slug/ethereum-up-or-down-${stringMonth}-${time.day}-${stringHour}-et`
     }
 
+
     public async getMarketInfo(url: string): Promise<MarketInfoSimple> {
-        const responseJson = await retryWrapper(async () => {
-            const response = await fetch(url, {
-                method: "GET",
-                headers: {
-                    "Accept": "application/json",
-                },
-            });
+        // Clean up old cache entries periodically
+        this.cleanupMarketInfoCache();
 
-            if (!response.ok) {
-                throw new Error(`HTTP error: ${response.status}`);
+        // Return pending request if one exists (mutex)
+        const pending = this.marketInfoPending.get(url);
+        if (pending) {
+            return pending;
+        }
+
+        // Check cache
+        const now = Date.now();
+        const cached = this.marketInfoCache.get(url);
+        if (cached && now - cached.fetchedAt < MarketInfo.MARKET_INFO_CACHE_TTL) {
+            // Update last accessed time
+            cached.lastAccessedAt = now;
+            return cached.data;
+        }
+
+        // Fetch with mutex
+        const fetchPromise = (async () => {
+            try {
+                const responseJson = await retryWrapper(async () => {
+                    const response = await fetch(url, {
+                        method: "GET",
+                        headers: {
+                            "Accept": "application/json",
+                        },
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP error: ${response.status}`);
+                    }
+                    return await response.json();
+                }, () => {
+                    this.writeLog(`Curl URL Error: ${url}`);
+                });
+
+                const markets = (responseJson as { markets?: { clobTokenIds?: string, outcomePrices: string }[] })?.markets ?? [];
+                if (!markets) throw Error("Failed to getBitcoinHourlyClobs");
+                const marketJson = {
+                    clobTokenIds: JSON.parse(markets[0].clobTokenIds || "") as string[],
+                    outcomePrices: JSON.parse(markets[0].outcomePrices || "") as string[],
+                };
+                if (!marketJson.clobTokenIds) throw Error("Failed to parse clobTokenIds");
+                if (!marketJson.outcomePrices) throw Error("Failed to JSON parse outcomePrices");
+
+                const result: MarketInfoSimple = {
+                    clobTokenIds: marketJson.clobTokenIds,
+                    outcomePrices: marketJson.outcomePrices,
+                };
+
+                // Store in cache
+                const fetchTime = Date.now();
+                this.marketInfoCache.set(url, {
+                    data: result,
+                    fetchedAt: fetchTime,
+                    lastAccessedAt: fetchTime,
+                });
+
+                return result;
+            } catch (e) {
+                console.log('getMarketInfo failed: ', url, e);
+                throw e;
+            } finally {
+                this.marketInfoPending.delete(url);
             }
-            return await response.json();
-        }, () => {
-            this.writeLog(`Curl URL Error: ${url}`);
-        });
+        })();
 
-        const markets = (responseJson as { markets?: { clobTokenIds?: string, outcomePrices: string }[] })?.markets ?? [];
-        if (!markets) throw Error("Failed to getBitcoinHourlyClobs");
-        const marketJson = {
-            clobTokenIds: JSON.parse(markets[0].clobTokenIds || "") as string[],
-            outcomePrices: JSON.parse(markets[0].outcomePrices || "") as string[],
-        };
-        if (!marketJson.clobTokenIds) throw Error("Failed to parse clobTokenIds");
-        if (!marketJson.outcomePrices) throw Error("Failed to JSON parse outcomePrices");
+        this.marketInfoPending.set(url, fetchPromise);
+        return fetchPromise;
+    }
 
-        return {
-            clobTokenIds: marketJson.clobTokenIds,
-            outcomePrices: marketJson.outcomePrices,
-        };
+    /**
+     * Removes market info cache entries that haven't been accessed in 5 hours.
+     */
+    private cleanupMarketInfoCache(): void {
+        const now = Date.now();
+        for (const [url, entry] of this.marketInfoCache) {
+            if (now - entry.lastAccessedAt > MarketInfo.MARKET_INFO_CACHE_CLEANUP) {
+                this.marketInfoCache.delete(url);
+            }
+        }
     }
 
     public async getPrice(clobTokenId: string, side: Side): Promise<number> {
@@ -204,8 +310,8 @@ export class MarketInfo {
      * @returns A promise resolving to an array of CLOB token IDs [btcUp, btcDown].
      * @throws Error if the API request fails or token IDs cannot be parsed.
      */
-    public async getBitcoinHourClobs(timestamp: number): Promise<string[]> {
-        const url = this.getBitcoinHourlyUrl(timestamp);
+    public async getBitcoinHourClobs(timestamp: number, targetedMarket: TargetedMarket): Promise<string[]> {
+        const url = this.getUrl(timestamp, targetedMarket);
         const markets = await this.getMarketInfo(url);
         return markets.clobTokenIds;
     }
@@ -215,17 +321,21 @@ export class MarketInfo {
      * Results are cached and expire on the hour (e.g., at 13:00, 14:00).
      * @returns A promise resolving to an array of CLOB token IDs [btcUp, btcDown].
      */
-    public async getCurrentClobTokenIds(): Promise<string[]> {
+    public async getCurrentClobTokenIds(targetedMarket: TargetedMarket): Promise<string[]> {
         const now = Date.now();
         const currentHour = new Date(now).getHours();
-        const cachedHour = new Date(this.clobTokenIdsFetchedAt).getHours();
-        const isExpired = this.clobTokenIdsFetchedAt === 0 || currentHour !== cachedHour;
+        const fetchedAt = this.clobTokenIdsFetchedAt.get(targetedMarket) ?? 0;
+        const cachedHour = new Date(fetchedAt).getHours();
+        const isExpired = fetchedAt === 0 || currentHour !== cachedHour;
 
-        if (this.cachedClobTokenIds.length === 0 || isExpired) {
-            this.cachedClobTokenIds = await this.getBitcoinHourClobs(this.getCurrentEstTimestamp());
-            this.clobTokenIdsFetchedAt = now;
+        const cached = this.cachedClobTokenIds.get(targetedMarket);
+        if (!cached || cached.length === 0 || isExpired) {
+            const clobTokenIds = await this.getBitcoinHourClobs(this.getCurrentEstTimestamp(), targetedMarket);
+            this.cachedClobTokenIds.set(targetedMarket, clobTokenIds);
+            this.clobTokenIdsFetchedAt.set(targetedMarket, now);
+            return clobTokenIds;
         }
-        return this.cachedClobTokenIds;
+        return cached;
     }
 
     /**
@@ -234,39 +344,59 @@ export class MarketInfo {
      * Uses a mutex lock to prevent concurrent fetches.
      * @returns A promise resolving to the BtcOrderBooks containing buy/sell order books.
      */
-    public async getLiveData(): Promise<BtcOrderBooks> {
-        if (this.liveDataPending) {
-            return this.liveDataPending;
+    public async getLiveData(targetedMarket: TargetedMarket): Promise<BtcOrderBooks> {
+        const pending = this.liveDataPending.get(targetedMarket);
+        if (pending) {
+            return pending;
         }
 
         const now = Date.now();
-        const isExpired = this.orderBooksFetchedAt === 0 || now - this.orderBooksFetchedAt >= MarketInfo.UPDATE_DATA_INTERVAL;
+        const fetchedAt = this.orderBooksFetchedAt.get(targetedMarket) ?? 0;
+        const isExpired = fetchedAt === 0 || now - fetchedAt >= MarketInfo.UPDATE_DATA_INTERVAL;
 
-        if (!this.cachedOrderBooks || isExpired) {
-            this.liveDataPending = (async () => {
+        const cached = this.cachedOrderBooks.get(targetedMarket);
+        if (!cached || isExpired) {
+            const fetchPromise = (async () => {
                 try {
-                    const clobTokenIds = await this.getCurrentClobTokenIds();
+                    const clobTokenIds = await this.getCurrentClobTokenIds(targetedMarket);
                     const orderBooks = await this.client.getOrderBooks([
                         { token_id: clobTokenIds[0], side: Side.BUY },
                         { token_id: clobTokenIds[0], side: Side.SELL },
                         { token_id: clobTokenIds[1], side: Side.BUY },
                         { token_id: clobTokenIds[1], side: Side.SELL },
                     ]);
-                    this.cachedOrderBooks = {
+                    const result: BtcOrderBooks = {
                         BtcUpTokenId: clobTokenIds[0],
                         BtcUp: orderBooks[0],
                         BtcDownTokenId: clobTokenIds[1],
                         BtcDown: orderBooks[1],
                     };
-                    this.orderBooksFetchedAt = Date.now();
-                    return this.cachedOrderBooks;
+                    this.cachedOrderBooks.set(targetedMarket, result);
+                    this.orderBooksFetchedAt.set(targetedMarket, Date.now());
+                    return result;
                 } finally {
-                    this.liveDataPending = null;
+                    this.liveDataPending.delete(targetedMarket);
                 }
             })();
-            return this.liveDataPending;
+            this.liveDataPending.set(targetedMarket, fetchPromise);
+            return fetchPromise;
         }
-        return this.cachedOrderBooks;
+        return cached;
+    }
+
+    private getLogFromMarket(targetedMarket: TargetedMarket): LOG_DIR {
+        switch (targetedMarket) {
+            case TargetedMarket.BITCOIN_HOURLY:
+                return LOG_DIR.BITCOIN_HOURLY;
+            case TargetedMarket.ETHEREUM_HOURLY:
+                return LOG_DIR.ETHEREUM_HOURLY;
+            case TargetedMarket.SOLANA_HOURLY:
+                return LOG_DIR.SOLANA_HOURLY;
+            case TargetedMarket.XRP_HOURLY:
+                return LOG_DIR.XRP_HOURLY;
+            default:
+                throw Error(`Unknown market supplied to getLogFromMarket: ${targetedMarket}`)
+        }
     }
 
     /**
@@ -274,40 +404,44 @@ export class MarketInfo {
      * Prices are written to pmarket-price/BTCHourlyUPDown.log
      */
     public startPriceLogging(): void {
-        if (this.priceLogInterval) {
+        if (this.priceLogIntervals.size > 0) {
             return;
         }
-
-        // Ensure log directory exists
-        if (!existsSync(MarketInfo.PRICE_LOG_DIR)) {
-            mkdirSync(MarketInfo.PRICE_LOG_DIR, { recursive: true });
+        if (!existsSync(LOG_DIRECTORY)) {
+            mkdirSync(LOG_DIRECTORY, { recursive: true });
         }
+        Object.values(TargetedMarket).forEach((market) => {
+            // Log immediately on start
+            this.logCurrentPrices(market);
 
-        // Log immediately on start
-        this.logCurrentPrices();
-
-        // Then log every 30 seconds
-        this.priceLogInterval = setInterval(() => {
-            this.logCurrentPrices();
-        }, MarketInfo.PRICE_LOG_INTERVAL);
+            // Then log every 30 seconds
+            const interval = setInterval(() => {
+                try {
+                    this.logCurrentPrices(market);
+                } catch (e) {
+                    this.writeLog(e as string);
+                }
+            }, MarketInfo.PRICE_LOG_INTERVAL);
+            this.priceLogIntervals.set(market, interval);
+        })
     }
 
     /**
-     * Stops the price logging interval.
+     * Stops the price logging intervals.
      */
     public stopPriceLogging(): void {
-        if (this.priceLogInterval) {
-            clearInterval(this.priceLogInterval);
-            this.priceLogInterval = null;
+        for (const interval of this.priceLogIntervals.values()) {
+            clearInterval(interval);
         }
+        this.priceLogIntervals.clear();
     }
 
     /**
      * Fetches current UP/DOWN prices and writes them to the log file.
      */
-    private async logCurrentPrices(): Promise<void> {
+    private async logCurrentPrices(targetedMarket: TargetedMarket): Promise<void> {
         try {
-            const clobTokenIds = await this.getCurrentClobTokenIds();
+            const clobTokenIds = await this.getCurrentClobTokenIds(targetedMarket);
             const [upTokenId, downTokenId] = clobTokenIds;
 
             const [upPrice, downPrice] = await Promise.all([
@@ -317,7 +451,8 @@ export class MarketInfo {
 
             const timestamp = new Date().toISOString();
             const logLine = `${timestamp},${upPrice},${downPrice}\n`;
-            appendFileSync(MarketInfo.PRICE_LOG_PATH, logLine);
+            const logFile = this.getLogFromMarket(targetedMarket);
+            appendFileSync(logFile, logLine);
         } catch (error) {
             this.writeLog(`[ERROR] Failed to log prices: ${error}`);
         }

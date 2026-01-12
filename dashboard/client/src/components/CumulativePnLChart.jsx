@@ -25,9 +25,76 @@ const STRATEGY_COLORS = [
   '#d2a8ff', // light purple
 ];
 
+// Custom tooltip that displays in multiple columns when there are many items
+const MultiColumnTooltip = ({ active, payload, label, strategies }) => {
+  if (!active || !payload || payload.length === 0) return null;
+
+  const ITEMS_PER_COLUMN = 6;
+  const items = payload.filter(p => p.value !== undefined);
+  const numColumns = Math.ceil(items.length / ITEMS_PER_COLUMN);
+
+  return (
+    <div style={{
+      backgroundColor: '#1c2128',
+      border: '1px solid #30363d',
+      borderRadius: '8px',
+      padding: '12px',
+      zIndex: 1000,
+    }}>
+      <div style={{ color: '#e7e9ea', marginBottom: '8px', fontWeight: 500 }}>
+        {new Date(label).toLocaleString()}
+      </div>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: `repeat(${Math.min(numColumns, 3)}, minmax(140px, auto))`,
+        gap: '4px 16px',
+      }}>
+        {items.map((entry, index) => (
+          <div key={index} style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: '12px',
+          }}>
+            <span style={{ color: entry.color, fontSize: '13px' }}>
+              {entry.name}
+            </span>
+            <span style={{
+              color: entry.value >= 0 ? '#3fb950' : '#f85149',
+              fontWeight: 500,
+              fontSize: '13px',
+            }}>
+              ${entry.value.toFixed(2)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// Extract tags from strategy name by splitting on '-'
+// e.g., "gen-fcandlev2-3" -> ["gen", "fcandlev2", "3"]
+// e.g., "FirstCandle-ETH" -> ["firstcandle", "eth"]
+const getStrategyTags = (strategy) => {
+  return strategy
+    .toLowerCase()
+    .split('-')
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+};
+
+// Check if strategy matches a tag filter
+const strategyMatchesTag = (strategy, tag) => {
+  if (tag === 'all') return true;
+  const tags = getStrategyTags(strategy);
+  return tags.includes(tag.toLowerCase());
+};
+
 function CumulativePnLChart({ data, startTime, endTime }) {
   const [visibleStrategies, setVisibleStrategies] = useState(new Set());
   const [showTotal, setShowTotal] = useState(true);
+  const [selectedTags, setSelectedTags] = useState([]);
 
   // Format timestamp for display
   const formatXAxis = (timestamp) => {
@@ -35,21 +102,55 @@ function CumulativePnLChart({ data, startTime, endTime }) {
     return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   };
 
+  // Extract all unique tags from strategy names
+  const allTags = useMemo(() => {
+    if (!data || data.length === 0) return [];
+
+    const tagSet = new Set();
+    data.forEach(d => {
+      getStrategyTags(d.strategy).forEach(tag => tagSet.add(tag));
+    });
+
+    return [...tagSet].sort();
+  }, [data]);
+
+  // Filter data based on selected tags (strategy must match ALL selected tags)
+  const filteredData = useMemo(() => {
+    if (!data || data.length === 0) return [];
+    if (selectedTags.length === 0) return data;
+
+    return data.filter(d => {
+      return selectedTags.every(tag => strategyMatchesTag(d.strategy, tag));
+    });
+  }, [data, selectedTags]);
+
+  const toggleTag = (tag) => {
+    setSelectedTags(prev => {
+      if (prev.includes(tag)) {
+        return prev.filter(t => t !== tag);
+      } else {
+        return [...prev, tag];
+      }
+    });
+  };
+
+  const clearTags = () => setSelectedTags([]);
+
   // Get unique strategies and build chart data with per-strategy cumulative values
   const { chartData, strategies } = useMemo(() => {
-    if (!data || data.length === 0) {
+    if (!filteredData || filteredData.length === 0) {
       return { chartData: [], strategies: [] };
     }
 
     // Get unique strategies
-    const uniqueStrategies = [...new Set(data.map(d => d.strategy))].sort();
+    const uniqueStrategies = [...new Set(filteredData.map(d => d.strategy))].sort();
 
     // Track cumulative PnL per strategy
     const cumulativeByStrategy = {};
     uniqueStrategies.forEach(s => { cumulativeByStrategy[s] = 0; });
 
     // Sort data by timestamp
-    const sortedData = [...data].sort((a, b) => a.timestamp - b.timestamp);
+    const sortedData = [...filteredData].sort((a, b) => a.timestamp - b.timestamp);
 
     // Build chart data points
     const points = sortedData.map(trade => {
@@ -78,7 +179,7 @@ function CumulativePnLChart({ data, startTime, endTime }) {
     }
 
     return { chartData: points, strategies: uniqueStrategies };
-  }, [data, startTime]);
+  }, [filteredData, startTime]);
 
   // Initialize visible strategies when strategies change
   useEffect(() => {
@@ -105,6 +206,25 @@ function CumulativePnLChart({ data, startTime, endTime }) {
 
   return (
     <div className="cumulative-pnl-chart">
+      <div className="chart-filters">
+        <span className="filter-label">Filter by tag:</span>
+        <div className="tag-chips">
+          {allTags.map(tag => (
+            <button
+              key={tag}
+              className={`tag-chip ${selectedTags.includes(tag) ? 'active' : ''}`}
+              onClick={() => toggleTag(tag)}
+            >
+              {tag}
+            </button>
+          ))}
+        </div>
+        {selectedTags.length > 0 && (
+          <button className="clear-filters-btn" onClick={clearTags}>
+            Clear ({selectedTags.length})
+          </button>
+        )}
+      </div>
       <div className="strategy-toggles">
         <div className="toggle-controls">
           <button onClick={selectAll}>All</button>
@@ -150,14 +270,8 @@ function CumulativePnLChart({ data, startTime, endTime }) {
           />
           <YAxis stroke="#8b949e" />
           <Tooltip
-            contentStyle={{
-              backgroundColor: '#1c2128',
-              border: '1px solid #30363d',
-              borderRadius: '8px'
-            }}
-            labelStyle={{ color: '#e7e9ea' }}
-            labelFormatter={(timestamp) => new Date(timestamp).toLocaleString()}
-            formatter={(value, name) => [`$${value.toFixed(2)}`, name]}
+            wrapperStyle={{ zIndex: 1000 }}
+            content={<MultiColumnTooltip strategies={strategies} />}
           />
           <Legend
             wrapperStyle={{ paddingTop: '10px' }}

@@ -4,6 +4,16 @@
   box-sizing: border-box;
 }
 
+/* Ensure chart tooltips appear above all other elements */
+.recharts-tooltip-wrapper {
+  z-index: 1000 !important;
+  pointer-events: none;
+}
+
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  z-index: 1000 !important;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
   background-color: #0f1419;
@@ -682,6 +692,69 @@ body {
 .chart-pagination span {
   color: #8b949e;
   font-size: 13px;
+}
+
+/* Cumulative PnL Chart Filters */
+.chart-filters {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #30363d;
+  flex-wrap: wrap;
+}
+
+.filter-label {
+  font-size: 13px;
+  color: #8b949e;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag-chip {
+  padding: 4px 10px;
+  background: #21262d;
+  border: 1px solid #30363d;
+  border-radius: 16px;
+  color: #8b949e;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tag-chip:hover {
+  background: #30363d;
+  border-color: #1da1f2;
+  color: #e7e9ea;
+}
+
+.tag-chip.active {
+  background: #1da1f2;
+  border-color: #1da1f2;
+  color: #fff;
+}
+
+.clear-filters-btn {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid #f85149;
+  border-radius: 16px;
+  color: #f85149;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.clear-filters-btn:hover {
+  background: rgba(248, 81, 73, 0.1);
 }
 
 /* Cumulative PnL Chart Strategy Toggles */

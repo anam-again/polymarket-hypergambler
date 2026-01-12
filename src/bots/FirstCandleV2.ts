@@ -70,6 +70,8 @@ export class FirstCandleV2 extends QuantBot implements QuantBotRun {
         this.cutoffMinute = props.cutoffMinute;
     }
 
+    private MAX_SELL_PRICE = .95;
+
     // --- Main Run Loop ---
 
     public async run(): Promise<void> {
@@ -223,7 +225,7 @@ export class FirstCandleV2 extends QuantBot implements QuantBotRun {
     private async createBuyOrder(): Promise<void> {
         if (this.buyOrder || !this.breakoutDirection) return;
 
-        const orderBooks = await this.marketInfo.getLiveData();
+        const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
         const tokenId = this.breakoutDirection === 'UP'
             ? orderBooks.BtcUpTokenId
             : orderBooks.BtcDownTokenId;
@@ -262,7 +264,7 @@ export class FirstCandleV2 extends QuantBot implements QuantBotRun {
     private async createSellOrder(): Promise<void> {
         if (this.sellOrder || !this.buyOrder || !this.breakoutDirection || !this.actualBuyPrice) return;
 
-        const orderBooks = await this.marketInfo.getLiveData();
+        const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
         const tokenId = this.breakoutDirection === 'UP'
             ? orderBooks.BtcUpTokenId
             : orderBooks.BtcDownTokenId;
@@ -277,7 +279,7 @@ export class FirstCandleV2 extends QuantBot implements QuantBotRun {
         const minSellPrice = Math.round((this.actualBuyPrice + this.minProfitMargin) * 100) / 100;
 
         // Use the higher of market price or minimum profitable price
-        const dynamicSellPrice = Math.max(marketSellPrice, minSellPrice);
+        const dynamicSellPrice = Math.min(Math.max(marketSellPrice, minSellPrice), this.MAX_SELL_PRICE);
 
         this.writeLog(
             `Setting sell order at ${dynamicSellPrice.toFixed(2)} ` +
@@ -301,7 +303,7 @@ export class FirstCandleV2 extends QuantBot implements QuantBotRun {
     private async getCurrentBtcPrice(): Promise<number | null> {
         try {
             const cdMarketData = CDMarketData.getInstance();
-            return await cdMarketData.getCurrentPrice();
+            return await cdMarketData.getCurrentPriceByMarket(this.targetedMarket);
         } catch (error) {
             this.writeError(error);
             return null;

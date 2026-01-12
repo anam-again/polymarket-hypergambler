@@ -3,7 +3,8 @@
     "allow": [
       "Bash(npm install)",
       "Bash(powershell -Command:*)",
-      "Bash(node -e:*)"
+      "Bash(node -e:*)",
+      "Bash(npx tsc:*)"
     ]
   }
 }

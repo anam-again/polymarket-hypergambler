@@ -155,7 +155,7 @@ export class EarlyBuyerV2 extends QuantBot implements QuantBotRun {
 
     private hasEnoughFlops(): boolean {
         const cdMarketData = CDMarketData.getInstance();
-        const averages = cdMarketData.getAverages(this.flopsLookbackHours);
+        const averages = cdMarketData.getAverages(this.flopsLookbackHours, this.targetedMarket);
 
         if (!averages) {
             this.writeLog(`Insufficient flops data for ${this.flopsLookbackHours} hours lookback`);
@@ -201,7 +201,7 @@ export class EarlyBuyerV2 extends QuantBot implements QuantBotRun {
     // -------------------------------------------------------------------------
 
     private async getTargetTokenId(): Promise<string> {
-        const orderBooks = await this.marketInfo.getLiveData();
+        const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
         return this.btcDirection === BtcDirection.UP
             ? orderBooks.BtcUpTokenId
             : orderBooks.BtcDownTokenId;

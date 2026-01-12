@@ -3,6 +3,7 @@ import { SimulationClock } from './SimulationClock.js';
 import { MockCDMarketData } from './MockCDMarketData.js';
 import { MockMarketInfo } from './MockMarketInfo.js';
 import { analyzeWithRegression, LinearRegression, RegressionResult } from './LinearRegression.js';
+import { GeneticOptimizer, GeneticConfig, ParameterBounds, OptimizationResult } from './GeneticOptimizer.js';
 
 // ============================================================================
 // Types & Interfaces
@@ -365,6 +366,180 @@ export class HistoricalSimulator {
                 console.log(`    - Increasing '${param}' tends to INCREASE PnL`);
             } else {
                 console.log(`    - Increasing '${param}' tends to DECREASE PnL`);
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Genetic Algorithm Optimization
+    // -------------------------------------------------------------------------
+
+    /**
+     * Runs genetic algorithm optimization for a single bot strategy.
+     * Evolves parameters until convergence or max generations.
+     */
+    public async runGeneticOptimization(
+        botName: string,
+        botFactory: (params: BotParams) => SimulatedBot,
+        bounds: ParameterBounds,
+        geneticConfig?: Partial<GeneticConfig>
+    ): Promise<OptimizationResult> {
+        console.log(`\n${'='.repeat(60)}`);
+        console.log(`GENETIC OPTIMIZATION: ${botName}`);
+        console.log(`${'='.repeat(60)}`);
+
+        const optimizer = new GeneticOptimizer(geneticConfig ?? {}, bounds);
+
+        // Initialize first generation
+        let paramSets = optimizer.initializePopulation();
+        console.log(`\nInitialized population of ${paramSets.length} individuals`);
+        console.log(`Parameter bounds:`);
+        for (const [key, bound] of Object.entries(bounds)) {
+            console.log(`  ${key}: [${bound.min}, ${bound.max}]${bound.step ? ` step=${bound.step}` : ''}`);
+        }
+
+        // Evolution loop
+        while (true) {
+            const generation = optimizer.getGeneration();
+            console.log(`\n--- Generation ${generation} ---`);
+
+            // Run simulations for all individuals in population
+            const results: SimulationResult[] = [];
+
+            for (let i = 0; i < paramSets.length; i++) {
+                const params = paramSets[i];
+                process.stdout.write(`\r  Evaluating individual ${i + 1}/${paramSets.length}...`);
+
+                const result = await this.runSingleBotSimulation(botName, botFactory, params);
+                results.push(result);
+            }
+            process.stdout.write('\r' + ' '.repeat(50) + '\r');
+
+            // Update fitness scores
+            optimizer.updateFitness(results);
+
+            // Check stopping criteria
+            const stopCheck = optimizer.shouldStop();
+            if (stopCheck.stop) {
+                console.log(`\nStopping: ${stopCheck.reason}`);
+                break;
+            }
+
+            // Evolve to next generation
+            paramSets = optimizer.evolve();
+        }
+
+        // Print summary
+        optimizer.printSummary();
+
+        return optimizer.getResult();
+    }
+
+    /**
+     * Runs a single bot simulation with specific parameters.
+     */
+    private async runSingleBotSimulation(
+        botName: string,
+        botFactory: (params: BotParams) => SimulatedBot,
+        params: Record<string, number>
+    ): Promise<SimulationResult> {
+        // Initialize fresh simulation components
+        this.initializeSimulationQuiet();
+
+        // Create the bot
+        const bot = botFactory({
+            name: botName,
+            clock: this.clock,
+            marketInfo: this.marketInfo,
+            cdMarketData: this.cdMarketData,
+            params,
+        });
+
+        // Register hour change handler
+        this.clock.onHourChange(async () => {
+            await bot.onHourChange();
+        });
+
+        // Run the simulation
+        while (!this.clock.isComplete()) {
+            await bot.onTick();
+            this.clock.tick();
+        }
+
+        // Calculate results
+        const trades = bot.getTrades();
+        const result = this.calculateResults(botName, params, trades);
+
+        // Cleanup
+        this.clock.clearHourChangeListeners();
+
+        return result;
+    }
+
+    /**
+     * Initializes simulation without verbose output.
+     */
+    private initializeSimulationQuiet(): void {
+        const endTime = Date.now();
+        const startTime = endTime - (this.config.lookbackDays * 24 * 60 * 60 * 1000);
+
+        this.clock = new SimulationClock(startTime, endTime, this.config.tickIntervalMs);
+        this.marketInfo = new MockMarketInfo(this.clock);
+        this.cdMarketData = new MockCDMarketData(this.clock);
+    }
+
+    /**
+     * Runs genetic optimization for multiple bot strategies.
+     */
+    public async runMultiStrategyGeneticOptimization(
+        strategies: Array<{
+            name: string;
+            factory: (params: BotParams) => SimulatedBot;
+            bounds: ParameterBounds;
+        }>,
+        geneticConfig?: Partial<GeneticConfig>
+    ): Promise<Map<string, OptimizationResult>> {
+        const results = new Map<string, OptimizationResult>();
+
+        for (const strategy of strategies) {
+            const result = await this.runGeneticOptimization(
+                strategy.name,
+                strategy.factory,
+                strategy.bounds,
+                geneticConfig
+            );
+            results.set(strategy.name, result);
+        }
+
+        // Print comparison
+        this.printGeneticComparisonSummary(results);
+
+        return results;
+    }
+
+    /**
+     * Prints comparison of genetic optimization results across strategies.
+     */
+    private printGeneticComparisonSummary(results: Map<string, OptimizationResult>): void {
+        console.log(`\n${'='.repeat(60)}`);
+        console.log('GENETIC OPTIMIZATION COMPARISON');
+        console.log(`${'='.repeat(60)}`);
+
+        const sortedResults = Array.from(results.entries())
+            .sort((a, b) => b[1].bestIndividual.fitness - a[1].bestIndividual.fitness);
+
+        console.log('\nStrategies Ranked by Best PnL:');
+        console.log('-'.repeat(60));
+
+        for (let i = 0; i < sortedResults.length; i++) {
+            const [name, result] = sortedResults[i];
+            console.log(`\n${i + 1}. ${name}`);
+            console.log(`   Best PnL: $${result.bestIndividual.fitness.toFixed(2)}`);
+            console.log(`   Generations: ${result.totalGenerations}`);
+            console.log(`   Optimized Parameters:`);
+
+            for (const [key, value] of Object.entries(result.bestIndividual.params)) {
+                console.log(`     ${key}: ${value.toFixed(4)}`);
             }
         }
     }

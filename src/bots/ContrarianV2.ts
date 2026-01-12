@@ -127,7 +127,7 @@ export class ContrarianV2 extends QuantBot implements QuantBotRun {
     }
 
     private async attemptBuyOrder(): Promise<void> {
-        const orderBooks = await this.marketInfo.getLiveData();
+        const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
 
         const previousHours = await this.getPreviousHoursMajority();
         if (!previousHours) {
@@ -176,7 +176,7 @@ export class ContrarianV2 extends QuantBot implements QuantBotRun {
 
     private doesTotalChangeAgree(betDirection: 'UP' | 'DOWN'): boolean {
         const cdMarketData = CDMarketData.getInstance();
-        const averages = cdMarketData.getAverages(this.cdLookbackHours);
+        const averages = cdMarketData.getAverages(this.cdLookbackHours, this.targetedMarket);
 
         if (!averages) {
             this.writeLog(`Insufficient CDMarketData for ${this.cdLookbackHours} hours lookback`);
@@ -201,8 +201,9 @@ export class ContrarianV2 extends QuantBot implements QuantBotRun {
 
     private async getHourWinner(hoursAgo: number): Promise<'UP' | 'DOWN' | null> {
         try {
-            const hourUrl = this.marketInfo.getBitcoinHourlyUrl(
-                this.marketInfo.getCurrentEstTimestamp() - (hoursAgo * 60 * 60 * 1000)
+            const hourUrl = this.marketInfo.getUrl(
+                this.marketInfo.getCurrentEstTimestamp() - (hoursAgo * 60 * 60 * 1000),
+                this.targetedMarket,
             );
             const market = await this.marketInfo.getMarketInfo(hourUrl);
 

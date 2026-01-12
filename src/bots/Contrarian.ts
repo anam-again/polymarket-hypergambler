@@ -43,8 +43,9 @@ export class Contrarian extends QuantBot implements QuantBotRun {
      */
     private async getHourWinner(hoursAgo: number): Promise<'UP' | 'DOWN' | null> {
         try {
-            const hourUrl = this.marketInfo.getBitcoinHourlyUrl(
-                this.marketInfo.getCurrentEstTimestamp() - (hoursAgo * 60 * 60 * 1000)
+            const hourUrl = this.marketInfo.getUrl(
+                this.marketInfo.getCurrentEstTimestamp() - (hoursAgo * 60 * 60 * 1000),
+                this.targetedMarket,
             );
             const market = await this.marketInfo.getMarketInfo(hourUrl);
 
@@ -111,7 +112,7 @@ export class Contrarian extends QuantBot implements QuantBotRun {
                 return;
             }
 
-            const orderBooks = await this.marketInfo.getLiveData();
+            const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
 
             const makeSellOrder = async () => {
                 if (!this.sellOrder && this.buyOrder) {

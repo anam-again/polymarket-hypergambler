@@ -115,10 +115,11 @@ export class MockCDMarketData {
     // -------------------------------------------------------------------------
 
     /**
-     * Gets the BTC price at the current simulated time.
+     * Gets the price at the current simulated time.
      * Returns the most recent price entry before or at the current time.
+     * Note: In simulation, all symbols return BTC data (mock limitation).
      */
-    public async getCurrentPrice(): Promise<number> {
+    public async getCurrentPrice(symbol: string = 'BTCUSDT'): Promise<number> {
         const now = this.clock.now();
         const entry = this.findNearestEntry(this.minuteData, now);
 
@@ -133,7 +134,7 @@ export class MockCDMarketData {
      * Gets Binance price (same as getCurrentPrice for simulation).
      */
     public async getBinancePrice(symbol: string = 'BTCUSDT'): Promise<number> {
-        return this.getCurrentPrice();
+        return this.getCurrentPrice(symbol);
     }
 
     // -------------------------------------------------------------------------
@@ -196,6 +197,16 @@ export class MockCDMarketData {
         targetTime: number
     ): T | null {
         if (data.length === 0) return null;
+
+        // If target is before all data, return first entry
+        if (targetTime < data[0].timestamp) {
+            return data[0];
+        }
+
+        // If target is after all data, return last entry
+        if (targetTime > data[data.length - 1].timestamp) {
+            return data[data.length - 1];
+        }
 
         // Binary search for the nearest entry at or before targetTime
         let left = 0;

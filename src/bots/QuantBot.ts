@@ -1,9 +1,10 @@
 import { ClobClient, OpenOrder, OrderResponse, OrderType, Side } from "@polymarket/clob-client";
 
-import { appendFileSync, Stats } from "fs";
+import { appendFileSync } from "fs";
 import cron from 'node-cron';
 
 import { MarketInfo } from "../nonBots/MarketInfo.js";
+import { TargetedMarket } from "../types/interfaces.js";
 
 // ============================================================================
 // Enums
@@ -36,6 +37,7 @@ export interface QuantBotProps {
   client: ClobClient;
   marketInfo: MarketInfo;
   PROD_MODE: boolean;
+  targetedMarket: TargetedMarket;
 }
 
 export interface QuantBotRun {
@@ -161,6 +163,8 @@ export class QuantBot {
   private makeOrderPending: Promise<TradeOrder | undefined> | null = null;
   private listeners: { [K in keyof QuantBotEvents]?: QuantBotEvents[K][] } = {};
 
+  public targetedMarket: TargetedMarket;
+
   // --- Constructor ---
 
   constructor(props: QuantBotProps) {
@@ -169,6 +173,7 @@ export class QuantBot {
     this.hourlyDollarLimit = props.hourlyDollarLimit;
     this.marketInfo = props.marketInfo;
     this.client = props.client;
+    this.targetedMarket =  props.targetedMarket;
 
     console.log(`[${this.PROD_MODE ? "PROD" : "TEST"}] ${this.name} initialized...`);
     this.writeLog('Initialized...', LogLevel.INFO);
@@ -356,7 +361,7 @@ export class QuantBot {
     const auditPromise = (async () => {
       const now = new Date();
       this.spentThisHour = 0;
-      this.writeLog(`Doing reset at hour ${now.getHours()}:${now.getMinutes()}, usingUrl=${this.marketInfo.getBitcoinHourlyUrl(this.marketInfo.getCurrentEstTimestamp())}`);
+      this.writeLog(`Doing reset at hour ${now.getHours()}:${now.getMinutes()}, usingUrl=${this.marketInfo.getUrl(this.marketInfo.getCurrentEstTimestamp(), this.targetedMarket)}`);
 
       // Expire still living trades
       this.trades.sort((a, b) => a.createdAt - b.createdAt);
@@ -367,8 +372,9 @@ export class QuantBot {
       }
 
       // Determine winning clob from previous hour
-      const previousHourUrl = this.marketInfo.getBitcoinHourlyUrl(
-        this.marketInfo.getCurrentEstTimestamp() - (60 * 30 * 1000)
+      const previousHourUrl = this.marketInfo.getUrl(
+        this.marketInfo.getCurrentEstTimestamp() - (60 * 30 * 1000),
+        this.targetedMarket,
       );
       const previousMarket = await this.marketInfo.getMarketInfo(previousHourUrl);
       const winningIndex = previousMarket.outcomePrices.reduce(

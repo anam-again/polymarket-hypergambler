@@ -41,6 +41,7 @@ function StrategyPnLChart({ data }) {
           />
           <YAxis stroke="#8b949e" />
           <Tooltip
+            wrapperStyle={{ zIndex: 1000 }}
             contentStyle={{
               backgroundColor: '#1c2128',
               border: '1px solid #30363d',

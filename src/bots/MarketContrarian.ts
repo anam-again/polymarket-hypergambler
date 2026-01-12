@@ -92,7 +92,7 @@ export class MarketContrarian extends QuantBot implements QuantBotRun {
      */
     public async getBetDirection(n: number): Promise<"UP" | "DOWN" | null> {
         const avgPrice = this.getAveragePrice(n);
-        const currentPrice = await this.cdMarketData.getCurrentPrice();
+        const currentPrice = await this.cdMarketData.getCurrentPriceByMarket(this.targetedMarket);
         if (avgPrice === null) {
             return null;
         }

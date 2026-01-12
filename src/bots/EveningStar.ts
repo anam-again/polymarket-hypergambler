@@ -289,7 +289,7 @@ export class EveningStar extends QuantBot implements QuantBotRun {
         if (this.buyOrder) return;
 
         // Evening Star is a bearish reversal - buy the DOWN token
-        const orderBooks = await this.marketInfo.getLiveData();
+        const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
         const tokenId = orderBooks.BtcDownTokenId;
 
         const totalCost = this.targetBuyPrice * this.targetSize;
@@ -315,7 +315,7 @@ export class EveningStar extends QuantBot implements QuantBotRun {
     private async createSellOrder(): Promise<void> {
         if (this.sellOrder || !this.buyOrder) return;
 
-        const orderBooks = await this.marketInfo.getLiveData();
+        const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
         const tokenId = orderBooks.BtcDownTokenId;
 
         this.sellOrder = await this.makeOrder(
@@ -334,7 +334,7 @@ export class EveningStar extends QuantBot implements QuantBotRun {
     private async getCurrentBtcPrice(): Promise<number | null> {
         try {
             const cdMarketData = CDMarketData.getInstance();
-            return await cdMarketData.getCurrentPrice();
+            return await cdMarketData.getCurrentPriceByMarket(this.targetedMarket);
         } catch (error) {
             this.writeError(error);
             return null;

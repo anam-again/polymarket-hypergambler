@@ -6,7 +6,7 @@ export class Arbitrage98 extends QuantBot implements QuantBotRun {
 
     public async run() {
         this.tickWrapper(1000 * 5, 1000 * 2, async () => {
-            const orderBooks = await this.marketInfo.getLiveData();
+            const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
             const upAsks = orderBooks.BtcUp.asks;
             const downAsks = orderBooks.BtcDown.asks;
 

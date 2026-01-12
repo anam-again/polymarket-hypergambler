@@ -168,7 +168,7 @@ export class EarlyBuyer extends QuantBot implements QuantBotRun {
     // -------------------------------------------------------------------------
 
     private async getTargetTokenId(): Promise<string> {
-        const orderBooks = await this.marketInfo.getLiveData();
+        const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
         return this.btcDirection === BtcDirection.UP
             ? orderBooks.BtcUpTokenId
             : orderBooks.BtcDownTokenId;

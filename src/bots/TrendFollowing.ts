@@ -242,7 +242,7 @@ export class TrendFollowing extends QuantBot implements QuantBotRun {
         // Check for trend reversal warning
         if (!trendContinues) {
             this.logIndicators(indicators, '');
-            this.writeLog(`WARNING: Trend reversal detected - MAs crossed against position`);
+            // this.writeLog(`WARNING: Trend reversal detected - MAs crossed against position`);
         }
     }
 
@@ -274,7 +274,7 @@ export class TrendFollowing extends QuantBot implements QuantBotRun {
     private calculateIndicators(): TrendIndicators | null {
         const cdMarketData = CDMarketData.getInstance();
         const requiredPeriods = Math.max(this.longMaPeriod, this.adxPeriod, this.atrPeriod) + 10;
-        const recentPrices = cdMarketData.getRecentPrices(requiredPeriods);
+        const recentPrices = cdMarketData.getRecentPrices(this.targetedMarket, requiredPeriods);
 
         if (recentPrices.length < requiredPeriods) {
             return null;
@@ -463,7 +463,7 @@ export class TrendFollowing extends QuantBot implements QuantBotRun {
     private async createBuyOrder(): Promise<void> {
         if (this.buyOrder || !this.tradeDirection) return;
 
-        const orderBooks = await this.marketInfo.getLiveData();
+        const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
         const tokenId = this.tradeDirection === 'UP'
             ? orderBooks.BtcUpTokenId
             : orderBooks.BtcDownTokenId;
@@ -491,7 +491,7 @@ export class TrendFollowing extends QuantBot implements QuantBotRun {
     private async createSellOrder(): Promise<void> {
         if (this.sellOrder || !this.buyOrder || !this.tradeDirection) return;
 
-        const orderBooks = await this.marketInfo.getLiveData();
+        const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
         const tokenId = this.tradeDirection === 'UP'
             ? orderBooks.BtcUpTokenId
             : orderBooks.BtcDownTokenId;

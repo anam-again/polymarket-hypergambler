@@ -218,7 +218,7 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
     private async createBuyOrder(): Promise<void> {
         if (this.buyOrder || !this.breakoutDirection) return;
 
-        const orderBooks = await this.marketInfo.getLiveData();
+        const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
         const tokenId = this.breakoutDirection === 'UP'
             ? orderBooks.BtcUpTokenId
             : orderBooks.BtcDownTokenId;
@@ -246,7 +246,7 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
     private async createSellOrder(): Promise<void> {
         if (this.sellOrder || !this.buyOrder || !this.breakoutDirection) return;
 
-        const orderBooks = await this.marketInfo.getLiveData();
+        const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
         const tokenId = this.breakoutDirection === 'UP'
             ? orderBooks.BtcUpTokenId
             : orderBooks.BtcDownTokenId;
@@ -267,7 +267,7 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
     private async getCurrentBtcPrice(): Promise<number | null> {
         try {
             const cdMarketData = CDMarketData.getInstance();
-            return await cdMarketData.getCurrentPrice();
+            return await cdMarketData.getCurrentPriceByMarket(this.targetedMarket);
         } catch (error) {
             this.writeError(error);
             return null;

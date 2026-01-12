@@ -134,7 +134,7 @@ export class EarlyLimitV2 extends QuantBot implements QuantBotRun {
             this.writeLog(`Betting direction: ${this.currentDirection}`);
         }
 
-        const orderBooks = await this.marketInfo.getLiveData();
+        const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
         const tokenId = this.currentDirection === 'UP'
             ? orderBooks.BtcUpTokenId
             : orderBooks.BtcDownTokenId;
@@ -166,7 +166,7 @@ export class EarlyLimitV2 extends QuantBot implements QuantBotRun {
     private async createSellOrder(): Promise<void> {
         if (this.sellOrder || !this.currentDirection) return;
 
-        const orderBooks = await this.marketInfo.getLiveData();
+        const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
         const tokenId = this.currentDirection === 'UP'
             ? orderBooks.BtcUpTokenId
             : orderBooks.BtcDownTokenId;
@@ -186,7 +186,7 @@ export class EarlyLimitV2 extends QuantBot implements QuantBotRun {
 
     private getWeightedDirection(): BetDirection | null {
         const cdMarketData = CDMarketData.getInstance();
-        const averages = cdMarketData.getAverages(this.flopsLookbackHours);
+        const averages = cdMarketData.getAverages(this.flopsLookbackHours, this.targetedMarket);
 
         if (!averages) {
             this.writeLog(`Insufficient data for ${this.flopsLookbackHours} hours lookback`);
@@ -205,7 +205,7 @@ export class EarlyLimitV2 extends QuantBot implements QuantBotRun {
 
     private hasEnoughFlops(): boolean {
         const cdMarketData = CDMarketData.getInstance();
-        const averages = cdMarketData.getAverages(this.flopsLookbackHours);
+        const averages = cdMarketData.getAverages(this.flopsLookbackHours, this.targetedMarket);
 
         if (!averages) {
             this.writeLog(`Insufficient flops data for ${this.flopsLookbackHours} hours lookback`);

@@ -68,7 +68,7 @@ export class EarlyLimit extends QuantBot implements QuantBotRun {
 
             await this.updateOrders();
 
-            const orderBooks = await this.marketInfo.getLiveData();
+            const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
 
             const makeSellOrder = async () => {
                 if (!this.sellOrder) {
