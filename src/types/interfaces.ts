@@ -9,3 +9,8 @@ export enum TargetedMarket {
     SOLANA_HOURLY = 'SolanaHourly',
     XRP_HOURLY = 'XRPHourly',
 }
+
+export enum MarketSchedule {
+    FIFTEEN_MINS = 'FifteenMins',
+    HOURLY = 'Hourly',
+}

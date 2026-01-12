@@ -1,6 +1,7 @@
 import { Side } from "@polymarket/clob-client";
 
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
+import { MarketSchedule } from "../types/interfaces.js";
 
 interface ContrarianProps extends QuantBotProps {
     targetSize: number;
@@ -37,17 +38,28 @@ export class Contrarian extends QuantBot implements QuantBotRun {
     }
 
     /**
-     * Gets the winning direction for a specific hour in the past.
-     * @param hoursAgo - How many hours ago (1 = previous hour, 2 = two hours ago, etc.)
+     * Gets the time offset in milliseconds for one period based on market schedule.
+     */
+    private getPeriodOffsetMs(): number {
+        if (this.marketSchedule === MarketSchedule.FIFTEEN_MINS) {
+            return 15 * 60 * 1000; // 15 minutes
+        }
+        return 60 * 60 * 1000; // 1 hour
+    }
+
+    /**
+     * Gets the winning direction for a specific period in the past.
+     * @param periodsAgo - How many periods ago (1 = previous period, 2 = two periods ago, etc.)
      * @returns 'UP' if BtcUp won, 'DOWN' if BtcDown won, or null if unable to determine.
      */
-    private async getHourWinner(hoursAgo: number): Promise<'UP' | 'DOWN' | null> {
+    private async getPeriodWinner(periodsAgo: number): Promise<'UP' | 'DOWN' | null> {
         try {
-            const hourUrl = this.marketInfo.getUrl(
-                this.marketInfo.getCurrentEstTimestamp() - (hoursAgo * 60 * 60 * 1000),
+            const periodOffsetMs = this.getPeriodOffsetMs();
+            const periodUrl = this.marketInfo.getUrl(
+                this.marketInfo.getCurrentEstTimestamp() - (periodsAgo * periodOffsetMs),
                 this.targetedMarket,
             );
-            const market = await this.marketInfo.getMarketInfo(hourUrl);
+            const market = await this.marketInfo.getMarketInfo(periodUrl);
 
             const upPrice = parseFloat(market.outcomePrices[0]);
             const downPrice = parseFloat(market.outcomePrices[1]);
@@ -64,16 +76,17 @@ export class Contrarian extends QuantBot implements QuantBotRun {
     }
 
     /**
-     * Gets the majority direction from the previous N hours.
+     * Gets the majority direction from the previous N periods (hours or 15-min chunks based on market schedule).
      * @returns 'UP' if majority were UP, 'DOWN' if majority were DOWN, 'TIE' if equal, or null if unable to determine.
      */
-    private async getPreviousHoursMajority(): Promise<{ majority: 'UP' | 'DOWN' | 'TIE', results: ('UP' | 'DOWN')[] } | null> {
+    private async getPreviousPeriodsMajority(): Promise<{ majority: 'UP' | 'DOWN' | 'TIE', results: ('UP' | 'DOWN')[] } | null> {
         const results: ('UP' | 'DOWN')[] = [];
+        const periodLabel = this.marketSchedule === MarketSchedule.FIFTEEN_MINS ? '15-min periods' : 'hours';
 
         for (let i = 1; i <= this.lookbackHours; i++) {
-            const winner = await this.getHourWinner(i);
+            const winner = await this.getPeriodWinner(i);
             if (winner === null) {
-                this.writeLog(`Unable to get winner for ${i} hours ago`);
+                this.writeLog(`Unable to get winner for ${i} ${periodLabel} ago`);
                 return null;
             }
             results.push(winner);
@@ -95,7 +108,7 @@ export class Contrarian extends QuantBot implements QuantBotRun {
     }
 
     public async run() {
-        this.on('hourly', async () => {
+        this.on('reset', async () => {
             await this.updateOrders();
             await this.auditAndReset()
             this.buyOrder = undefined;
@@ -147,24 +160,24 @@ export class Contrarian extends QuantBot implements QuantBotRun {
                 return;
             }
 
-            // Determine which direction to bet (opposite of previous N hours majority)
-            const previousHours = await this.getPreviousHoursMajority();
-            if (!previousHours) {
-                this.writeLog('Unable to determine previous hours majority, skipping');
+            // Determine which direction to bet (opposite of previous N periods majority)
+            const previousPeriods = await this.getPreviousPeriodsMajority();
+            const periodLabel = this.marketSchedule === MarketSchedule.FIFTEEN_MINS ? '15-min periods' : 'hours';
+            if (!previousPeriods) {
+                this.writeLog(`Unable to determine previous ${periodLabel} majority, skipping`);
                 return;
             }
-
             // Skip betting on ties
-            if (previousHours.majority === 'TIE') {
-                this.writeLog(`Previous ${this.lookbackHours} hours: [${previousHours.results.join(', ')}] -> TIE, skipping this hour`);
-                this.isTie = true; // Prevent retrying this hour
+            if (previousPeriods.majority === 'TIE') {
+                this.writeLog(`Previous ${this.lookbackHours} ${periodLabel}: [${previousPeriods.results.join(', ')}] -> TIE, skipping this period`);
+                this.isTie = true; // Prevent retrying this period
                 return;
             }
 
-            const betDirection = previousHours.majority === 'UP' ? 'DOWN' : 'UP';
+            const betDirection = previousPeriods.majority === 'UP' ? 'DOWN' : 'UP';
             const tokenId = betDirection === 'UP' ? orderBooks.BtcUpTokenId : orderBooks.BtcDownTokenId;
 
-            this.writeLog(`Previous ${this.lookbackHours} hours: [${previousHours.results.join(', ')}] -> majority: ${previousHours.majority}, betting on: ${betDirection}`);
+            this.writeLog(`Previous ${this.lookbackHours} ${periodLabel}: [${previousPeriods.results.join(', ')}] -> majority: ${previousPeriods.majority}, betting on: ${betDirection}`);
 
             if (this.checkIfOrderIsValid(this.targetBuyPrice, this.targetSize) && this.canSpend(this.targetBuyPrice * this.targetSize)) {
                 this.buyOrder = await this.makeOrder(

@@ -4,7 +4,7 @@ import { appendFileSync } from "fs";
 import cron from 'node-cron';
 
 import { MarketInfo } from "../nonBots/MarketInfo.js";
-import { TargetedMarket } from "../types/interfaces.js";
+import { MarketSchedule, TargetedMarket } from "../types/interfaces.js";
 
 // ============================================================================
 // Enums
@@ -144,6 +144,8 @@ export class TradeOrder {
 
 type QuantBotEvents = {
   hourly: () => void;
+  quarterly: () => void;
+  reset: () => void;
 }
 
 export class QuantBot {
@@ -164,6 +166,7 @@ export class QuantBot {
   private listeners: { [K in keyof QuantBotEvents]?: QuantBotEvents[K][] } = {};
 
   public targetedMarket: TargetedMarket;
+  public marketSchedule: MarketSchedule;
 
   // --- Constructor ---
 
@@ -173,13 +176,23 @@ export class QuantBot {
     this.hourlyDollarLimit = props.hourlyDollarLimit;
     this.marketInfo = props.marketInfo;
     this.client = props.client;
-    this.targetedMarket =  props.targetedMarket;
+    this.targetedMarket = props.targetedMarket;
+    this.marketSchedule = this.getMarketSchedule(this.targetedMarket);
 
     console.log(`[${this.PROD_MODE ? "PROD" : "TEST"}] ${this.name} initialized...`);
     this.writeLog('Initialized...', LogLevel.INFO);
 
     cron.schedule('0 * * * *', () => {
       this.emit('hourly');
+      if(this.marketSchedule === MarketSchedule.HOURLY) {
+        this.emit('reset');
+      }
+    });
+    cron.schedule('15 * * * *', () => {
+      this.emit('quarterly');
+      if(this.marketSchedule === MarketSchedule.FIFTEEN_MINS) {
+        this.emit('reset');
+      }
     });
   }
 
@@ -250,7 +263,7 @@ export class QuantBot {
         return undefined;
       }
 
-      if(this.orderOperationPending) { 
+      if (this.orderOperationPending) {
         // Escape if our subclass entered into makeOrder, but there was a racecondition with clobIds, can often happen if we 
         // try to place an order during an audit reset (the tickwrapper was running, and slowly progressing past the 'do nothing' due to awaits)
         return;
@@ -361,7 +374,7 @@ export class QuantBot {
     const auditPromise = (async () => {
       const now = new Date();
       this.spentThisHour = 0;
-      this.writeLog(`Doing reset at hour ${now.getHours()}:${now.getMinutes()}, usingUrl=${this.marketInfo.getUrl(this.marketInfo.getCurrentEstTimestamp(), this.targetedMarket)}`);
+      this.writeLog(`Doing reset at time ${now.getHours()}:${now.getMinutes()}, usingUrl=${this.marketInfo.getUrl(this.marketInfo.getCurrentEstTimestamp(), this.targetedMarket)}`);
 
       // Expire still living trades
       this.trades.sort((a, b) => a.createdAt - b.createdAt);
@@ -371,9 +384,9 @@ export class QuantBot {
         }
       }
 
-      // Determine winning clob from previous hour
+      // Determine winning clob from two mins ago
       const previousHourUrl = this.marketInfo.getUrl(
-        this.marketInfo.getCurrentEstTimestamp() - (60 * 30 * 1000),
+        this.marketInfo.getCurrentEstTimestamp() - (60 * 2 * 1000),
         this.targetedMarket,
       );
       const previousMarket = await this.marketInfo.getMarketInfo(previousHourUrl);
@@ -467,6 +480,21 @@ export class QuantBot {
   // -------------------------------------------------------------------------
   // Utilities
   // -------------------------------------------------------------------------
+
+  public getMarketSchedule(market: TargetedMarket): MarketSchedule {
+    switch (market) {
+      case TargetedMarket.BITCOIN_HOURLY:
+        return MarketSchedule.HOURLY;
+      case TargetedMarket.ETHEREUM_HOURLY:
+        return MarketSchedule.HOURLY;
+      case TargetedMarket.SOLANA_HOURLY:
+        return MarketSchedule.HOURLY;
+      case TargetedMarket.XRP_HOURLY:
+        return MarketSchedule.HOURLY;
+      default:
+        throw Error(`Unknown market supplied to getMarketScheudle: ${market}`)
+    }
+  }
 
   /**
    * Executes a function repeatedly with a delay and optional jitter.

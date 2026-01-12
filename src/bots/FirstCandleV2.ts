@@ -84,7 +84,7 @@ export class FirstCandleV2 extends QuantBot implements QuantBotRun {
     // -------------------------------------------------------------------------
 
     private setupHourlyReset(): void {
-        this.on('hourly', async () => {
+        this.on('reset', async () => {
             await this.updateOrders();
             await this.auditAndReset();
             this.resetState();
