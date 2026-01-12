@@ -750,10 +750,38 @@ const logCleaner = new LogCleaner({
 });
 logCleaner.run();
 
-// prodBots.forEach((bot) => {
-//   bot.run();
-// })
+/**
+ * Calculates milliseconds until the next hour boundary.
+ * @returns Milliseconds until the start of the next hour.
+ */
+function getMsUntilNextHour(): number {
+  const now = new Date();
+  const nextHour = new Date(now);
+  nextHour.setHours(now.getHours() + 1, 0, 0, 0);
+  return nextHour.getTime() - now.getTime();
+}
 
+/**
+ * Formats milliseconds as a human-readable duration string.
+ */
+function formatDuration(ms: number): string {
+  const minutes = Math.floor(ms / 60000);
+  const seconds = Math.floor((ms % 60000) / 1000);
+  return `${minutes}m ${seconds}s`;
+}
+
+// Start prod bots at the beginning of the next hour
+const msUntilNextHour = getMsUntilNextHour();
+console.log(`[PROD] Scheduling ${prodBots.length} prod bots to start in ${formatDuration(msUntilNextHour)} (at the next hour)`);
+
+setTimeout(() => {
+  console.log('[PROD] Starting prod bots at hour boundary');
+  prodBots.forEach((bot) => {
+    bot.run();
+  });
+}, msUntilNextHour);
+
+// Start test bots immediately
 testBots.forEach((bot) => {
   bot.run();
 })
