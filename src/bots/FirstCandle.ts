@@ -151,7 +151,7 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
         this.candleHigh = Math.max(this.candleHigh, currentPrice);
         this.candleLow = Math.min(this.candleLow, currentPrice);
 
-        const currentMinute = new Date().getMinutes();
+        const currentMinute = this.clock.getMinutes();
 
         if (currentMinute >= this.candleMinutes) {
             this.state = 'WAITING_BREAKOUT';
@@ -279,7 +279,7 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
     // -------------------------------------------------------------------------
 
     private isAfterCutoff(): boolean {
-        const currentMinute = new Date().getMinutes();
+        const currentMinute = this.clock.getMinutes();
         return currentMinute >= this.cutoffMinute;
     }
 

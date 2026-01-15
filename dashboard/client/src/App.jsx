@@ -8,6 +8,7 @@ import StrategySelector from './components/StrategySelector';
 import StrategyDetail from './components/StrategyDetail';
 import TimeRangeSelector from './components/TimeRangeSelector';
 import LiveLogs from './components/LiveLogs';
+import SimulatorDashboard from './components/SimulatorDashboard';
 
 const WS_URL = 'ws://localhost:3001/ws';
 const ONE_WEEK = 7 * 24 * 60 * 60 * 1000;
@@ -23,6 +24,9 @@ function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [wsConnected, setWsConnected] = useState(false);
+
+  // View state - 'live' or 'simulator'
+  const [activeView, setActiveView] = useState('live');
 
   // Time range state - default to past week, no end cap so new trades are always included
   const [startTime, setStartTime] = useState(() => Date.now() - ONE_WEEK);
@@ -174,89 +178,113 @@ function App() {
       <div className="dashboard-header">
         <h1>Dashboard</h1>
         <div className="dashboard-controls">
-          <div className="mode-toggle">
+          <div className="view-toggle">
             <button
-              className={`mode-btn ${mode === 'all' ? 'active' : ''}`}
-              onClick={() => setMode('all')}
+              className={`view-btn ${activeView === 'live' ? 'active' : ''}`}
+              onClick={() => setActiveView('live')}
             >
-              All
+              Live Trading
             </button>
             <button
-              className={`mode-btn ${mode === 'TEST' ? 'active' : ''}`}
-              onClick={() => setMode('TEST')}
+              className={`view-btn ${activeView === 'simulator' ? 'active' : ''}`}
+              onClick={() => setActiveView('simulator')}
             >
-              Test
-            </button>
-            <button
-              className={`mode-btn ${mode === 'PROD' ? 'active' : ''}`}
-              onClick={() => setMode('PROD')}
-            >
-              Prod
+              Simulator
             </button>
           </div>
-          <span className={`live-indicator ${wsConnected ? 'connected' : 'disconnected'}`}>
-            {wsConnected ? 'Live' : 'Offline'}
-          </span>
-          {lastUpdate && (
-            <span className="last-update">
-              Updated: {lastUpdate.toLocaleTimeString()}
-            </span>
+          {activeView === 'live' && (
+            <>
+              <div className="mode-toggle">
+                <button
+                  className={`mode-btn ${mode === 'all' ? 'active' : ''}`}
+                  onClick={() => setMode('all')}
+                >
+                  All
+                </button>
+                <button
+                  className={`mode-btn ${mode === 'TEST' ? 'active' : ''}`}
+                  onClick={() => setMode('TEST')}
+                >
+                  Test
+                </button>
+                <button
+                  className={`mode-btn ${mode === 'PROD' ? 'active' : ''}`}
+                  onClick={() => setMode('PROD')}
+                >
+                  Prod
+                </button>
+              </div>
+              <span className={`live-indicator ${wsConnected ? 'connected' : 'disconnected'}`}>
+                {wsConnected ? 'Live' : 'Offline'}
+              </span>
+              {lastUpdate && (
+                <span className="last-update">
+                  Updated: {lastUpdate.toLocaleTimeString()}
+                </span>
+              )}
+              <button
+                className={`refresh-btn ${refreshing ? 'refreshing' : ''}`}
+                onClick={handleRefresh}
+                disabled={refreshing}
+              >
+                {refreshing ? 'Refreshing...' : 'Refresh'}
+              </button>
+            </>
           )}
-          <button
-            className={`refresh-btn ${refreshing ? 'refreshing' : ''}`}
-            onClick={handleRefresh}
-            disabled={refreshing}
-          >
-            {refreshing ? 'Refreshing...' : 'Refresh'}
-          </button>
         </div>
       </div>
 
-      <TimeRangeSelector
-        startTime={startTime}
-        endTime={endTime}
-        onRangeChange={handleTimeRangeChange}
-      />
+      {activeView === 'simulator' ? (
+        <SimulatorDashboard />
+      ) : (
+        <>
+          <TimeRangeSelector
+            startTime={startTime}
+            endTime={endTime}
+            onRangeChange={handleTimeRangeChange}
+          />
 
-      {stats && <StatsCards stats={stats} />}
+          {stats && <StatsCards stats={stats} />}
 
-      <LiveLogs mode={mode} />
+          <LiveLogs mode={mode} />
 
-      <div className="charts-grid">
-        <div className="chart-card full-width">
-          <h2>Cumulative PnL Over Time</h2>
-          <CumulativePnLChart data={cumulativePnl} startTime={startTime} endTime={endTime} />
-        </div>
+          <div className="charts-grid">
+            <div className="chart-card full-width">
+              <h2>Cumulative PnL Over Time</h2>
+              <CumulativePnLChart data={cumulativePnl} startTime={startTime} endTime={endTime} />
+            </div>
 
-        <div className="chart-card">
-          <h2>PnL by Strategy</h2>
-          <StrategyPnLChart data={strategyPnl} />
-        </div>
+            <div className="chart-card">
+              <h2>PnL by Strategy</h2>
+              <StrategyPnLChart data={strategyPnl} />
+            </div>
 
-        <div className="chart-card">
-          <h2>Strategy Win Rates</h2>
-          <StrategyWinRateChart data={strategyPnl} />
-        </div>
+            <div className="chart-card">
+              <h2>Strategy Win Rates</h2>
+              <StrategyWinRateChart data={strategyPnl} />
+            </div>
 
-        <div className="chart-card">
-          <h2>Trades by Side</h2>
-          <SideDistributionChart data={sideData} />
-        </div>
-      </div>
+            <div className="chart-card">
+              <h2>Trades by Side</h2>
+              <SideDistributionChart data={sideData} />
+            </div>
+          </div>
 
-      <div className="strategy-section">
-        <StrategySelector
-          strategies={strategies}
-          selected={selectedStrategy}
-          onSelect={setSelectedStrategy}
-        />
-        <StrategyDetail
-          strategy={selectedStrategy}
-          startTime={startTime}
-          endTime={endTime}
-          mode={mode}
-        />
-      </div>
+          <div className="strategy-section">
+            <StrategySelector
+              strategies={strategies}
+              selected={selectedStrategy}
+              onSelect={setSelectedStrategy}
+            />
+            <StrategyDetail
+              strategy={selectedStrategy}
+              startTime={startTime}
+              endTime={endTime}
+              mode={mode}
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -1,15 +1,18 @@
+import { IClock, ClockEventType } from '../types/interfaces.js';
+
 /**
  * SimulationClock manages virtual time for historical simulations.
  * It allows advancing time in configurable increments and provides
  * the same time interface that bots expect.
  */
-export class SimulationClock {
+export class SimulationClock implements IClock {
     private currentTime: number;
     private readonly startTime: number;
     private readonly endTime: number;
     private readonly incrementMs: number;
 
-    private hourChangeListeners: (() => void)[] = [];
+    private hourlyListeners: (() => void)[] = [];
+    private quarterlyListeners: (() => void)[] = [];
 
     constructor(startTime: number, endTime: number, incrementMs: number = 60 * 1000) {
         this.startTime = startTime;
@@ -45,7 +48,9 @@ export class SimulationClock {
      * @returns true if time was advanced, false if end time reached.
      */
     public tick(): boolean {
-        const previousHour = new Date(this.currentTime).getHours();
+        const previousDate = new Date(this.currentTime);
+        const previousHour = previousDate.getHours();
+        const previousQuarter = Math.floor(previousDate.getMinutes() / 15);
 
         this.currentTime += this.incrementMs;
 
@@ -54,9 +59,18 @@ export class SimulationClock {
             return false;
         }
 
-        const currentHour = new Date(this.currentTime).getHours();
+        const currentDate = new Date(this.currentTime);
+        const currentHour = currentDate.getHours();
+        const currentQuarter = Math.floor(currentDate.getMinutes() / 15);
+
+        // Emit quarterly event (also triggers at hour boundaries)
+        if (currentHour !== previousHour || currentQuarter !== previousQuarter) {
+            this.emitQuarterlyChange();
+        }
+
+        // Emit hourly event
         if (currentHour !== previousHour) {
-            this.emitHourChange();
+            this.emitHourlyChange();
         }
 
         return true;
@@ -93,21 +107,49 @@ export class SimulationClock {
     }
 
     /**
-     * Register a listener for hour changes.
+     * Register a callback for hourly or quarterly events.
      */
-    public onHourChange(listener: () => void): void {
-        this.hourChangeListeners.push(listener);
+    public on(event: ClockEventType, callback: () => void): void {
+        if (event === 'hourly') {
+            this.hourlyListeners.push(callback);
+        } else if (event === 'quarterly') {
+            this.quarterlyListeners.push(callback);
+        }
     }
 
     /**
-     * Remove all hour change listeners.
+     * Unregister a callback.
      */
-    public clearHourChangeListeners(): void {
-        this.hourChangeListeners = [];
+    public off(event: ClockEventType, callback: () => void): void {
+        if (event === 'hourly') {
+            const index = this.hourlyListeners.indexOf(callback);
+            if (index !== -1) {
+                this.hourlyListeners.splice(index, 1);
+            }
+        } else if (event === 'quarterly') {
+            const index = this.quarterlyListeners.indexOf(callback);
+            if (index !== -1) {
+                this.quarterlyListeners.splice(index, 1);
+            }
+        }
     }
 
-    private emitHourChange(): void {
-        for (const listener of this.hourChangeListeners) {
+    /**
+     * Remove all listeners.
+     */
+    public clearListeners(): void {
+        this.hourlyListeners = [];
+        this.quarterlyListeners = [];
+    }
+
+    private emitHourlyChange(): void {
+        for (const listener of this.hourlyListeners) {
+            listener();
+        }
+    }
+
+    private emitQuarterlyChange(): void {
+        for (const listener of this.quarterlyListeners) {
             listener();
         }
     }

@@ -3,7 +3,8 @@ import { ClobClient, OrderBookSummary, Side } from "@polymarket/clob-client";
 import { appendFileSync, existsSync, mkdirSync } from "fs";
 
 import { retryWrapper } from "../utils/networking.js";
-import { TargetedMarket } from "../types/interfaces.js";
+import { MarketSchedule, TargetedMarket } from "../types/interfaces.js";
+import { QuantBot } from "../bots/QuantBot.js";
 
 interface ParsedDate {
     year: number;
@@ -37,12 +38,16 @@ enum LOG_DIR {
     ETHEREUM_HOURLY = './logs/pmarket-price/ethereum.log',
     SOLANA_HOURLY = './logs/pmarket-price/solana.log',
     XRP_HOURLY = './logs/pmarket-price/xrp.log',
+    BITCOIN_QUARTERLY = './logs/pmarket-price/btc-minutely.log',
+    ETHEREUM_QUARTERLY = './logs/pmarket-price/eth-minutely.log',
+    SOLANA_QUARTERLY = './logs/pmarket-price/sol-minutely.log',
+    XRP_QUARTERLY = './logs/pmarket-price/xrp-minutely.log',
 }
 
 export class MarketInfo {
 
     private static readonly UPDATE_DATA_INTERVAL = 4 * 1000; // 4s
-    private static readonly PRICE_LOG_INTERVAL = 30 * 1000; // 30s
+    private static readonly PRICE_LOG_INTERVAL = 15 * 1000; // 15s
     private static readonly MARKET_INFO_CACHE_TTL = 2 * 1000; // 2s
     private static readonly MARKET_INFO_CACHE_CLEANUP = 5 * 60 * 60 * 1000; // 5 hours
 
@@ -82,6 +87,16 @@ export class MarketInfo {
     public getCurrentEstTimestamp(): number {
         const estString = new Date().toLocaleString("en-US", { timeZone: "America/New_York" });
         return new Date(estString).getTime();
+    }
+
+    /**
+     * This function expects the input timestamp to be in EST.
+     * Returns a Unix timestamp in seconds, offset by 2 hours for the API slug format.
+     */
+    public static getFifteenMinuteTimestamp(timestamp: number): number {
+        const fifteenMinMs = 15 * 60 * 1000;
+        const twoHoursInSeconds = 2 * 60 * 60;  // 7200 seconds (not milliseconds!)
+        return (Math.floor(timestamp / fifteenMinMs) * fifteenMinMs / 1000) - twoHoursInSeconds;
     }
 
     /**
@@ -142,49 +157,29 @@ export class MarketInfo {
         } else {
             stringHour = `${time.hour}am`;
         }
-
-        let marketString = '';
+        const stringMonth = this.getMonthName(time.month);
+        const minutelyTimestamp = MarketInfo.getFifteenMinuteTimestamp(timestamp)
         switch (targetMarket) {
             case TargetedMarket.BITCOIN_HOURLY:
-                marketString = 'bitcoin'
-                break;
+                return `https://gamma-api.polymarket.com/events/slug/bitcoin-up-or-down-${stringMonth}-${time.day}-${stringHour}-et`
             case TargetedMarket.ETHEREUM_HOURLY:
-                marketString = 'ethereum'
-                break;
+                return `https://gamma-api.polymarket.com/events/slug/ethereum-up-or-down-${stringMonth}-${time.day}-${stringHour}-et`
             case TargetedMarket.SOLANA_HOURLY:
-                marketString = 'solana';
-                break;
+                return `https://gamma-api.polymarket.com/events/slug/solana-up-or-down-${stringMonth}-${time.day}-${stringHour}-et`
             case TargetedMarket.XRP_HOURLY:
-                marketString = 'xrp';
-                break;
+                return `https://gamma-api.polymarket.com/events/slug/xrp-up-or-down-${stringMonth}-${time.day}-${stringHour}-et`
+            case TargetedMarket.BITCOIN_QUARTERLY:
+                return `https://gamma-api.polymarket.com/events/slug/btc-updown-15m-${minutelyTimestamp}`
+            case TargetedMarket.ETHEREUM_QUARTERLY:
+                return `https://gamma-api.polymarket.com/events/slug/eth-updown-15m-${minutelyTimestamp}`
+            case TargetedMarket.SOLANA_QUARTERLY:
+                return `https://gamma-api.polymarket.com/events/slug/sol-updown-15m-${minutelyTimestamp}`
+            case TargetedMarket.XRP_QUARTERLY:
+                return `https://gamma-api.polymarket.com/events/slug/xrp-updown-15m-${minutelyTimestamp}`
             default:
                 throw Error(`illegal market supplied to getPolymarketUrl: ${targetMarket}`)
         }
-
-        const stringMonth = this.getMonthName(time.month);
-
-        return `https://gamma-api.polymarket.com/events/slug/${marketString}-up-or-down-${stringMonth}-${time.day}-${stringHour}-et`
     }
-
-    ///https://polymarket.com/event/ethereum-up-or-down-january-9-7pm-et
-    public getEthereumHourlyUrl(timestamp: number) {
-        const time = this.parseTimestamp(timestamp);
-        let stringHour = "";
-        if (time.hour === 0) {
-            stringHour = "12am"
-        } else if (time.hour === 12) {
-            stringHour = "12pm"
-        } else if (time.hour > 12) {
-            stringHour = `${time.hour - 12}pm`;
-        } else {
-            stringHour = `${time.hour}am`;
-        }
-
-        const stringMonth = this.getMonthName(time.month);
-
-        return `https://gamma-api.polymarket.com/events/slug/ethereum-up-or-down-${stringMonth}-${time.day}-${stringHour}-et`
-    }
-
 
     public async getMarketInfo(url: string): Promise<MarketInfoSimple> {
         // Clean up old cache entries periodically
@@ -317,20 +312,34 @@ export class MarketInfo {
     }
 
     /**
-     * Gets the CLOB token IDs for the current Bitcoin hourly market.
-     * Results are cached and expire on the hour (e.g., at 13:00, 14:00).
-     * @returns A promise resolving to an array of CLOB token IDs [btcUp, btcDown].
+     * Gets the CLOB token IDs for the current market.
+     * Results are cached and expire based on market schedule:
+     * - Hourly markets: expire on the hour (e.g., 13:00, 14:00)
+     * - Quarterly (15-min) markets: expire on 15-minute intervals (e.g., 13:00, 13:15, 13:30, 13:45)
+     * @returns A promise resolving to an array of CLOB token IDs [up, down].
      */
     public async getCurrentClobTokenIds(targetedMarket: TargetedMarket): Promise<string[]> {
         const now = Date.now();
-        const currentHour = new Date(now).getHours();
         const fetchedAt = this.clobTokenIdsFetchedAt.get(targetedMarket) ?? 0;
-        const cachedHour = new Date(fetchedAt).getHours();
-        const isExpired = fetchedAt === 0 || currentHour !== cachedHour;
+        const schedule = QuantBot.getMarketSchedule(targetedMarket);
+
+        let isExpired: boolean;
+        if (schedule === MarketSchedule.QUARTERLY) {
+            // 15-minute markets expire when we cross into a new 15-minute interval
+            const currentInterval = MarketInfo.getFifteenMinuteTimestamp(now);
+            const cachedInterval = MarketInfo.getFifteenMinuteTimestamp(fetchedAt);
+            isExpired = fetchedAt === 0 || currentInterval !== cachedInterval;
+        } else {
+            // Hourly markets expire when we cross into a new hour
+            const currentHour = new Date(now).getHours();
+            const cachedHour = new Date(fetchedAt).getHours();
+            isExpired = fetchedAt === 0 || currentHour !== cachedHour;
+        }
 
         const cached = this.cachedClobTokenIds.get(targetedMarket);
         if (!cached || cached.length === 0 || isExpired) {
-            const clobTokenIds = await this.getBitcoinHourClobs(this.getCurrentEstTimestamp(), targetedMarket);
+            const timestamp = this.getCurrentEstTimestamp();
+            const clobTokenIds = await this.getBitcoinHourClobs(timestamp, targetedMarket);
             this.cachedClobTokenIds.set(targetedMarket, clobTokenIds);
             this.clobTokenIdsFetchedAt.set(targetedMarket, now);
             return clobTokenIds;
@@ -394,6 +403,14 @@ export class MarketInfo {
                 return LOG_DIR.SOLANA_HOURLY;
             case TargetedMarket.XRP_HOURLY:
                 return LOG_DIR.XRP_HOURLY;
+            case TargetedMarket.BITCOIN_QUARTERLY:
+                return LOG_DIR.BITCOIN_QUARTERLY
+            case TargetedMarket.ETHEREUM_QUARTERLY:
+                return LOG_DIR.ETHEREUM_QUARTERLY;
+            case TargetedMarket.SOLANA_QUARTERLY:
+                return LOG_DIR.SOLANA_QUARTERLY;
+            case TargetedMarket.XRP_QUARTERLY:
+                return LOG_DIR.XRP_QUARTERLY;
             default:
                 throw Error(`Unknown market supplied to getLogFromMarket: ${targetedMarket}`)
         }

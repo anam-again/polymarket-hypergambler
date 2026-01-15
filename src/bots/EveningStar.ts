@@ -141,7 +141,7 @@ export class EveningStar extends QuantBot implements QuantBotRun {
         const currentPrice = await this.getCurrentBtcPrice();
         if (!currentPrice) return;
 
-        const currentMinute = new Date().getMinutes();
+        const currentMinute = this.clock.getMinutes();
         const candleIndex = Math.floor(currentMinute / this.candleMinutes);
 
         // Initialize current candle if needed
@@ -152,7 +152,7 @@ export class EveningStar extends QuantBot implements QuantBotRun {
                 close: currentPrice,
                 high: currentPrice,
                 low: currentPrice,
-                startTime: Date.now(),
+                startTime: this.clock.now(),
             };
         }
 
@@ -346,7 +346,7 @@ export class EveningStar extends QuantBot implements QuantBotRun {
     // -------------------------------------------------------------------------
 
     private isAfterCutoff(): boolean {
-        const currentMinute = new Date().getMinutes();
+        const currentMinute = this.clock.getMinutes();
         return currentMinute >= this.cutoffMinute;
     }
 

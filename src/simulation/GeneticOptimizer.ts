@@ -1,8 +1,16 @@
 import { SimulationResult } from './HistoricalSimulator.js';
+import { SimulatorLogger } from './SimulatorLogger.js';
 
 // ============================================================================
 // Types & Interfaces
 // ============================================================================
+
+export enum CoinType {
+    BTC = 'btc',
+    ETH = 'eth',
+    SOL = 'sol',
+    XRP = 'xrp',
+}
 
 export interface GeneticConfig {
     populationSize: number;          // Number of individuals per generation
@@ -57,8 +65,9 @@ export class GeneticOptimizer {
     private population: Individual[] = [];
     private generationHistory: GenerationStats[] = [];
     private currentGeneration = 0;
+    private logger: SimulatorLogger;
 
-    constructor(config: Partial<GeneticConfig>, bounds: ParameterBounds) {
+    constructor(config: Partial<GeneticConfig>, bounds: ParameterBounds, logger?: SimulatorLogger) {
         this.config = {
             populationSize: config.populationSize ?? 20,
             maxGenerations: config.maxGenerations ?? 50,
@@ -70,6 +79,7 @@ export class GeneticOptimizer {
             crossoverRate: config.crossoverRate ?? 0.7,
         };
         this.bounds = bounds;
+        this.logger = logger ?? new SimulatorLogger('genetic');
     }
 
     // -------------------------------------------------------------------------
@@ -328,7 +338,7 @@ export class GeneticOptimizer {
             ? `+${stats.improvement.toFixed(2)}`
             : stats.improvement.toFixed(2);
 
-        console.log(
+        this.logger.log(
             `  Gen ${stats.generation.toString().padStart(3)}: ` +
             `Best=$${stats.bestFitness.toFixed(2)} ` +
             `Avg=$${stats.avgFitness.toFixed(2)} ` +
@@ -342,20 +352,20 @@ export class GeneticOptimizer {
     public printSummary(): void {
         const result = this.getResult();
 
-        console.log(`\n${'='.repeat(60)}`);
-        console.log('GENETIC OPTIMIZATION RESULTS');
-        console.log(`${'='.repeat(60)}`);
+        this.logger.log(`\n${'='.repeat(60)}`);
+        this.logger.log('GENETIC OPTIMIZATION RESULTS');
+        this.logger.log(`${'='.repeat(60)}`);
 
-        console.log(`\nConvergence: ${result.convergenceReason}`);
-        console.log(`Total Generations: ${result.totalGenerations}`);
+        this.logger.log(`\nConvergence: ${result.convergenceReason}`);
+        this.logger.log(`Total Generations: ${result.totalGenerations}`);
 
-        console.log(`\nBest Individual:`);
-        console.log(`  Fitness (PnL): $${result.bestIndividual.fitness.toFixed(2)}`);
-        console.log(`  Found in Generation: ${result.bestIndividual.generation}`);
-        console.log(`  Parameters:`);
+        this.logger.log(`\nBest Individual:`);
+        this.logger.log(`  Fitness (PnL): $${result.bestIndividual.fitness.toFixed(2)}`);
+        this.logger.log(`  Found in Generation: ${result.bestIndividual.generation}`);
+        this.logger.log(`  Parameters:`);
 
         for (const [key, value] of Object.entries(result.bestIndividual.params)) {
-            console.log(`    ${key}: ${value.toFixed(4)}`);
+            this.logger.log(`    ${key}: ${value.toFixed(4)}`);
         }
 
         // Show improvement over generations
@@ -364,10 +374,10 @@ export class GeneticOptimizer {
             const lastGen = this.generationHistory[this.generationHistory.length - 1];
             const totalImprovement = lastGen.bestFitness - firstGen.bestFitness;
 
-            console.log(`\nImprovement Over Optimization:`);
-            console.log(`  Initial Best PnL: $${firstGen.bestFitness.toFixed(2)}`);
-            console.log(`  Final Best PnL:   $${lastGen.bestFitness.toFixed(2)}`);
-            console.log(`  Total Improvement: $${totalImprovement.toFixed(2)} (${((totalImprovement / Math.abs(firstGen.bestFitness || 1)) * 100).toFixed(1)}%)`);
+            this.logger.log(`\nImprovement Over Optimization:`);
+            this.logger.log(`  Initial Best PnL: $${firstGen.bestFitness.toFixed(2)}`);
+            this.logger.log(`  Final Best PnL:   $${lastGen.bestFitness.toFixed(2)}`);
+            this.logger.log(`  Total Improvement: $${totalImprovement.toFixed(2)} (${((totalImprovement / Math.abs(firstGen.bestFitness || 1)) * 100).toFixed(1)}%)`);
         }
     }
 }

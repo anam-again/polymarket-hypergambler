@@ -25,6 +25,7 @@ export class Contrarian extends QuantBot implements QuantBotRun {
 
     private doNothing: boolean = false;
 
+
     constructor(props: ContrarianProps) {
         super(props);
 
@@ -41,7 +42,7 @@ export class Contrarian extends QuantBot implements QuantBotRun {
      * Gets the time offset in milliseconds for one period based on market schedule.
      */
     private getPeriodOffsetMs(): number {
-        if (this.marketSchedule === MarketSchedule.FIFTEEN_MINS) {
+        if (this.marketSchedule === MarketSchedule.QUARTERLY) {
             return 15 * 60 * 1000; // 15 minutes
         }
         return 60 * 60 * 1000; // 1 hour
@@ -55,8 +56,9 @@ export class Contrarian extends QuantBot implements QuantBotRun {
     private async getPeriodWinner(periodsAgo: number): Promise<'UP' | 'DOWN' | null> {
         try {
             const periodOffsetMs = this.getPeriodOffsetMs();
+            const currTime = this.marketInfo.getCurrentEstTimestamp();
             const periodUrl = this.marketInfo.getUrl(
-                this.marketInfo.getCurrentEstTimestamp() - (periodsAgo * periodOffsetMs),
+                currTime - (periodsAgo * periodOffsetMs),
                 this.targetedMarket,
             );
             const market = await this.marketInfo.getMarketInfo(periodUrl);
@@ -75,13 +77,23 @@ export class Contrarian extends QuantBot implements QuantBotRun {
         }
     }
 
+    private isAfterCutoff() {
+        const now = new Date();
+        const currentMinute = now.getMinutes();
+        if (this.marketSchedule === MarketSchedule.QUARTERLY) {
+            return (currentMinute % 15) >= this.cutoffMinute;
+        } else {
+            return currentMinute >= this.cutoffMinute;
+        }
+    }
+
     /**
      * Gets the majority direction from the previous N periods (hours or 15-min chunks based on market schedule).
      * @returns 'UP' if majority were UP, 'DOWN' if majority were DOWN, 'TIE' if equal, or null if unable to determine.
      */
     private async getPreviousPeriodsMajority(): Promise<{ majority: 'UP' | 'DOWN' | 'TIE', results: ('UP' | 'DOWN')[] } | null> {
         const results: ('UP' | 'DOWN')[] = [];
-        const periodLabel = this.marketSchedule === MarketSchedule.FIFTEEN_MINS ? '15-min periods' : 'hours';
+        const periodLabel = this.marketSchedule === MarketSchedule.QUARTERLY ? '15-min periods' : 'hours';
 
         for (let i = 1; i <= this.lookbackHours; i++) {
             const winner = await this.getPeriodWinner(i);
@@ -143,10 +155,7 @@ export class Contrarian extends QuantBot implements QuantBotRun {
                 makeSellOrder();
             }
 
-            const now = new Date();
-            const currentMinute = now.getMinutes();
-
-            if (currentMinute >= this.cutoffMinute) {
+            if (this.isAfterCutoff()) {
                 this.trades.forEach((trade) => {
                     if (trade.status === TradeStatus.LIVE && trade.side == Side.BUY) {
                         this.cancelTrade(trade);
@@ -162,7 +171,7 @@ export class Contrarian extends QuantBot implements QuantBotRun {
 
             // Determine which direction to bet (opposite of previous N periods majority)
             const previousPeriods = await this.getPreviousPeriodsMajority();
-            const periodLabel = this.marketSchedule === MarketSchedule.FIFTEEN_MINS ? '15-min periods' : 'hours';
+            const periodLabel = this.marketSchedule === MarketSchedule.QUARTERLY ? '15-min periods' : 'hours';
             if (!previousPeriods) {
                 this.writeLog(`Unable to determine previous ${periodLabel} majority, skipping`);
                 return;

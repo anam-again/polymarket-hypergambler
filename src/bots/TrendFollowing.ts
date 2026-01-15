@@ -527,7 +527,7 @@ export class TrendFollowing extends QuantBot implements QuantBotRun {
     // -------------------------------------------------------------------------
 
     private isAfterCutoff(): boolean {
-        const currentMinute = new Date().getMinutes();
+        const currentMinute = this.clock.getMinutes();
         return currentMinute >= this.cutoffMinute;
     }
 

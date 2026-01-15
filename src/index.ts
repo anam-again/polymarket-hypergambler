@@ -5,10 +5,7 @@ import { BtcDirection, TargetedMarket } from "./types/interfaces.js";
 import { MarketInfo } from "./nonBots/MarketInfo.js";
 import { QuantBotRun } from "./bots/QuantBot.js";
 import { Contrarian } from "./bots/Contrarian.js";
-import { EarlyLimit } from "./bots/EarlyLimit.js";
 import { CDMarketData } from "./nonBots/CDMarketData.js";
-import { EsotericNormal } from "./bots/EsotericNormal.js";
-import { MarketContrarian } from "./bots/MarketContrarian.js";
 import { ContrarianV2 } from "./bots/ContrarianV2.js";
 import { EarlyBuyerV2 } from "./bots/EarlyBuyerV2.js";
 import { EarlyLimitV2 } from "./bots/EarlyLimitV2.js";
@@ -19,6 +16,7 @@ import { TrendFollowing } from "./bots/TrendFollowing.js";
 import { LogCleaner } from "./nonBots/LogCleaner.js";
 import { EveningStar } from "./bots/EveningStar.js";
 import { MorningStar } from "./bots/MorningStar.js";
+import { NCandle } from "./bots/NCandle.js";
 
 
 const credentials = new Credentials();
@@ -106,7 +104,71 @@ const prodBots: QuantBotRun[] = [
     minProfitMargin: .57,
     cutoffMinute: 35,
     ...commonProps,
-  })
+  }),
+  new EarlyBuyer({
+    name: 'early-up-b45-s55',
+    PROD_MODE: true,
+    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
+    hourlyDollarLimit: 2.5,
+    cutoffMinute: 20,
+    targetBuyPrice: .45,
+    targetSize: 5,
+    targetSellPrice: .55,
+    btcDirection: BtcDirection.UP,
+    ...commonProps,
+  }),
+  new EarlyBuyer({
+    name: 'early-down-b45-s55',
+    PROD_MODE: true,
+    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
+    hourlyDollarLimit: 2.5,
+    cutoffMinute: 20,
+    targetBuyPrice: .45,
+    targetSize: 5,
+    targetSellPrice: .55,
+    btcDirection: BtcDirection.DOWN,
+    ...commonProps,
+  }),
+  new Contrarian({
+    name: 'eth1h-contrarian-5h-b50-s80',
+    PROD_MODE: true,
+    targetedMarket: TargetedMarket.ETHEREUM_HOURLY,
+    lookbackHours: 5,
+    hourlyDollarLimit: 2.5,
+    targetBuyPrice: .50,
+    targetSellPrice: .80,
+    targetSize: 5,
+    cutoffMinute: 10,
+    ...commonProps,
+  }),
+  new FirstCandle({
+    name: 'eth1h-firstcandle-10m-bb50-pp100-b60-s90',
+    PROD_MODE: true,
+    targetedMarket: TargetedMarket.ETHEREUM_HOURLY,
+    hourlyDollarLimit: 5,
+    candleMinutes: 10,
+    breakoutBuffer: 50,
+    pullbackBuffer: 100,
+    targetBuyPrice: 0.60,
+    targetSellPrice: 0.90,
+    targetSize: 5,
+    cutoffMinute: 50,
+    ...commonProps,
+  }),
+  new FirstCandle({
+    name: 'eth1h-firstcandle-10m-bb25-pp50-b60-s90',
+    PROD_MODE: true,
+    targetedMarket: TargetedMarket.ETHEREUM_HOURLY,
+    hourlyDollarLimit: 5,
+    candleMinutes: 10,
+    breakoutBuffer: 25,
+    pullbackBuffer: 50,
+    targetBuyPrice: 0.60,
+    targetSellPrice: 0.90,
+    targetSize: 5,
+    cutoffMinute: 50,
+    ...commonProps,
+  }),
 ]
 
 const testBots: QuantBotRun[] = [
@@ -712,14 +774,81 @@ const testBots: QuantBotRun[] = [
     cutoffMinute: 35,
     ...commonProps,
   }),
+  ///   Minutely
+  new Contrarian({
+    name: 'btc15-contarian-1p',
+    PROD_MODE: false,
+    targetedMarket: TargetedMarket.BITCOIN_QUARTERLY,
+    lookbackHours: 1,
+    hourlyDollarLimit: 2.5,
+    targetBuyPrice: .50,
+    targetSellPrice: .80,
+    targetSize: 5,
+    cutoffMinute: 10,
+    ...commonProps,
+  }),
+  new Contrarian({
+    name: 'eth15-contarian-1p',
+    PROD_MODE: false,
+    targetedMarket: TargetedMarket.ETHEREUM_QUARTERLY,
+    lookbackHours: 1,
+    hourlyDollarLimit: 2.5,
+    targetBuyPrice: .50,
+    targetSellPrice: .80,
+    targetSize: 5,
+    cutoffMinute: 10,
+    ...commonProps,
+  }),
+  new Contrarian({
+    name: 'sol15-contarian-1p',
+    PROD_MODE: false,
+    targetedMarket: TargetedMarket.SOLANA_QUARTERLY,
+    lookbackHours: 1,
+    hourlyDollarLimit: 2.5,
+    targetBuyPrice: .50,
+    targetSellPrice: .80,
+    targetSize: 5,
+    cutoffMinute: 10,
+    ...commonProps,
+  }),
+  new Contrarian({
+    name: 'xrp15-contarian-1p',
+    PROD_MODE: false,
+    targetedMarket: TargetedMarket.XRP_QUARTERLY,
+    lookbackHours: 1,
+    hourlyDollarLimit: 2.5,
+    targetBuyPrice: .50,
+    targetSellPrice: .80,
+    targetSize: 5,
+    cutoffMinute: 10,
+    ...commonProps,
+  }),
+  new NCandle({
+    name: 'btc-ncandle-1',
+    PROD_MODE: false,
+    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
+    candleMinutes: 10,
+    breakoutBuffer: 50,
+    pullbackBuffer: 100,
+    buyPriceBuffer:  .02,
+    sellPriceBuffer: .10,
+    minProfitMargin: .10,
+    stopLossMultiplier: 1.5,
+    targetSize: 10,
+    cutoffMinute: 50,
+    maxTradesPerHour: 10,
+    hourlyDollarLimit: 10,
+    ...commonProps,
+  })
 ]
 // implement and adjust mstar
 /**
  * Bots to write
  * Esoteric normalization bot, makes a spread of what  prices 'should'  be based off of time and relative price to start. arbs the diff
- * Morning Star Reversal Pattern
  * bard.fx bearish/bullish candle
  * Fair value gap
+ * Bot that counts the amount of price points in N lookback hours, detects the median value in a range(range such as 35-65), buys at start, and then tries to sell at that point.
+ * Candle V3 that uses stoploss  orders 
  * 
  * Short Term:
  * batch orders
@@ -728,7 +857,6 @@ const testBots: QuantBotRun[] = [
  * Clone to test mode and have it run on different  ports, so we can edit while letting prod run.
  * Write sell orders for partially filled BUY orders
  * For prod, only have it start running on the hour
- * Start collecting other markets data NOW.
  * 
  * Long term:
  * Devops for putting this onto  hetzner vps
@@ -771,7 +899,7 @@ function formatDuration(ms: number): string {
 }
 
 // Start prod bots at the beginning of the next hour
-const msUntilNextHour = getMsUntilNextHour();
+const msUntilNextHour = getMsUntilNextHour() + 5 * 1000;
 console.log(`[PROD] Scheduling ${prodBots.length} prod bots to start in ${formatDuration(msUntilNextHour)} (at the next hour)`);
 
 setTimeout(() => {

@@ -249,7 +249,7 @@ export class ContrarianV2 extends QuantBot implements QuantBotRun {
     // -------------------------------------------------------------------------
 
     private isAfterCutoff(): boolean {
-        return new Date().getMinutes() >= this.cutoffMinute;
+        return this.clock.getMinutes() >= this.cutoffMinute;
     }
 
     private async handleCutoff(): Promise<void> {

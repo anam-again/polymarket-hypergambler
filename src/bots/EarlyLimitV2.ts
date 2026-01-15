@@ -229,7 +229,7 @@ export class EarlyLimitV2 extends QuantBot implements QuantBotRun {
     // -------------------------------------------------------------------------
 
     private isAfterCutoff(): boolean {
-        const currentMinute = new Date().getMinutes();
+        const currentMinute = this.clock.getMinutes();
         return currentMinute >= this.cutoffMinute;
     }
 

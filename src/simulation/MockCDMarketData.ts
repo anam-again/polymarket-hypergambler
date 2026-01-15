@@ -1,5 +1,7 @@
 import { readFileSync, existsSync } from 'fs';
 import { SimulationClock } from './SimulationClock.js';
+import { CoinType } from './GeneticOptimizer.js';
+import { IMarketData, HistoricalAverages, RecentPriceEntry, TargetedMarket } from '../types/interfaces.js';
 
 // ============================================================================
 // Types & Interfaces
@@ -21,21 +23,6 @@ interface MinuteDataEntry {
     price: number;
 }
 
-export interface HistoricalAverages {
-    hourlyOpen: number;
-    averagePrice: number;
-    hourlyMin: number;
-    hourlyMax: number;
-    openFlops: number;
-    averageFlops: number;
-    totalChange: number;
-}
-
-export interface RecentPriceEntry {
-    timestamp: Date;
-    price: number;
-}
-
 // ============================================================================
 // MockCDMarketData Class
 // ============================================================================
@@ -43,17 +30,36 @@ export interface RecentPriceEntry {
 /**
  * Mock implementation of CDMarketData that reads from historical log files
  * and returns data based on the simulation clock's current time.
+ * Implements IMarketData interface for use with QuantBot.
  */
-export class MockCDMarketData {
-    private static readonly HOURLY_LOG_PATH = './logs/market/CDMarketWriterData.log';
-    private static readonly MINUTE_LOG_PATH = './logs/market/CDMarketWriterData2m.log';
+export class MockCDMarketData implements IMarketData {
+    private static readonly LOG_PATHS: Record<CoinType, { hourly: string; minute: string }> = {
+        [CoinType.BTC]: {
+            hourly: './logs/market/btc-hourly.log',
+            minute: './logs/market/btc-minute.log',
+        },
+        [CoinType.ETH]: {
+            hourly: './logs/market/eth-hourly.log',
+            minute: './logs/market/eth-minute.log',
+        },
+        [CoinType.SOL]: {
+            hourly: './logs/market/sol-hourly.log',
+            minute: './logs/market/sol-minute.log',
+        },
+        [CoinType.XRP]: {
+            hourly: './logs/market/xrp-hourly.log',
+            minute: './logs/market/xrp-minute.log',
+        },
+    };
 
     private clock: SimulationClock;
+    private coinType: CoinType;
     private hourlyData: HourlyDataEntry[] = [];
     private minuteData: MinuteDataEntry[] = [];
 
-    constructor(clock: SimulationClock) {
+    constructor(clock: SimulationClock, coinType: CoinType = CoinType.BTC) {
         this.clock = clock;
+        this.coinType = coinType;
         this.loadData();
     }
 
@@ -65,16 +71,17 @@ export class MockCDMarketData {
         this.hourlyData = this.loadHourlyData();
         this.minuteData = this.loadMinuteData();
 
-        console.log(`[MockCDMarketData] Loaded ${this.hourlyData.length} hourly entries, ${this.minuteData.length} minute entries`);
+        console.log(`[MockCDMarketData] Loaded ${this.hourlyData.length} hourly entries, ${this.minuteData.length} minute entries for ${this.coinType.toUpperCase()}`);
     }
 
     private loadHourlyData(): HourlyDataEntry[] {
-        if (!existsSync(MockCDMarketData.HOURLY_LOG_PATH)) {
-            console.warn(`[MockCDMarketData] Hourly log not found: ${MockCDMarketData.HOURLY_LOG_PATH}`);
+        const logPath = MockCDMarketData.LOG_PATHS[this.coinType].hourly;
+        if (!existsSync(logPath)) {
+            console.warn(`[MockCDMarketData] Hourly log not found: ${logPath}`);
             return [];
         }
 
-        const content = readFileSync(MockCDMarketData.HOURLY_LOG_PATH, 'utf-8');
+        const content = readFileSync(logPath, 'utf-8');
         const lines = content.trim().split('\n').filter(line => line.trim());
 
         return lines.map(line => {
@@ -93,12 +100,13 @@ export class MockCDMarketData {
     }
 
     private loadMinuteData(): MinuteDataEntry[] {
-        if (!existsSync(MockCDMarketData.MINUTE_LOG_PATH)) {
-            console.warn(`[MockCDMarketData] Minute log not found: ${MockCDMarketData.MINUTE_LOG_PATH}`);
+        const logPath = MockCDMarketData.LOG_PATHS[this.coinType].minute;
+        if (!existsSync(logPath)) {
+            console.warn(`[MockCDMarketData] Minute log not found: ${logPath}`);
             return [];
         }
 
-        const content = readFileSync(MockCDMarketData.MINUTE_LOG_PATH, 'utf-8');
+        const content = readFileSync(logPath, 'utf-8');
         const lines = content.trim().split('\n').filter(line => line.trim());
 
         return lines.map(line => {
@@ -121,7 +129,7 @@ export class MockCDMarketData {
      */
     public async getCurrentPrice(symbol: string = 'BTCUSDT'): Promise<number> {
         const now = this.clock.now();
-        const entry = this.findNearestEntry(this.minuteData, now);
+        const entry = this.findPreviousEntry(this.minuteData, now);
 
         if (!entry) {
             throw new Error(`No price data available for timestamp ${new Date(now).toISOString()}`);
@@ -135,6 +143,14 @@ export class MockCDMarketData {
      */
     public async getBinancePrice(symbol: string = 'BTCUSDT'): Promise<number> {
         return this.getCurrentPrice(symbol);
+    }
+
+    /**
+     * Gets the current price by targeted market (IMarketData interface).
+     * In simulation, all markets return the same price data for the loaded coin type.
+     */
+    public async getCurrentPriceByMarket(market: TargetedMarket): Promise<number> {
+        return this.getCurrentPrice();
     }
 
     // -------------------------------------------------------------------------
@@ -192,15 +208,20 @@ export class MockCDMarketData {
     // Utilities
     // -------------------------------------------------------------------------
 
-    private findNearestEntry<T extends { timestamp: number }>(
+    /**
+     * Finds the most recent entry BEFORE the target time (strictly previous).
+     * This avoids look-ahead bias by only returning data that would have been
+     * available before the target time.
+     */
+    private findPreviousEntry<T extends { timestamp: number }>(
         data: T[],
         targetTime: number
     ): T | null {
         if (data.length === 0) return null;
 
-        // If target is before all data, return first entry
-        if (targetTime < data[0].timestamp) {
-            return data[0];
+        // If target is before or at first data point, no previous data exists
+        if (targetTime <= data[0].timestamp) {
+            return null;
         }
 
         // If target is after all data, return last entry
@@ -208,14 +229,14 @@ export class MockCDMarketData {
             return data[data.length - 1];
         }
 
-        // Binary search for the nearest entry at or before targetTime
+        // Binary search for the last entry strictly before targetTime
         let left = 0;
         let right = data.length - 1;
         let result: T | null = null;
 
         while (left <= right) {
             const mid = Math.floor((left + right) / 2);
-            if (data[mid].timestamp <= targetTime) {
+            if (data[mid].timestamp < targetTime) {
                 result = data[mid];
                 left = mid + 1;
             } else {

@@ -143,7 +143,7 @@ export class CDMarketData implements QuantBotRun {
     // Public API - Price Data
     // -------------------------------------------------------------------------
 
-    public async getCurrentPrice(symbol: BinanceSymbol = BinanceSymbol.BTCUSDT): Promise<number> {
+    public async getCurrentPrice(symbol: BinanceSymbol): Promise<number> {
         if (this.isCacheValid(symbol)) {
             return this.priceCache.get(symbol)!;
         }

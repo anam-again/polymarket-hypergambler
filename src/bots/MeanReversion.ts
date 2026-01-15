@@ -1,7 +1,7 @@
 import { Side } from "@polymarket/clob-client";
 
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
-import { CDMarketData, RecentPriceEntry } from "../nonBots/CDMarketData.js";
+import { CDMarketData } from "../nonBots/CDMarketData.js";
 
 // ============================================================================
 // Types & Interfaces
@@ -176,7 +176,7 @@ export class MeanReversion extends QuantBot implements QuantBotRun {
             await this.createBuyOrder();
         } else {
             // Log periodic stats without entry
-            this.logStats(stats, 'No entry signal');
+            // this.logStats(stats, 'No entry signal');
         }
     }
 
@@ -325,7 +325,7 @@ export class MeanReversion extends QuantBot implements QuantBotRun {
     // -------------------------------------------------------------------------
 
     private isAfterCutoff(): boolean {
-        const currentMinute = new Date().getMinutes();
+        const currentMinute = this.clock.getMinutes();
         return currentMinute >= this.cutoffMinute;
     }
 

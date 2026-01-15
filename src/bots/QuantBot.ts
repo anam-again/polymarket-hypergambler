@@ -1,10 +1,10 @@
 import { ClobClient, OpenOrder, OrderResponse, OrderType, Side } from "@polymarket/clob-client";
 
 import { appendFileSync } from "fs";
-import cron from 'node-cron';
 
 import { MarketInfo } from "../nonBots/MarketInfo.js";
-import { MarketSchedule, TargetedMarket } from "../types/interfaces.js";
+import { IClock, IMarketInfo, MarketSchedule, TargetedMarket, TradeStatus, TradeOrderProps } from "../types/interfaces.js";
+import { RealClock } from "../utils/RealClock.js";
 
 // ============================================================================
 // Enums
@@ -19,13 +19,8 @@ enum LogLevel {
   UPDATE = 'UPDATE',
 }
 
-export enum TradeStatus {
-  LIVE = 'LIVE',
-  MATCHED = 'MATCHED',
-  EXPIRED = 'EXPIRED',
-  CANCELED = 'CANCELED',
-  PARTIAL = 'PARTIAL',
-}
+// Re-export TradeStatus for backward compatibility
+export { TradeStatus } from "../types/interfaces.js";
 
 // ============================================================================
 // Interfaces
@@ -35,28 +30,14 @@ export interface QuantBotProps {
   name: string;
   hourlyDollarLimit: number;
   client: ClobClient;
-  marketInfo: MarketInfo;
+  marketInfo: MarketInfo | IMarketInfo;
   PROD_MODE: boolean;
   targetedMarket: TargetedMarket;
+  clock?: IClock;  // Optional - defaults to RealClock for production
 }
 
 export interface QuantBotRun {
   run(): void;
-}
-
-export interface TradeOrderProps {
-  orderId: string;
-  name: string;
-  createdAt: number;
-  targetBuyPrice?: number;
-  finalValue?: number;
-  targetSellPrice?: number;
-  amount: number;
-  totalCost: number;
-  isProd: boolean;
-  clobTokenId: string;
-  status: TradeStatus;
-  side: Side;
 }
 
 // ============================================================================
@@ -152,15 +133,17 @@ export class QuantBot {
 
   // --- Properties ---
 
-  private name!: string;
-  private hourlyDollarLimit!: number;
-  private PROD_MODE!: boolean;
+  public name!: string;
+  protected hourlyDollarLimit!: number;
+  protected PROD_MODE!: boolean;
 
-  public marketInfo!: MarketInfo;
+  public clock!: IClock;
+  public marketInfo!: MarketInfo | IMarketInfo;
   public client!: ClobClient;
   public trades: TradeOrder[] = [];
 
-  private spentThisHour: number = 0;
+  protected spentThisHour: number = 0;
+  protected tradesThisHour: number = 0;
   private orderOperationPending: Promise<void> | null = null;
   private makeOrderPending: Promise<TradeOrder | undefined> | null = null;
   private listeners: { [K in keyof QuantBotEvents]?: QuantBotEvents[K][] } = {};
@@ -177,20 +160,25 @@ export class QuantBot {
     this.marketInfo = props.marketInfo;
     this.client = props.client;
     this.targetedMarket = props.targetedMarket;
-    this.marketSchedule = this.getMarketSchedule(this.targetedMarket);
+    this.marketSchedule = QuantBot.getMarketSchedule(this.targetedMarket);
+
+    // Use provided clock or create RealClock for production
+    this.clock = props.clock ?? new RealClock();
 
     console.log(`[${this.PROD_MODE ? "PROD" : "TEST"}] ${this.name} initialized...`);
     this.writeLog('Initialized...', LogLevel.INFO);
 
-    cron.schedule('0 * * * *', () => {
+    // Register for clock events
+    this.clock.on('hourly', () => {
       this.emit('hourly');
-      if(this.marketSchedule === MarketSchedule.HOURLY) {
+      if (this.marketSchedule === MarketSchedule.HOURLY) {
         this.emit('reset');
       }
     });
-    cron.schedule('15 * * * *', () => {
+
+    this.clock.on('quarterly', () => {
       this.emit('quarterly');
-      if(this.marketSchedule === MarketSchedule.FIFTEEN_MINS) {
+      if (this.marketSchedule === MarketSchedule.QUARTERLY) {
         this.emit('reset');
       }
     });
@@ -282,7 +270,7 @@ export class QuantBot {
         amount,
         name: name,
         clobTokenId,
-        createdAt: Date.now(),
+        createdAt: this.clock.now(),
         isProd: this.PROD_MODE,
         orderId: result.orderID,
         status: TradeStatus.LIVE,
@@ -372,9 +360,9 @@ export class QuantBot {
     }
 
     const auditPromise = (async () => {
-      const now = new Date();
       this.spentThisHour = 0;
-      this.writeLog(`Doing reset at time ${now.getHours()}:${now.getMinutes()}, usingUrl=${this.marketInfo.getUrl(this.marketInfo.getCurrentEstTimestamp(), this.targetedMarket)}`);
+      this.tradesThisHour = 0;
+      this.writeLog(`Doing reset at time ${this.clock.getHours()}:${this.clock.getMinutes()}, usingUrl=${this.marketInfo.getUrl(this.marketInfo.getCurrentEstTimestamp(), this.targetedMarket)}`);
 
       // Expire still living trades
       this.trades.sort((a, b) => a.createdAt - b.createdAt);
@@ -435,12 +423,59 @@ export class QuantBot {
     return true;
   }
 
+  /**
+   * Returns the remaining budget available for this hour.
+   */
+  public getRemainingBudget(): number {
+    return Math.max(0, this.hourlyDollarLimit - this.spentThisHour);
+  }
+
+  /**
+   * Checks if the specified amount can be spent within the remaining hourly budget.
+   */
+  public canSpendFromBudget(amount: number): boolean {
+    return amount <= this.getRemainingBudget();
+  }
+
+  /**
+   * Checks if trading is still allowed this hour based on trade count and budget.
+   * @param maxTradesPerHour - Maximum number of trades allowed per hour
+   * @param minTradeValue - Minimum value of a single trade (default: $0.05)
+   */
+  public canTradeThisHour(maxTradesPerHour: number, minTradeValue: number = 0.05): boolean {
+    if (this.tradesThisHour >= maxTradesPerHour) {
+      return false;
+    }
+    if (this.spentThisHour + minTradeValue > this.hourlyDollarLimit) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Increments the trade counter for this hour.
+   */
+  public recordTrade(): void {
+    this.tradesThisHour++;
+  }
+
+  /**
+   * Gets the current budget status for logging/debugging.
+   */
+  public getBudgetStatus(): { spent: number; limit: number; trades: number } {
+    return {
+      spent: this.spentThisHour,
+      limit: this.hourlyDollarLimit,
+      trades: this.tradesThisHour,
+    };
+  }
+
   // -------------------------------------------------------------------------
   // Logging
   // -------------------------------------------------------------------------
 
   public writeLog(message: string, logLevel = LogLevel.INFO): void {
-    const timestamp = new Date().toISOString();
+    const timestamp = new Date(this.clock.now()).toISOString();
     const logLine = `[${logLevel}] ${timestamp}\t ${message}\n`;
     const prodTest = this.PROD_MODE ? 'prod' : 'test';
     appendFileSync(`./logs/bots/${prodTest}-${this.name}.log`, logLine);
@@ -458,7 +493,7 @@ export class QuantBot {
 
   public writeCompletedTrade(trade: TradeOrder): void {
     const message = [
-      Date.now(),
+      this.clock.now(),
       this.name,
       trade.orderId,
       trade.status,
@@ -481,16 +516,18 @@ export class QuantBot {
   // Utilities
   // -------------------------------------------------------------------------
 
-  public getMarketSchedule(market: TargetedMarket): MarketSchedule {
+  public static getMarketSchedule(market: TargetedMarket): MarketSchedule {
     switch (market) {
       case TargetedMarket.BITCOIN_HOURLY:
-        return MarketSchedule.HOURLY;
       case TargetedMarket.ETHEREUM_HOURLY:
-        return MarketSchedule.HOURLY;
       case TargetedMarket.SOLANA_HOURLY:
-        return MarketSchedule.HOURLY;
       case TargetedMarket.XRP_HOURLY:
         return MarketSchedule.HOURLY;
+      case TargetedMarket.BITCOIN_QUARTERLY:
+      case TargetedMarket.ETHEREUM_QUARTERLY:
+      case TargetedMarket.SOLANA_QUARTERLY:
+      case TargetedMarket.XRP_QUARTERLY:
+        return MarketSchedule.QUARTERLY;
       default:
         throw Error(`Unknown market supplied to getMarketScheudle: ${market}`)
     }
@@ -660,7 +697,7 @@ export class QuantBot {
         amount,
         name: 'expiry',
         clobTokenId: clobId,
-        createdAt: Date.now(),
+        createdAt: this.clock.now(),
         isProd: this.PROD_MODE,
         orderId: 'expiry',
         side: Side.BUY,

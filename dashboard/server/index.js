@@ -83,6 +83,7 @@ function broadcast(data) {
 const logsDir = path.join(__dirname, '../../logs');
 const botsLogsDir = path.join(logsDir, 'bots');
 const auditsLogsDir = path.join(logsDir, 'audits');
+const simulatorLogsDir = path.join(logsDir, 'simulator');
 
 // Watch bot logs
 if (fs.existsSync(botsLogsDir)) {
@@ -549,6 +550,204 @@ app.get('/api/logs/:source', (req, res) => {
   } catch (err) {
     res.json([]);
   }
+});
+
+// ============================================================================
+// Simulator Audit Endpoints
+// ============================================================================
+
+// Parse a simulator audit file
+function parseSimulatorAuditFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return [];
+  }
+
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const lines = content.trim().split('\n').filter(line => line.trim());
+
+  // Skip header line
+  const dataLines = lines.slice(1);
+
+  return dataLines.map(line => {
+    const parts = line.split(', ').map(p => p.trim());
+
+    return {
+      timestamp: parseInt(parts[0]),
+      strategy: parts[1],
+      tradeId: parts[2],
+      status: parts[3],
+      entryTimestamp: parseInt(parts[4]),
+      size: parseFloat(parts[5]),
+      buyPrice: parseFloat(parts[6]),
+      sellPrice: parseFloat(parts[7]),
+      gross: parseFloat(parts[8]),
+      pnl: parseFloat(parts[9]),
+      mode: parts[10],
+      marketHash: parts[11],
+      side: parts[12]
+    };
+  });
+}
+
+// Extract strategy name and metadata from filename
+function parseSimulatorFilename(filename) {
+  // Format: StrategyName-genN-TIMESTAMP.audit.log or StrategyName-TIMESTAMP.audit.log
+  const match = filename.match(/^(.+?)(?:-gen(\d+))?-(\d{4}-\d{2}-\d{2}T[\d-]+Z)\.audit\.log$/);
+  if (match) {
+    return {
+      strategy: match[1],
+      generation: match[2] ? parseInt(match[2]) : null,
+      timestamp: match[3].replace(/-/g, (m, offset) => {
+        // Convert back: 2026-01-15T22-40-41-422Z -> 2026-01-15T22:40:41.422Z
+        if (offset > 9) return offset === 13 || offset === 16 ? ':' : '.';
+        return m;
+      }),
+      filename
+    };
+  }
+  return { strategy: filename, generation: null, timestamp: null, filename };
+}
+
+// Get list of simulator audit files
+app.get('/api/simulator/files', (req, res) => {
+  if (!fs.existsSync(simulatorLogsDir)) {
+    return res.json([]);
+  }
+
+  const files = fs.readdirSync(simulatorLogsDir)
+    .filter(f => f.endsWith('.audit.log'))
+    .map(f => {
+      const parsed = parseSimulatorFilename(f);
+      const filePath = path.join(simulatorLogsDir, f);
+      const stats = fs.statSync(filePath);
+      return {
+        ...parsed,
+        size: stats.size,
+        modified: stats.mtime.getTime()
+      };
+    })
+    .sort((a, b) => b.modified - a.modified);
+
+  res.json(files);
+});
+
+// Get trades from a specific simulator audit file
+app.get('/api/simulator/file/:filename/trades', (req, res) => {
+  const filePath = path.join(simulatorLogsDir, req.params.filename);
+  const trades = parseSimulatorAuditFile(filePath);
+  res.json(trades);
+});
+
+// Get stats from a specific simulator audit file
+app.get('/api/simulator/file/:filename/stats', (req, res) => {
+  const filePath = path.join(simulatorLogsDir, req.params.filename);
+  const trades = parseSimulatorAuditFile(filePath);
+
+  const completedTrades = trades.filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED');
+  const totalPnl = completedTrades.reduce((sum, t) => sum + t.pnl, 0);
+  const winningTrades = completedTrades.filter(t => t.pnl > 0);
+  const losingTrades = completedTrades.filter(t => t.pnl <= 0);
+
+  // Calculate max drawdown
+  let peak = 0;
+  let maxDrawdown = 0;
+  let cumulative = 0;
+  completedTrades.sort((a, b) => a.entryTimestamp - b.entryTimestamp);
+  for (const trade of completedTrades) {
+    cumulative += trade.pnl;
+    peak = Math.max(peak, cumulative);
+    maxDrawdown = Math.min(maxDrawdown, cumulative - peak);
+  }
+
+  // Calculate Sharpe ratio
+  const pnls = completedTrades.map(t => t.pnl);
+  const avgPnl = pnls.length > 0 ? totalPnl / pnls.length : 0;
+  const variance = pnls.length > 1
+    ? pnls.reduce((sum, pnl) => sum + Math.pow(pnl - avgPnl, 2), 0) / (pnls.length - 1)
+    : 0;
+  const stdDev = Math.sqrt(variance);
+  const sharpeRatio = stdDev > 0 ? avgPnl / stdDev : 0;
+
+  const parsed = parseSimulatorFilename(req.params.filename);
+
+  res.json({
+    filename: req.params.filename,
+    strategy: parsed.strategy,
+    generation: parsed.generation,
+    totalTrades: trades.length,
+    completedTrades: completedTrades.length,
+    matchedTrades: trades.filter(t => t.status === 'MATCHED').length,
+    expiredTrades: trades.filter(t => t.status === 'EXPIRED').length,
+    totalPnl: totalPnl.toFixed(2),
+    winRate: completedTrades.length > 0 ? ((winningTrades.length / completedTrades.length) * 100).toFixed(1) : 0,
+    avgPnl: avgPnl.toFixed(2),
+    maxDrawdown: maxDrawdown.toFixed(2),
+    sharpeRatio: sharpeRatio.toFixed(3),
+    winningTrades: winningTrades.length,
+    losingTrades: losingTrades.length,
+    avgWin: winningTrades.length > 0 ? (winningTrades.reduce((s, t) => s + t.pnl, 0) / winningTrades.length).toFixed(2) : 0,
+    avgLoss: losingTrades.length > 0 ? (losingTrades.reduce((s, t) => s + t.pnl, 0) / losingTrades.length).toFixed(2) : 0
+  });
+});
+
+// Get cumulative PnL for a simulator audit file
+app.get('/api/simulator/file/:filename/cumulative-pnl', (req, res) => {
+  const filePath = path.join(simulatorLogsDir, req.params.filename);
+  const trades = parseSimulatorAuditFile(filePath);
+
+  const completedTrades = trades
+    .filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED')
+    .sort((a, b) => a.entryTimestamp - b.entryTimestamp);
+
+  let cumulative = 0;
+  const result = completedTrades.map(trade => {
+    cumulative += trade.pnl;
+    return {
+      timestamp: trade.entryTimestamp,
+      date: new Date(trade.entryTimestamp).toLocaleString(),
+      pnl: trade.pnl,
+      cumulative: parseFloat(cumulative.toFixed(2)),
+      strategy: trade.strategy,
+      status: trade.status,
+      side: trade.side
+    };
+  });
+
+  res.json(result);
+});
+
+// Get PnL distribution for a simulator audit file
+app.get('/api/simulator/file/:filename/pnl-distribution', (req, res) => {
+  const filePath = path.join(simulatorLogsDir, req.params.filename);
+  const trades = parseSimulatorAuditFile(filePath);
+
+  const completedTrades = trades.filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED');
+
+  // Group PnL into buckets
+  const buckets = {};
+  completedTrades.forEach(trade => {
+    const bucket = Math.floor(trade.pnl);
+    buckets[bucket] = (buckets[bucket] || 0) + 1;
+  });
+
+  const result = Object.entries(buckets)
+    .map(([pnl, count]) => ({ pnl: parseFloat(pnl), count }))
+    .sort((a, b) => a.pnl - b.pnl);
+
+  res.json(result);
+});
+
+// Get unique strategies from simulator files
+app.get('/api/simulator/strategies', (req, res) => {
+  if (!fs.existsSync(simulatorLogsDir)) {
+    return res.json([]);
+  }
+
+  const files = fs.readdirSync(simulatorLogsDir)
+    .filter(f => f.endsWith('.audit.log'));
+
+  const strategies = [...new Set(files.map(f => parseSimulatorFilename(f).strategy))].sort();
+  res.json(strategies);
 });
 
 server.listen(PORT, () => {
