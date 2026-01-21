@@ -9,19 +9,19 @@ function LiveLogs({ mode = 'all' }) {
   const [selectedSource, setSelectedSource] = useState('all');
   const [levelFilter, setLevelFilter] = useState('all');
   const [connected, setConnected] = useState(false);
-  const [paused, setPaused] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [isRunning, setIsRunning] = useState(false);
+  const [loading, setLoading] = useState(false);
   const wsRef = useRef(null);
   const logsContainerRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
-  const pausedRef = useRef(paused);
+  const isRunningRef = useRef(isRunning);
   const selectedSourceRef = useRef(selectedSource);
   const modeRef = useRef(mode);
 
   // Keep refs in sync
   useEffect(() => {
-    pausedRef.current = paused;
-  }, [paused]);
+    isRunningRef.current = isRunning;
+  }, [isRunning]);
 
   useEffect(() => {
     selectedSourceRef.current = selectedSource;
@@ -46,8 +46,10 @@ function LiveLogs({ mode = 'all' }) {
       .catch(console.error);
   }, [mode]);
 
-  // Fetch initial logs - refetch when source or mode changes
+  // Fetch initial logs - only when running and source/mode changes
   useEffect(() => {
+    if (!isRunning) return;
+
     async function fetchInitialLogs() {
       setLoading(true);
       try {
@@ -67,11 +69,28 @@ function LiveLogs({ mode = 'all' }) {
     }
 
     fetchInitialLogs();
-  }, [selectedSource, mode]);
+  }, [selectedSource, mode, isRunning]);
 
-  // WebSocket connection - only run once on mount
+  // WebSocket connection - only connect when running
   useEffect(() => {
+    if (!isRunning) {
+      // Disconnect when stopped
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      setConnected(false);
+      return;
+    }
+
     function connect() {
+      // Don't connect if not running
+      if (!isRunningRef.current) return;
+
       try {
         const ws = new WebSocket(WS_URL);
         wsRef.current = ws;
@@ -82,7 +101,7 @@ function LiveLogs({ mode = 'all' }) {
         };
 
         ws.onmessage = (event) => {
-          if (pausedRef.current) return;
+          if (!isRunningRef.current) return;
 
           try {
             const data = JSON.parse(event.data);
@@ -141,8 +160,10 @@ function LiveLogs({ mode = 'all' }) {
           console.log('WebSocket disconnected');
           setConnected(false);
           wsRef.current = null;
-          // Attempt reconnect after 3 seconds
-          reconnectTimeoutRef.current = setTimeout(connect, 3000);
+          // Only attempt reconnect if still running
+          if (isRunningRef.current) {
+            reconnectTimeoutRef.current = setTimeout(connect, 3000);
+          }
         };
 
         ws.onerror = (error) => {
@@ -151,7 +172,10 @@ function LiveLogs({ mode = 'all' }) {
         };
       } catch (err) {
         console.error('Failed to create WebSocket:', err);
-        reconnectTimeoutRef.current = setTimeout(connect, 3000);
+        // Only attempt reconnect if still running
+        if (isRunningRef.current) {
+          reconnectTimeoutRef.current = setTimeout(connect, 3000);
+        }
       }
     }
 
@@ -166,7 +190,7 @@ function LiveLogs({ mode = 'all' }) {
         wsRef.current = null;
       }
     };
-  }, []);
+  }, [isRunning]);
 
   // Filter logs by level, mode, and source
   const filteredLogs = logs.filter(log => {
@@ -213,8 +237,8 @@ function LiveLogs({ mode = 'all' }) {
       <div className="live-logs-header">
         <div className="live-logs-title">
           <h2>Live Trading Logs</h2>
-          <span className={`connection-status ${connected ? 'connected' : 'disconnected'}`}>
-            {connected ? 'Live' : 'Reconnecting...'}
+          <span className={`connection-status ${!isRunning ? 'stopped' : connected ? 'connected' : 'disconnected'}`}>
+            {!isRunning ? 'Stopped' : connected ? 'Live' : 'Connecting...'}
           </span>
         </div>
         <div className="live-logs-controls">
@@ -242,10 +266,10 @@ function LiveLogs({ mode = 'all' }) {
           </select>
 
           <button
-            className={`control-btn ${paused ? 'paused' : ''}`}
-            onClick={() => setPaused(!paused)}
+            className={`control-btn ${isRunning ? 'running' : 'stopped'}`}
+            onClick={() => setIsRunning(!isRunning)}
           >
-            {paused ? 'Resume' : 'Pause'}
+            {isRunning ? 'Stop' : 'Start'}
           </button>
 
           <button className="control-btn clear-btn" onClick={clearLogs}>

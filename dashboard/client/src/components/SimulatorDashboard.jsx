@@ -37,6 +37,7 @@ function SimulatorDashboard() {
   const [loading, setLoading] = useState(true);
   const [strategiesFilter, setStrategiesFilter] = useState('all');
   const [strategies, setStrategies] = useState([]);
+  const [extendedData, setExtendedData] = useState(null);
 
   // Fetch list of simulator files
   const fetchFiles = useCallback(async () => {
@@ -62,17 +63,19 @@ function SimulatorDashboard() {
 
     setLoading(true);
     try {
-      const [statsRes, cumulativeRes, distRes, tradesRes] = await Promise.all([
+      const [statsRes, cumulativeRes, distRes, tradesRes, extendedRes] = await Promise.all([
         fetch(`/api/simulator/file/${filename}/stats`),
         fetch(`/api/simulator/file/${filename}/cumulative-pnl`),
         fetch(`/api/simulator/file/${filename}/pnl-distribution`),
-        fetch(`/api/simulator/file/${filename}/trades`)
+        fetch(`/api/simulator/file/${filename}/trades`),
+        fetch(`/api/simulator/file/${filename}/extended`)
       ]);
 
       setStats(await statsRes.json());
       setCumulativePnl(await cumulativeRes.json());
       setPnlDistribution(await distRes.json());
       setTrades(await tradesRes.json());
+      setExtendedData(await extendedRes.json());
     } catch (error) {
       console.error('Failed to fetch file data:', error);
     } finally {
@@ -179,7 +182,7 @@ function SimulatorDashboard() {
                   <td>{new Date(file.modified).toLocaleString()}</td>
                   <td>
                     <button
-                      className="view-btn"
+                      className="sim-view-btn"
                       onClick={() => setSelectedFile(file.filename)}
                     >
                       View
@@ -257,6 +260,64 @@ function SimulatorDashboard() {
               </span>
             </div>
           </div>
+
+          {/* Bot Parameters Section */}
+          {extendedData && extendedData.hasAvgStats && extendedData.avgStats?.params && (
+            <div className="simulator-params">
+              <h3>Bot Parameters</h3>
+              <div className="params-grid">
+                {Object.entries(extendedData.avgStats.params).map(([key, value]) => (
+                  <div key={key} className="param-item">
+                    <span className="param-name">{key}</span>
+                    <span className="param-value">
+                      {typeof value === 'number' ? value.toFixed(4) : String(value)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Top Trades Section */}
+          {extendedData && extendedData.hasTopTrades && extendedData.topTrades && (
+            <div className="simulator-top-trades">
+              <h3>Top {extendedData.topTrades.count} Trades by PnL</h3>
+              <div className="trades-table-container">
+                <table className="trades-table">
+                  <thead>
+                    <tr>
+                      <th>Rank</th>
+                      <th>Time</th>
+                      <th>Side</th>
+                      <th>Price</th>
+                      <th>Amount</th>
+                      <th>Status</th>
+                      <th>PnL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {extendedData.topTrades.trades.map((trade) => (
+                      <tr key={trade.rank}>
+                        <td>#{trade.rank}</td>
+                        <td>{new Date(trade.timestamp).toLocaleString()}</td>
+                        <td>{trade.side}</td>
+                        <td>${trade.price.toFixed(4)}</td>
+                        <td>{trade.amount}</td>
+                        <td>
+                          <span className={`status-badge ${trade.status.toLowerCase()}`}>
+                            {trade.status}
+                          </span>
+                        </td>
+                        <td className={trade.pnl >= 0 ? 'positive' : 'negative'}>
+                          ${trade.pnl.toFixed(2)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           <div className="simulator-charts">
             <div className="chart-card full-width">

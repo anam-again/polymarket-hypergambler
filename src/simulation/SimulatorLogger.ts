@@ -230,6 +230,135 @@ export class SimulatorLogger {
             console.error(`Failed to write to log file: ${e}`);
         }
     }
+
+    /**
+     * Writes a summary section for top trades with their associated parameters.
+     * Appends to the current audit file.
+     */
+    public writeTopTradesWithParams(
+        trades: Array<{
+            timestamp: number;
+            botName: string;
+            side: Side;
+            tokenId: string;
+            price: number;
+            amount: number;
+            status: string;
+            pnl?: number;
+        }>,
+        params: Record<string, unknown>,
+        topN: number
+    ): void {
+        if (!this.auditFilePath) {
+            return;
+        }
+
+        // Filter completed trades and sort by PnL descending
+        const completedTrades = trades.filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED');
+        const sortedByPnl = [...completedTrades].sort((a, b) => (b.pnl ?? 0) - (a.pnl ?? 0));
+        const topTrades = sortedByPnl.slice(0, topN);
+
+        try {
+            // Write section header
+            appendFileSync(this.auditFilePath, '\n# TOP TRADES BY PNL\n');
+            appendFileSync(this.auditFilePath, `# Parameters: ${JSON.stringify(params)}\n`);
+            appendFileSync(this.auditFilePath, `# Count: ${topN} (of ${completedTrades.length} completed trades)\n`);
+            appendFileSync(this.auditFilePath, '# rank,timestamp,side,tokenId,price,amount,status,pnl\n');
+
+            for (let i = 0; i < topTrades.length; i++) {
+                const trade = topTrades[i];
+                const line = [
+                    i + 1,
+                    new Date(trade.timestamp).toISOString(),
+                    trade.side,
+                    trade.tokenId,
+                    trade.price.toFixed(4),
+                    trade.amount,
+                    trade.status,
+                    (trade.pnl ?? 0).toFixed(2),
+                ].join(',') + '\n';
+                appendFileSync(this.auditFilePath, line);
+            }
+        } catch (e) {
+            console.error(`Failed to write top trades to audit file: ${e}`);
+        }
+    }
+
+    /**
+     * Writes average trade statistics with associated parameters.
+     * Appends to the current audit file.
+     */
+    public writeAverageTradeStats(
+        trades: Array<{
+            timestamp: number;
+            botName: string;
+            side: Side;
+            tokenId: string;
+            price: number;
+            amount: number;
+            status: string;
+            pnl?: number;
+        }>,
+        params: Record<string, unknown>
+    ): void {
+        if (!this.auditFilePath) {
+            return;
+        }
+
+        // Filter completed trades
+        const completedTrades = trades.filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED');
+        const matchedTrades = trades.filter(t => t.status === 'MATCHED');
+        const expiredTrades = trades.filter(t => t.status === 'EXPIRED');
+
+        // Calculate statistics
+        const pnls = completedTrades.map(t => t.pnl ?? 0);
+        const totalPnl = pnls.reduce((sum, pnl) => sum + pnl, 0);
+        const avgPnl = pnls.length > 0 ? totalPnl / pnls.length : 0;
+        const winningTrades = pnls.filter(pnl => pnl > 0);
+        const losingTrades = pnls.filter(pnl => pnl < 0);
+        const winRate = pnls.length > 0 ? (winningTrades.length / pnls.length) * 100 : 0;
+
+        // Calculate avg winning and losing trade
+        const avgWin = winningTrades.length > 0
+            ? winningTrades.reduce((sum, pnl) => sum + pnl, 0) / winningTrades.length
+            : 0;
+        const avgLoss = losingTrades.length > 0
+            ? losingTrades.reduce((sum, pnl) => sum + pnl, 0) / losingTrades.length
+            : 0;
+
+        // Calculate max and min PnL
+        const maxPnl = pnls.length > 0 ? Math.max(...pnls) : 0;
+        const minPnl = pnls.length > 0 ? Math.min(...pnls) : 0;
+
+        // Calculate standard deviation
+        const variance = pnls.length > 1
+            ? pnls.reduce((sum, pnl) => sum + Math.pow(pnl - avgPnl, 2), 0) / (pnls.length - 1)
+            : 0;
+        const stdDev = Math.sqrt(variance);
+
+        try {
+            appendFileSync(this.auditFilePath, '\n# AVERAGE TRADE STATISTICS\n');
+            appendFileSync(this.auditFilePath, `# Parameters: ${JSON.stringify(params)}\n`);
+            appendFileSync(this.auditFilePath, `# totalTrades,matchedTrades,expiredTrades,totalPnl,avgPnl,winRate,avgWin,avgLoss,maxPnl,minPnl,stdDev\n`);
+
+            const statsLine = [
+                completedTrades.length,
+                matchedTrades.length,
+                expiredTrades.length,
+                totalPnl.toFixed(2),
+                avgPnl.toFixed(2),
+                winRate.toFixed(2),
+                avgWin.toFixed(2),
+                avgLoss.toFixed(2),
+                maxPnl.toFixed(2),
+                minPnl.toFixed(2),
+                stdDev.toFixed(2),
+            ].join(',') + '\n';
+            appendFileSync(this.auditFilePath, statsLine);
+        } catch (e) {
+            console.error(`Failed to write average trade stats to audit file: ${e}`);
+        }
+    }
 }
 
 /**

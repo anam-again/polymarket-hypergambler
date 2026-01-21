@@ -134,18 +134,7 @@ if (fs.existsSync(auditsLogsDir)) {
   console.log(`Watching audits directory: ${auditsLogsDir}`);
 }
 
-// WebSocket connection handler
-wss.on('connection', (ws) => {
-  console.log('WebSocket client connected');
-
-  ws.on('close', () => {
-    console.log('WebSocket client disconnected');
-  });
-
-  ws.on('error', (error) => {
-    console.error('WebSocket error:', error);
-  });
-});
+// Note: WebSocket connection handler is defined below with live trades support
 
 // Filter trades by time range
 function filterByTimeRange(trades, startTime, endTime) {
@@ -401,6 +390,7 @@ app.get('/api/strategy/:name/cumulative-pnl', (req, res) => {
       date: new Date(trade.timestamp).toLocaleString(),
       pnl: trade.pnl,
       cumulative: parseFloat(cumulative.toFixed(2)),
+      strategy: trade.strategy,
       tradeId: trade.tradeId,
       side: trade.side,
       status: trade.status
@@ -565,11 +555,14 @@ function parseSimulatorAuditFile(filePath) {
   const content = fs.readFileSync(filePath, 'utf-8');
   const lines = content.trim().split('\n').filter(line => line.trim());
 
-  // Skip header line
-  const dataLines = lines.slice(1);
+  // Skip header line and comment lines (lines starting with #)
+  const dataLines = lines.slice(1).filter(line => !line.startsWith('#'));
 
   return dataLines.map(line => {
     const parts = line.split(', ').map(p => p.trim());
+
+    // Skip lines that don't have enough parts (might be from new format sections)
+    if (parts.length < 13) return null;
 
     return {
       timestamp: parseInt(parts[0]),
@@ -586,7 +579,140 @@ function parseSimulatorAuditFile(filePath) {
       marketHash: parts[11],
       side: parts[12]
     };
-  });
+  }).filter(Boolean);
+}
+
+// Parse the extended audit file format (includes top trades and avg stats sections)
+function parseSimulatorAuditFileExtended(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return { trades: [], topTrades: null, avgStats: null };
+  }
+
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const lines = content.trim().split('\n');
+
+  const result = {
+    trades: [],
+    topTrades: null,
+    avgStats: null
+  };
+
+  let currentSection = 'trades';
+  let topTradesParams = null;
+  let avgStatsParams = null;
+  let topTradesCount = null;
+  const topTradesList = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    // Detect section changes
+    if (line === '# TOP TRADES BY PNL') {
+      currentSection = 'topTrades';
+      continue;
+    }
+    if (line === '# AVERAGE TRADE STATISTICS') {
+      currentSection = 'avgStats';
+      continue;
+    }
+
+    // Parse parameters line
+    if (line.startsWith('# Parameters:')) {
+      const paramsJson = line.substring('# Parameters:'.length).trim();
+      try {
+        const params = JSON.parse(paramsJson);
+        if (currentSection === 'topTrades') {
+          topTradesParams = params;
+        } else if (currentSection === 'avgStats') {
+          avgStatsParams = params;
+        }
+      } catch (e) {
+        // Invalid JSON, skip
+      }
+      continue;
+    }
+
+    // Parse count line for top trades
+    if (line.startsWith('# Count:') && currentSection === 'topTrades') {
+      const match = line.match(/# Count: (\d+)/);
+      if (match) {
+        topTradesCount = parseInt(match[1]);
+      }
+      continue;
+    }
+
+    // Skip other comment/header lines
+    if (line.startsWith('#')) continue;
+
+    // Parse data based on current section
+    if (currentSection === 'trades') {
+      // Skip the CSV header
+      if (line.startsWith('timestamp,')) continue;
+
+      const parts = line.split(', ').map(p => p.trim());
+      if (parts.length >= 13) {
+        result.trades.push({
+          timestamp: parseInt(parts[0]),
+          strategy: parts[1],
+          tradeId: parts[2],
+          status: parts[3],
+          entryTimestamp: parseInt(parts[4]),
+          size: parseFloat(parts[5]),
+          buyPrice: parseFloat(parts[6]),
+          sellPrice: parseFloat(parts[7]),
+          gross: parseFloat(parts[8]),
+          pnl: parseFloat(parts[9]),
+          mode: parts[10],
+          marketHash: parts[11],
+          side: parts[12]
+        });
+      }
+    } else if (currentSection === 'topTrades') {
+      const parts = line.split(',').map(p => p.trim());
+      if (parts.length >= 8) {
+        topTradesList.push({
+          rank: parseInt(parts[0]),
+          timestamp: parts[1],
+          side: parts[2],
+          tokenId: parts[3],
+          price: parseFloat(parts[4]),
+          amount: parseFloat(parts[5]),
+          status: parts[6],
+          pnl: parseFloat(parts[7])
+        });
+      }
+    } else if (currentSection === 'avgStats') {
+      const parts = line.split(',').map(p => p.trim());
+      if (parts.length >= 11) {
+        result.avgStats = {
+          params: avgStatsParams,
+          totalTrades: parseInt(parts[0]),
+          matchedTrades: parseInt(parts[1]),
+          expiredTrades: parseInt(parts[2]),
+          totalPnl: parseFloat(parts[3]),
+          avgPnl: parseFloat(parts[4]),
+          winRate: parseFloat(parts[5]),
+          avgWin: parseFloat(parts[6]),
+          avgLoss: parseFloat(parts[7]),
+          maxPnl: parseFloat(parts[8]),
+          minPnl: parseFloat(parts[9]),
+          stdDev: parseFloat(parts[10])
+        };
+      }
+    }
+  }
+
+  // Assemble top trades result
+  if (topTradesList.length > 0) {
+    result.topTrades = {
+      params: topTradesParams,
+      count: topTradesCount,
+      trades: topTradesList
+    };
+  }
+
+  return result;
 }
 
 // Extract strategy name and metadata from filename
@@ -737,6 +863,52 @@ app.get('/api/simulator/file/:filename/pnl-distribution', (req, res) => {
   res.json(result);
 });
 
+// Get top trades and parameters from a simulator audit file
+app.get('/api/simulator/file/:filename/top-trades', (req, res) => {
+  const filePath = path.join(simulatorLogsDir, req.params.filename);
+  const parsed = parseSimulatorAuditFileExtended(filePath);
+
+  if (!parsed.topTrades) {
+    return res.json({ available: false, message: 'No top trades data in this audit file' });
+  }
+
+  res.json({
+    available: true,
+    params: parsed.topTrades.params,
+    count: parsed.topTrades.count,
+    trades: parsed.topTrades.trades
+  });
+});
+
+// Get average trade statistics and parameters from a simulator audit file
+app.get('/api/simulator/file/:filename/avg-stats', (req, res) => {
+  const filePath = path.join(simulatorLogsDir, req.params.filename);
+  const parsed = parseSimulatorAuditFileExtended(filePath);
+
+  if (!parsed.avgStats) {
+    return res.json({ available: false, message: 'No average stats data in this audit file' });
+  }
+
+  res.json({
+    available: true,
+    ...parsed.avgStats
+  });
+});
+
+// Get full extended data from a simulator audit file (includes all sections)
+app.get('/api/simulator/file/:filename/extended', (req, res) => {
+  const filePath = path.join(simulatorLogsDir, req.params.filename);
+  const parsed = parseSimulatorAuditFileExtended(filePath);
+
+  res.json({
+    tradesCount: parsed.trades.length,
+    hasTopTrades: !!parsed.topTrades,
+    hasAvgStats: !!parsed.avgStats,
+    topTrades: parsed.topTrades,
+    avgStats: parsed.avgStats
+  });
+});
+
 // Get unique strategies from simulator files
 app.get('/api/simulator/strategies', (req, res) => {
   if (!fs.existsSync(simulatorLogsDir)) {
@@ -749,6 +921,201 @@ app.get('/api/simulator/strategies', (req, res) => {
   const strategies = [...new Set(files.map(f => parseSimulatorFilename(f).strategy))].sort();
   res.json(strategies);
 });
+
+// ============================================================================
+// Live Trades Endpoints
+// ============================================================================
+
+// Get the current period start timestamp based on period type
+function getCurrentPeriodStart(is15MinPeriod) {
+  const now = new Date();
+  if (is15MinPeriod) {
+    // 15-minute periods: round down to nearest 15 minutes
+    const minutes = now.getMinutes();
+    const periodMinutes = Math.floor(minutes / 15) * 15;
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), periodMinutes, 0, 0).getTime();
+  } else {
+    // Hourly periods: round down to current hour
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), 0, 0, 0).getTime();
+  }
+}
+
+// Parse ORDER entries from bot logs to find placed orders
+function parseOrdersFromBotLogs() {
+  if (!fs.existsSync(botsLogsDir)) {
+    return [];
+  }
+
+  const orders = [];
+  const matchedOrderIds = new Set(); // Track orders that have been MATCHED via UPDATE logs
+
+  const logFiles = fs.readdirSync(botsLogsDir)
+    .filter(f => f.endsWith('.log') && !f.includes('Errors'));
+
+  logFiles.forEach(file => {
+    const filePath = path.join(botsLogsDir, file);
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const lines = content.trim().split('\n');
+
+      // First pass: collect all UPDATE entries that show MATCHED status
+      lines.forEach(line => {
+        // Parse UPDATE log entries: [UPDATE] TIMESTAMP orderId, name, oldStatus -> newStatus
+        const updateMatch = line.match(/^\[UPDATE\]\s+(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\s+(.*)$/);
+        if (updateMatch) {
+          const [, , data] = updateMatch;
+          const parts = data.split(', ').map(p => p.trim());
+          if (parts.length >= 3) {
+            const orderId = parts[0];
+            const statusChange = parts[2]; // e.g., "LIVE -> MATCHED"
+            if (statusChange && statusChange.includes('-> MATCHED')) {
+              matchedOrderIds.add(orderId);
+            }
+          }
+        }
+      });
+
+      // Second pass: collect ORDER entries
+      lines.forEach(line => {
+        // Parse ORDER log entries: [ORDER] TIMESTAMP orderId, name, side, clobTokenId, orderID, amount, price, marketUrl
+        const match = line.match(/^\[ORDER\]\s+(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\s+(.*)$/);
+        if (match) {
+          const [, timestamp, data] = match;
+          const parts = data.split(', ').map(p => p.trim());
+          if (parts.length >= 7) {
+            const marketUrl = parts[7] || null;
+
+            // Determine if this is a 15-minute period based on URL
+            const is15MinPeriod = marketUrl && marketUrl.includes('15m');
+            const periodStart = getCurrentPeriodStart(is15MinPeriod);
+            const orderTimestamp = new Date(timestamp).getTime();
+
+            // Only include orders from the current period
+            if (orderTimestamp >= periodStart) {
+              orders.push({
+                orderId: parts[0],
+                name: parts[1],
+                side: parts[2],
+                tokenId: parts[3],
+                orderIdAlt: parts[4],
+                amount: parseFloat(parts[5]),
+                price: parseFloat(parts[6]),
+                marketUrl,
+                timestamp: orderTimestamp,
+                source: file.replace('.log', ''),
+                is15MinPeriod
+              });
+            }
+          }
+        }
+      });
+    } catch (err) {
+      // Skip files that can't be read
+    }
+  });
+
+  // Filter out orders that have been MATCHED according to UPDATE logs
+  return orders.filter(o => !matchedOrderIds.has(o.orderId) && !matchedOrderIds.has(o.orderIdAlt));
+}
+
+// Get live trades (orders not yet in audit log as completed)
+app.get('/api/live-trades', (req, res) => {
+  const mode = req.query.mode || 'all';
+
+  // Get all orders from bot logs
+  let orders = parseOrdersFromBotLogs();
+
+  // Filter by mode
+  if (mode === 'PROD') {
+    orders = orders.filter(o => o.source.toLowerCase().includes('prod'));
+  } else if (mode === 'TEST') {
+    orders = orders.filter(o => !o.source.toLowerCase().includes('prod'));
+  }
+
+  // Get completed trades from audit log as additional check
+  const completedTrades = parseTradeLog();
+  const completedOrderIds = new Set(completedTrades.map(t => t.tradeId));
+
+  // Filter to only orders not in audit log (still live)
+  // Note: Period-based filtering and MATCHED status filtering is already done in parseOrdersFromBotLogs
+  const liveOrders = orders.filter(o =>
+    !completedOrderIds.has(o.orderId) &&
+    !completedOrderIds.has(o.orderIdAlt)
+  );
+
+  // Group by token to aggregate positions
+  const positions = {};
+  liveOrders.forEach(order => {
+    const key = `${order.tokenId}-${order.side}`;
+    if (!positions[key]) {
+      positions[key] = {
+        tokenId: order.tokenId,
+        side: order.side,
+        orders: [],
+        totalAmount: 0,
+        avgPrice: 0,
+        totalCost: 0,
+        marketUrl: order.marketUrl || null
+      };
+    }
+    positions[key].orders.push(order);
+    positions[key].totalAmount += order.amount;
+    positions[key].totalCost += order.price * order.amount;
+    // Use marketUrl from any order that has it
+    if (!positions[key].marketUrl && order.marketUrl) {
+      positions[key].marketUrl = order.marketUrl;
+    }
+  });
+
+  // Calculate average price for each position
+  Object.values(positions).forEach(pos => {
+    pos.avgPrice = pos.totalAmount > 0 ? pos.totalCost / pos.totalAmount : 0;
+  });
+
+  res.json({
+    orders: liveOrders,
+    positions: Object.values(positions),
+    lastUpdated: Date.now()
+  });
+});
+
+// WebSocket handler for live trades price streaming
+// Clients send: { type: 'subscribe-live-trades' } to start, { type: 'unsubscribe-live-trades' } to stop
+const liveTradesSubscribers = new Set();
+
+wss.on('connection', (ws) => {
+  console.log('WebSocket client connected');
+
+  ws.on('message', (message) => {
+    try {
+      const data = JSON.parse(message);
+      if (data.type === 'subscribe-live-trades') {
+        liveTradesSubscribers.add(ws);
+        console.log('Client subscribed to live trades');
+        // Send initial data
+        ws.send(JSON.stringify({ type: 'live-trades-subscribed' }));
+      } else if (data.type === 'unsubscribe-live-trades') {
+        liveTradesSubscribers.delete(ws);
+        console.log('Client unsubscribed from live trades');
+      }
+    } catch (err) {
+      // Ignore invalid messages
+    }
+  });
+
+  ws.on('close', () => {
+    liveTradesSubscribers.delete(ws);
+    console.log('WebSocket client disconnected');
+  });
+
+  ws.on('error', (error) => {
+    console.error('WebSocket error:', error);
+    liveTradesSubscribers.delete(ws);
+  });
+});
+
+// Remove duplicate connection handler (the original one)
+// Note: keeping original handler's logic above
 
 server.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);

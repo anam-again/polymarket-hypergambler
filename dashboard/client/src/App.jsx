@@ -8,6 +8,7 @@ import StrategySelector from './components/StrategySelector';
 import StrategyDetail from './components/StrategyDetail';
 import TimeRangeSelector from './components/TimeRangeSelector';
 import LiveLogs from './components/LiveLogs';
+import LiveTrades from './components/LiveTrades';
 import SimulatorDashboard from './components/SimulatorDashboard';
 
 const WS_URL = 'ws://localhost:3001/ws';
@@ -245,6 +246,8 @@ function App() {
           />
 
           {stats && <StatsCards stats={stats} />}
+
+          <LiveTrades mode={mode} />
 
           <LiveLogs mode={mode} />
 

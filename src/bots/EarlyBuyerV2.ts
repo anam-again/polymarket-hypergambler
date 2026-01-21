@@ -2,7 +2,7 @@ import { Side } from "@polymarket/clob-client";
 
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
 import { CDMarketData } from "../nonBots/CDMarketData.js";
-import { BtcDirection } from "../types/interfaces.js";
+import { BtcDirection, MarketSchedule } from "../types/interfaces.js";
 
 interface EarlyBuyerV2Props extends QuantBotProps {
     targetBuyPrice: number;
@@ -60,7 +60,7 @@ export class EarlyBuyerV2 extends QuantBot implements QuantBotRun {
     // -------------------------------------------------------------------------
 
     private setupHourlyReset(): void {
-        this.on('hourly', async () => {
+        this.on('reset', async () => {
             await this.updateOrders();
             await this.auditAndReset();
             this.resetState();
@@ -121,7 +121,6 @@ export class EarlyBuyerV2 extends QuantBot implements QuantBotRun {
 
     private async createBuyOrder(): Promise<void> {
         const tokenId = await this.getTargetTokenId();
-
         this.buyOrder = await this.makeOrder(
             'init-buy',
             tokenId,
@@ -180,7 +179,11 @@ export class EarlyBuyerV2 extends QuantBot implements QuantBotRun {
 
     private isAfterCutoff(): boolean {
         const currentMinute = this.clock.getMinutes();
-        return currentMinute >= this.cutoffMinute;
+        if (this.marketSchedule === MarketSchedule.QUARTERLY) {
+            return currentMinute % 15 >= this.cutoffMinute;
+        } else {
+            return currentMinute >= this.cutoffMinute;
+        }
     }
 
     private async handleCutoff(): Promise<void> {

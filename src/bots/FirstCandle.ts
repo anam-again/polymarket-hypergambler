@@ -2,6 +2,7 @@ import { Side } from "@polymarket/clob-client";
 
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
 import { CDMarketData } from "../nonBots/CDMarketData.js";
+import { MarketSchedule } from "../types/interfaces.js";
 
 // ============================================================================
 // Types & Interfaces
@@ -151,12 +152,20 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
         this.candleHigh = Math.max(this.candleHigh, currentPrice);
         this.candleLow = Math.min(this.candleLow, currentPrice);
 
-        const currentMinute = this.clock.getMinutes();
+        const minuteInPeriod = this.getMinuteInPeriod();
 
-        if (currentMinute >= this.candleMinutes) {
+        if (minuteInPeriod >= this.candleMinutes) {
             this.state = 'WAITING_BREAKOUT';
             this.writeLog(`First candle formed: High=${this.candleHigh.toFixed(2)}, Low=${this.candleLow.toFixed(2)}, Range=${(this.candleHigh - this.candleLow).toFixed(2)}`);
         }
+    }
+
+    private getMinuteInPeriod(): number {
+        const currentMinute = this.clock.getMinutes();
+        if (this.marketSchedule === MarketSchedule.QUARTERLY) {
+            return currentMinute % 15;
+        }
+        return currentMinute;
     }
 
     private handleWaitingBreakout(currentPrice: number): void {
@@ -280,7 +289,11 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
 
     private isAfterCutoff(): boolean {
         const currentMinute = this.clock.getMinutes();
-        return currentMinute >= this.cutoffMinute;
+        if (this.marketSchedule === MarketSchedule.QUARTERLY) {
+            return currentMinute % 15 >= this.cutoffMinute;
+        } else {
+            return currentMinute >= this.cutoffMinute;
+        }
     }
 
     private async handleCutoff(): Promise<void> {

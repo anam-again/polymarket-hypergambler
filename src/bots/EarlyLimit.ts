@@ -1,6 +1,6 @@
 import { Side } from "@polymarket/clob-client";
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
-import { BtcDirection } from "../types/interfaces.js";
+import { BtcDirection, MarketSchedule } from "../types/interfaces.js";
 
 interface EarlyLimitProps extends QuantBotProps {
     btcDirection: BtcDirection;       // Which side to monitor (BTC UP or BTC DOWN)
@@ -56,13 +56,14 @@ export class EarlyLimit extends QuantBot implements QuantBotRun {
             const currentMinute = now.getMinutes();
 
             // Cancel BUY orders after cutoff minute
-            if (currentMinute >= this.cutoffMinute) {
-                this.trades.forEach((trade) => {
-                    if (trade.status === TradeStatus.LIVE && trade.side === Side.BUY) {
-                        this.cancelTrade(trade);
-                    }
-                });
-                this.doNothing = true;
+            let isCutoff = false;
+            if (this.marketSchedule === MarketSchedule.QUARTERLY) {
+                isCutoff = currentMinute % 15 >= this.cutoffMinute;
+            } else {
+                isCutoff = currentMinute >= this.cutoffMinute;
+            }
+            if (isCutoff) {
+                await this.handleCutoff();
                 return;
             }
 
@@ -83,9 +84,7 @@ export class EarlyLimit extends QuantBot implements QuantBotRun {
             }
 
             if (this.buyOrder && this.buyOrder.status === TradeStatus.MATCHED) {
-                if (this.buyOrder.status === TradeStatus.MATCHED) {
-                    makeSellOrder();
-                }
+                await makeSellOrder();
             }
 
             if (!this.buyOrder) {
@@ -112,5 +111,22 @@ export class EarlyLimit extends QuantBot implements QuantBotRun {
             }
 
         });
+    }
+
+    // -------------------------------------------------------------------------
+    // Cutoff Handling
+    // -------------------------------------------------------------------------
+
+    private async handleCutoff(): Promise<void> {
+        this.doNothing = true;
+        await this.cancelLiveBuyOrders();
+    }
+
+    private async cancelLiveBuyOrders(): Promise<void> {
+        for (const trade of this.trades) {
+            if (trade.status === TradeStatus.LIVE && trade.side === Side.BUY) {
+                await this.cancelTrade(trade);
+            }
+        }
     }
 }

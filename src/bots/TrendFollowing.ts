@@ -2,6 +2,7 @@ import { Side } from "@polymarket/clob-client";
 
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
 import { CDMarketData, RecentPriceEntry } from "../nonBots/CDMarketData.js";
+import { MarketSchedule } from "../types/interfaces.js";
 
 // ============================================================================
 // Types & Interfaces
@@ -100,7 +101,7 @@ export class TrendFollowing extends QuantBot implements QuantBotRun {
     // -------------------------------------------------------------------------
 
     private setupHourlyReset(): void {
-        this.on('hourly', async () => {
+        this.on('reset', async () => {
             await this.updateOrders();
             await this.auditAndReset();
             this.resetState();
@@ -131,7 +132,7 @@ export class TrendFollowing extends QuantBot implements QuantBotRun {
             }
 
             // Check cutoff
-            if (this.isAfterCutoff() && this.state !== 'POSITION_OPEN') {
+            if (this.isAfterCutoff()) {
                 await this.handleCutoff();
                 return;
             }
@@ -481,11 +482,13 @@ export class TrendFollowing extends QuantBot implements QuantBotRun {
             Side.BUY
         );
 
-        this.state = 'POSITION_OPEN';
+        if (this.buyOrder) {
+            this.state = 'POSITION_OPEN';
 
-        this.buyOrder?.once('tradeMatched', () => {
-            this.createSellOrder();
-        });
+            this.buyOrder?.once('tradeMatched', () => {
+                this.createSellOrder();
+            });
+        }
     }
 
     private async createSellOrder(): Promise<void> {
@@ -510,16 +513,16 @@ export class TrendFollowing extends QuantBot implements QuantBotRun {
     // -------------------------------------------------------------------------
 
     private logIndicators(indicators: TrendIndicators, message: string): void {
-        this.writeLog(
-            `${message} | ` +
-            `Price=${indicators.currentPrice.toFixed(2)}, ` +
-            `SMA[${this.shortMaPeriod}]=${indicators.shortMa.toFixed(2)}, ` +
-            `SMA[${this.longMaPeriod}]=${indicators.longMa.toFixed(2)}, ` +
-            `ADX=${indicators.adx.toFixed(1)}, ` +
-            `ATR=${indicators.atr.toFixed(2)}, ` +
-            `MACD=${indicators.macdHistogram.toFixed(2)}, ` +
-            `Donchian[${indicators.donchianLow.toFixed(0)}-${indicators.donchianHigh.toFixed(0)}]`
-        );
+        // this.writeLog(
+        //     `${message} | ` +
+        //     `Price=${indicators.currentPrice.toFixed(2)}, ` +
+        //     `SMA[${this.shortMaPeriod}]=${indicators.shortMa.toFixed(2)}, ` +
+        //     `SMA[${this.longMaPeriod}]=${indicators.longMa.toFixed(2)}, ` +
+        //     `ADX=${indicators.adx.toFixed(1)}, ` +
+        //     `ATR=${indicators.atr.toFixed(2)}, ` +
+        //     `MACD=${indicators.macdHistogram.toFixed(2)}, ` +
+        //     `Donchian[${indicators.donchianLow.toFixed(0)}-${indicators.donchianHigh.toFixed(0)}]`
+        // );
     }
 
     // -------------------------------------------------------------------------
@@ -528,7 +531,11 @@ export class TrendFollowing extends QuantBot implements QuantBotRun {
 
     private isAfterCutoff(): boolean {
         const currentMinute = this.clock.getMinutes();
-        return currentMinute >= this.cutoffMinute;
+        if (this.marketSchedule === MarketSchedule.QUARTERLY) {
+            return currentMinute % 15 >= this.cutoffMinute;
+        } else {
+            return currentMinute >= this.cutoffMinute;
+        }
     }
 
     private async handleCutoff(): Promise<void> {

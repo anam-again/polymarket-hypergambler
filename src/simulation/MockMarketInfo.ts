@@ -41,11 +41,11 @@ export class MockMarketInfo implements IMarketInfo {
         },
         [CoinType.ETH]: {
             hourly: './logs/pmarket-price/ethereum.log',
-            quarterly: './logs/pmarket-price/eth-minutely.log',
+            quarterly: './logs/pmarket-price/ethereum-minutely.log',
         },
         [CoinType.SOL]: {
             hourly: './logs/pmarket-price/solana.log',
-            quarterly: './logs/pmarket-price/sol-minutely.log',
+            quarterly: './logs/pmarket-price/solana-minutely.log',
         },
         [CoinType.XRP]: {
             hourly: './logs/pmarket-price/xrp.log',
@@ -233,6 +233,7 @@ export class MockMarketInfo implements IMarketInfo {
     /**
      * Gets the UP/DOWN prices at the current simulated time.
      * Uses hourly data by default; pass market parameter for quarterly support.
+     * For quarterly markets, ensures data is from the current 15-minute period.
      */
     public async getPrice(clobTokenId: string, side: Side, market?: TargetedMarket): Promise<number> {
         const now = this.clock.now();
@@ -241,6 +242,15 @@ export class MockMarketInfo implements IMarketInfo {
 
         if (!entry) {
             throw new Error(`No UP/DOWN data available for timestamp ${new Date(now).toISOString()}`);
+        }
+
+        // For quarterly markets, ensure data is from the current 15-minute period
+        if (market && MockMarketInfo.getMarketSchedule(market) === MarketSchedule.QUARTERLY) {
+            const entryPeriodKey = this.get15MinuteKey(entry.timestamp);
+            const currentPeriodKey = this.get15MinuteKey(now);
+            if (entryPeriodKey !== currentPeriodKey) {
+                throw new Error(`No data available for current 15-minute period. Entry from ${new Date(entry.timestamp).toISOString()} but current time is ${new Date(now).toISOString()}`);
+            }
         }
 
         // Determine if this is UP or DOWN token based on ID
@@ -256,6 +266,7 @@ export class MockMarketInfo implements IMarketInfo {
     /**
      * Gets mock order books for the current simulated time.
      * Supports both hourly and quarterly markets based on market parameter.
+     * For quarterly markets, ensures data is from the current 15-minute period.
      */
     public async getLiveData(market?: TargetedMarket): Promise<BtcOrderBooks> {
         const now = this.clock.now();
@@ -264,6 +275,15 @@ export class MockMarketInfo implements IMarketInfo {
 
         if (!entry) {
             throw new Error(`No UP/DOWN data available for timestamp ${new Date(now).toISOString()}`);
+        }
+
+        // For quarterly markets, ensure data is from the current 15-minute period
+        if (market && MockMarketInfo.getMarketSchedule(market) === MarketSchedule.QUARTERLY) {
+            const entryPeriodKey = this.get15MinuteKey(entry.timestamp);
+            const currentPeriodKey = this.get15MinuteKey(now);
+            if (entryPeriodKey !== currentPeriodKey) {
+                throw new Error(`No data available for current 15-minute period. Entry from ${new Date(entry.timestamp).toISOString()} but current time is ${new Date(now).toISOString()}`);
+            }
         }
 
         const periodKey = this.getPeriodKey(now, market);

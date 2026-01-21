@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import {
   LineChart,
   Line,
@@ -77,6 +77,7 @@ const MultiColumnTooltip = ({ active, payload, label, strategies }) => {
 // e.g., "gen-fcandlev2-3" -> ["gen", "fcandlev2", "3"]
 // e.g., "FirstCandle-ETH" -> ["firstcandle", "eth"]
 const getStrategyTags = (strategy) => {
+  if (!strategy) return [];
   return strategy
     .toLowerCase()
     .split('-')
@@ -92,9 +93,28 @@ const strategyMatchesTag = (strategy, tag) => {
 };
 
 function CumulativePnLChart({ data, startTime, endTime }) {
+  // Applied state (what the chart shows)
   const [visibleStrategies, setVisibleStrategies] = useState(new Set());
-  const [showTotal, setShowTotal] = useState(true);
+  const [showTotal, setShowTotal] = useState(false);
   const [selectedTags, setSelectedTags] = useState([]);
+
+  // Pending state stored in refs to avoid re-renders while selecting
+  const pendingVisibleRef = useRef(new Set());
+  const pendingShowTotalRef = useRef(false);
+  const pendingSelectedTagsRef = useRef([]);
+
+  // Refs for uncontrolled checkboxes
+  const totalCheckboxRef = useRef(null);
+  const strategyCheckboxRefs = useRef({});
+
+  // Strategy search filter (use ref to avoid re-renders while typing)
+  const [strategySearch, setStrategySearch] = useState('');
+  const searchInputRef = useRef(null);
+
+  // Resizable chart height
+  const [chartHeight, setChartHeight] = useState(400);
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeRef = useRef(null);
 
   // Format timestamp for display
   const formatXAxis = (timestamp) => {
@@ -120,21 +140,26 @@ function CumulativePnLChart({ data, startTime, endTime }) {
     if (selectedTags.length === 0) return data;
 
     return data.filter(d => {
+      if (!d.strategy) return false;
       return selectedTags.every(tag => strategyMatchesTag(d.strategy, tag));
     });
   }, [data, selectedTags]);
 
+  // Toggle tag in pending ref (still need state for visual feedback on tag chips)
+  const [pendingSelectedTags, setPendingSelectedTags] = useState([]);
+
   const toggleTag = (tag) => {
-    setSelectedTags(prev => {
-      if (prev.includes(tag)) {
-        return prev.filter(t => t !== tag);
-      } else {
-        return [...prev, tag];
-      }
+    setPendingSelectedTags(prev => {
+      const newTags = prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag];
+      pendingSelectedTagsRef.current = newTags;
+      return newTags;
     });
   };
 
-  const clearTags = () => setSelectedTags([]);
+  const clearTags = () => {
+    setPendingSelectedTags([]);
+    pendingSelectedTagsRef.current = [];
+  };
 
   // Get unique strategies and build chart data with per-strategy cumulative values
   const { chartData, strategies } = useMemo(() => {
@@ -142,8 +167,8 @@ function CumulativePnLChart({ data, startTime, endTime }) {
       return { chartData: [], strategies: [] };
     }
 
-    // Get unique strategies
-    const uniqueStrategies = [...new Set(filteredData.map(d => d.strategy))].sort();
+    // Get unique strategies (filter out undefined/null)
+    const uniqueStrategies = [...new Set(filteredData.map(d => d.strategy).filter(Boolean))].sort();
 
     // Track cumulative PnL per strategy
     const cumulativeByStrategy = {};
@@ -153,7 +178,7 @@ function CumulativePnLChart({ data, startTime, endTime }) {
     const sortedData = [...filteredData].sort((a, b) => a.timestamp - b.timestamp);
 
     // Build chart data points
-    const points = sortedData.map(trade => {
+    const points = sortedData.filter(trade => trade.strategy).map(trade => {
       cumulativeByStrategy[trade.strategy] += trade.pnl;
 
       // Create point with all strategy values at this timestamp
@@ -181,25 +206,88 @@ function CumulativePnLChart({ data, startTime, endTime }) {
     return { chartData: points, strategies: uniqueStrategies };
   }, [filteredData, startTime]);
 
-  // Initialize visible strategies when strategies change
-  useEffect(() => {
-    setVisibleStrategies(new Set(strategies));
-  }, [strategies]);
+  // Filter strategies based on search term
+  const filteredStrategies = useMemo(() => {
+    if (!strategySearch.trim()) return strategies;
+    const searchLower = strategySearch.toLowerCase();
+    return strategies.filter(s => s.toLowerCase().includes(searchLower));
+  }, [strategies, strategySearch]);
 
-  const toggleStrategy = (strategy) => {
-    setVisibleStrategies(prev => {
-      const next = new Set(prev);
-      if (next.has(strategy)) {
-        next.delete(strategy);
-      } else {
-        next.add(strategy);
-      }
-      return next;
+  // Select all/none only affects filtered (visible) strategies (updates DOM directly)
+  const selectAll = () => {
+    filteredStrategies.forEach(s => {
+      const checkbox = strategyCheckboxRefs.current[s];
+      if (checkbox) checkbox.checked = true;
     });
   };
 
-  const selectAll = () => setVisibleStrategies(new Set(strategies));
-  const selectNone = () => setVisibleStrategies(new Set());
+  const selectNone = () => {
+    filteredStrategies.forEach(s => {
+      const checkbox = strategyCheckboxRefs.current[s];
+      if (checkbox) checkbox.checked = false;
+    });
+  };
+
+  // Apply search filter (reads from uncontrolled input ref)
+  const applySearch = () => {
+    const value = searchInputRef.current?.value || '';
+    setStrategySearch(value);
+  };
+
+  // Handle Enter key in search input
+  const handleSearchKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      applySearch();
+    }
+  };
+
+  // Apply pending state to chart (reads from uncontrolled checkboxes)
+  const applyFilters = () => {
+    // Read Total checkbox
+    const newShowTotal = totalCheckboxRef.current?.checked || false;
+    setShowTotal(newShowTotal);
+
+    // Read all strategy checkboxes
+    const newVisible = new Set();
+    strategies.forEach(s => {
+      const checkbox = strategyCheckboxRefs.current[s];
+      if (checkbox?.checked) {
+        newVisible.add(s);
+      }
+    });
+    setVisibleStrategies(newVisible);
+
+    // Apply tags from ref
+    setSelectedTags([...pendingSelectedTagsRef.current]);
+  };
+
+  // Resize handlers
+  const handleMouseDown = useCallback((e) => {
+    e.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  const handleMouseMove = useCallback((e) => {
+    if (!isResizing || !resizeRef.current) return;
+    const rect = resizeRef.current.getBoundingClientRect();
+    const newHeight = e.clientY - rect.top;
+    setChartHeight(Math.max(200, Math.min(800, newHeight)));
+  }, [isResizing]);
+
+  const handleMouseUp = useCallback(() => {
+    setIsResizing(false);
+  }, []);
+
+  useEffect(() => {
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      return () => {
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+      };
+    }
+  }, [isResizing, handleMouseMove, handleMouseUp]);
 
   // Calculate domain - use startTime if set, auto for endTime if null
   const domain = [startTime || 'auto', endTime || 'auto'];
@@ -212,16 +300,16 @@ function CumulativePnLChart({ data, startTime, endTime }) {
           {allTags.map(tag => (
             <button
               key={tag}
-              className={`tag-chip ${selectedTags.includes(tag) ? 'active' : ''}`}
+              className={`tag-chip ${pendingSelectedTags.includes(tag) ? 'active' : ''}`}
               onClick={() => toggleTag(tag)}
             >
               {tag}
             </button>
           ))}
         </div>
-        {selectedTags.length > 0 && (
+        {pendingSelectedTags.length > 0 && (
           <button className="clear-filters-btn" onClick={clearTags}>
-            Clear ({selectedTags.length})
+            Clear ({pendingSelectedTags.length})
           </button>
         )}
       </div>
@@ -231,29 +319,67 @@ function CumulativePnLChart({ data, startTime, endTime }) {
           <button onClick={selectNone}>None</button>
           <label className="strategy-toggle total-toggle">
             <input
+              ref={totalCheckboxRef}
               type="checkbox"
-              checked={showTotal}
-              onChange={() => setShowTotal(!showTotal)}
+              defaultChecked={false}
             />
             <span style={{ color: '#e7e9ea' }}>Total</span>
           </label>
+          <div className="search-container">
+            <input
+              ref={searchInputRef}
+              type="text"
+              className="strategy-search"
+              placeholder="Search strategies..."
+              defaultValue=""
+              onKeyDown={handleSearchKeyDown}
+            />
+            <button
+              className="search-clear-btn"
+              onClick={() => {
+                if (searchInputRef.current) {
+                  searchInputRef.current.value = '';
+                }
+                setStrategySearch('');
+              }}
+              title="Clear search"
+            >
+              ×
+            </button>
+            <button
+              className="search-btn"
+              onClick={applySearch}
+            >
+              Search
+            </button>
+          </div>
+          <button
+            className="update-filters-btn"
+            onClick={applyFilters}
+          >
+            Update
+          </button>
         </div>
         <div className="strategy-checkboxes">
-          {strategies.map((strategy, index) => (
-            <label key={strategy} className="strategy-toggle">
-              <input
-                type="checkbox"
-                checked={visibleStrategies.has(strategy)}
-                onChange={() => toggleStrategy(strategy)}
-              />
-              <span style={{ color: STRATEGY_COLORS[index % STRATEGY_COLORS.length] }}>
-                {strategy}
-              </span>
-            </label>
-          ))}
+          {filteredStrategies.map((strategy) => {
+            const originalIndex = strategies.indexOf(strategy);
+            return (
+              <label key={strategy} className="strategy-toggle">
+                <input
+                  ref={el => { strategyCheckboxRefs.current[strategy] = el; }}
+                  type="checkbox"
+                  defaultChecked={false}
+                />
+                <span style={{ color: STRATEGY_COLORS[originalIndex % STRATEGY_COLORS.length] }}>
+                  {strategy}
+                </span>
+              </label>
+            );
+          })}
         </div>
       </div>
-      <ResponsiveContainer width="100%" height={400}>
+      <div className="chart-container-resizable" ref={resizeRef}>
+        <ResponsiveContainer width="100%" height={chartHeight}>
         <LineChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#30363d" />
           <XAxis
@@ -304,7 +430,14 @@ function CumulativePnLChart({ data, startTime, endTime }) {
             )
           ))}
         </LineChart>
-      </ResponsiveContainer>
+        </ResponsiveContainer>
+        <div
+          className={`resize-handle ${isResizing ? 'active' : ''}`}
+          onMouseDown={handleMouseDown}
+        >
+          <div className="resize-handle-bar" />
+        </div>
+      </div>
     </div>
   );
 }

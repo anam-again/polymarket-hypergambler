@@ -2,6 +2,7 @@ import { Side } from "@polymarket/clob-client";
 
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
 import { CDMarketData } from "../nonBots/CDMarketData.js";
+import { MarketSchedule } from "../types/interfaces.js";
 
 // ============================================================================
 // Types & Interfaces
@@ -230,7 +231,11 @@ export class EarlyLimitV2 extends QuantBot implements QuantBotRun {
 
     private isAfterCutoff(): boolean {
         const currentMinute = this.clock.getMinutes();
-        return currentMinute >= this.cutoffMinute;
+        if (this.marketSchedule === MarketSchedule.QUARTERLY) {
+            return currentMinute % 15 >= this.cutoffMinute;
+        } else {
+            return currentMinute >= this.cutoffMinute;
+        }
     }
 
     private async handleCutoff(): Promise<void> {

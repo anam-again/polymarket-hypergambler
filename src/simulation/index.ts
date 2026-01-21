@@ -18,6 +18,28 @@ import { SimulatorLogger } from './SimulatorLogger.js';
 export { createSimulatedBot, createMockClobClient, QuantBotSimulationAdapter } from './QuantBotSimulationAdapter.js';
 
 // ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Gets the minute within the current period.
+ * For quarterly markets (15-min periods), returns minute % 15.
+ * For hourly markets, returns the full minute (0-59).
+ */
+function getMinuteInPeriod(clock: SimulationClock, targetedMarket: TargetedMarket): number {
+    const minute = clock.getMinutes();
+    const isQuarterly = targetedMarket.toString().includes('QUARTERLY');
+    return isQuarterly ? minute % 15 : minute;
+}
+
+/**
+ * Checks if the current time is past the cutoff minute for the period.
+ */
+function isAfterCutoff(clock: SimulationClock, targetedMarket: TargetedMarket, cutoffMinute: number): boolean {
+    return getMinuteInPeriod(clock, targetedMarket) >= cutoffMinute;
+}
+
+// ============================================================================
 // Simulated Bot Implementations
 // ============================================================================
 
@@ -25,7 +47,7 @@ export { createSimulatedBot, createMockClobClient, QuantBotSimulationAdapter } f
  * Simple Contrarian Bot - bets opposite to recent trend
  */
 function createContrarianBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, params } = botParams;
+    const { name, clock, marketInfo, params, targetedMarket } = botParams;
 
     const targetSize = (params.targetSize as number) ?? 10;
     const targetBuyPrice = (params.targetBuyPrice as number) ?? 0.50;
@@ -61,7 +83,7 @@ function createContrarianBot(botParams: BotParams): SimulatedBot {
     };
 
     const checkOrderFill = async (order: SimulatedTrade): Promise<boolean> => {
-        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side);
+        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side, targetedMarket);
 
         if (order.side === Side.BUY && currentPrice <= order.price) {
             return true;
@@ -109,12 +131,12 @@ function createContrarianBot(botParams: BotParams): SimulatedBot {
             }
 
             // Cancel unfilled buys after cutoff
-            if (minute >= cutoffMinute && currentBuyOrder?.status === 'PENDING') {
+            if (isAfterCutoff(clock, targetedMarket, cutoffMinute) && currentBuyOrder?.status === 'PENDING') {
                 currentBuyOrder.status = 'CANCELED';
                 return;
             }
 
-            // Skip if already bet this hour
+            // Skip if already bet this period
             if (hasBetThisHour) return;
 
             // Determine bet direction
@@ -125,7 +147,7 @@ function createContrarianBot(botParams: BotParams): SimulatedBot {
             }
 
             const betDirection = majority === 'UP' ? 'DOWN' : 'UP';
-            const liveData = await marketInfo.getLiveData();
+            const liveData = await marketInfo.getLiveData(targetedMarket);
             const tokenId = betDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
 
             // Place buy order
@@ -195,13 +217,15 @@ function createContrarianBot(botParams: BotParams): SimulatedBot {
  * Implements: Moving Average crossovers, ADX for trend strength, Donchian breakouts
  */
 function createTrendFollowingBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params } = botParams;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket } = botParams;
 
     // Parameters matching actual TrendFollowing bot
     const shortMaPeriod = (params.shortMaPeriod as number) ?? 5;
     const longMaPeriod = (params.longMaPeriod as number) ?? 20;
     const adxPeriod = (params.adxPeriod as number) ?? 14;
     const adxThreshold = (params.adxThreshold as number) ?? 25;
+    const atrPeriod = (params.atrPeriod as number) ?? 14;
+    const atrStopMultiple = (params.atrStopMultiple as number) ?? 2.0;
     const targetBuyPrice = (params.targetBuyPrice as number) ?? 0.50;
     const targetSellPrice = (params.targetSellPrice as number) ?? 0.60;
     const targetSize = (params.targetSize as number) ?? 10;
@@ -217,6 +241,7 @@ function createTrendFollowingBot(botParams: BotParams): SimulatedBot {
     let previousLongMa: number | null = null;
     let currentBuyOrder: SimulatedTrade | null = null;
     let currentSellOrder: SimulatedTrade | null = null;
+    let entryPrice: number | null = null;
 
     // --- Technical Indicator Calculations ---
 
@@ -279,8 +304,26 @@ function createTrendFollowingBot(botParams: BotParams): SimulatedBot {
         };
     };
 
+    const calculateATR = (prices: number[], period: number): number => {
+        if (prices.length < period + 1) return 0;
+
+        const trueRanges: number[] = [];
+
+        for (let i = 1; i < prices.length; i++) {
+            const current = prices[i];
+            const previous = prices[i - 1];
+            // Simplified TR for single-price series
+            const tr = Math.abs(current - previous);
+            trueRanges.push(tr);
+        }
+
+        // Simple average of recent TRs
+        const recentTRs = trueRanges.slice(-period);
+        return recentTRs.reduce((a, b) => a + b, 0) / recentTRs.length;
+    };
+
     const calculateIndicators = () => {
-        const requiredPeriods = Math.max(longMaPeriod, adxPeriod) + 10;
+        const requiredPeriods = Math.max(longMaPeriod, adxPeriod, atrPeriod) + 10;
         if (priceHistory.length < requiredPeriods) return null;
 
         const prices = priceHistory.slice(-requiredPeriods);
@@ -289,9 +332,10 @@ function createTrendFollowingBot(botParams: BotParams): SimulatedBot {
         const shortMa = calculateSMA(prices, shortMaPeriod);
         const longMa = calculateSMA(prices, longMaPeriod);
         const adx = calculateADX(prices, adxPeriod);
+        const atr = calculateATR(prices, atrPeriod);
         const donchian = calculateDonchian(prices, longMaPeriod);
 
-        return { shortMa, longMa, adx, currentPrice, donchianHigh: donchian.high, donchianLow: donchian.low };
+        return { shortMa, longMa, adx, atr, currentPrice, donchianHigh: donchian.high, donchianLow: donchian.low };
     };
 
     const detectCrossover = (shortMa: number, longMa: number): 'GOLDEN_CROSS' | 'DEATH_CROSS' | 'NONE' => {
@@ -306,20 +350,22 @@ function createTrendFollowingBot(botParams: BotParams): SimulatedBot {
     };
 
     const checkOrderFill = async (order: SimulatedTrade): Promise<boolean> => {
-        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side);
+        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side, targetedMarket);
         if (order.side === Side.BUY && currentPrice <= order.price) return true;
         if (order.side === Side.SELL && currentPrice >= order.price) return true;
         return false;
     };
 
     const resetState = () => {
-        priceHistory.length = 0;
+        // DON'T clear priceHistory - indicators need continuous historical data across periods
+        // priceHistory.length = 0;
         state = 'WAITING_DATA';
         tradeDirection = null;
         previousShortMa = null;
         previousLongMa = null;
         currentBuyOrder = null;
         currentSellOrder = null;
+        entryPrice = null;
     };
 
     return {
@@ -342,7 +388,7 @@ function createTrendFollowingBot(botParams: BotParams): SimulatedBot {
 
                 // Create sell order
                 if (!currentSellOrder && tradeDirection) {
-                    const liveData = await marketInfo.getLiveData();
+                    const liveData = await marketInfo.getLiveData(targetedMarket);
                     const tokenId = tradeDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
                     currentSellOrder = {
                         timestamp: clock.now(),
@@ -363,13 +409,13 @@ function createTrendFollowingBot(botParams: BotParams): SimulatedBot {
             }
 
             // Handle cutoff
-            if (minute >= cutoffMinute && state !== 'POSITION_OPEN') {
+            if (isAfterCutoff(clock, targetedMarket, cutoffMinute) && state !== 'POSITION_OPEN') {
                 if (currentBuyOrder?.status === 'PENDING') currentBuyOrder.status = 'CANCELED';
                 state = 'PAST_CUTOFF';
                 return;
             }
 
-            if (state === 'PAST_CUTOFF' || state === 'POSITION_OPEN') return;
+            if (state === 'PAST_CUTOFF') return;
 
             // Calculate indicators
             const indicators = calculateIndicators();
@@ -378,7 +424,35 @@ function createTrendFollowingBot(botParams: BotParams): SimulatedBot {
                 return;
             }
 
-            const { shortMa, longMa, adx, currentPrice, donchianHigh, donchianLow } = indicators;
+            const { shortMa, longMa, adx, atr, currentPrice, donchianHigh, donchianLow } = indicators;
+
+            // Handle POSITION_OPEN state - monitor for ATR-based stop-loss
+            if (state === 'POSITION_OPEN') {
+                if (entryPrice !== null && atr > 0) {
+                    const stopDistance = atr * atrStopMultiple;
+
+                    // Check if price moved against our position beyond ATR stop
+                    const priceAgainstPosition = tradeDirection === 'UP'
+                        ? currentPrice < entryPrice - stopDistance
+                        : currentPrice > entryPrice + stopDistance;
+
+                    // Also check for trend reversal (MAs crossed against position)
+                    const trendReversed = tradeDirection === 'UP'
+                        ? shortMa < longMa
+                        : shortMa > longMa;
+
+                    // If stop hit and trend reversed, cancel pending buy
+                    if (priceAgainstPosition && trendReversed && currentBuyOrder?.status === 'PENDING') {
+                        currentBuyOrder.status = 'CANCELED';
+                        state = 'PAST_CUTOFF';  // Stop trading for this period
+                    }
+                }
+
+                // Update previous MAs even in position
+                previousShortMa = shortMa;
+                previousLongMa = longMa;
+                return;
+            }
 
             if (state === 'WAITING_DATA') {
                 state = 'MONITORING';
@@ -417,7 +491,8 @@ function createTrendFollowingBot(botParams: BotParams): SimulatedBot {
             // Enter trade
             if (shouldEnter && direction && !currentBuyOrder) {
                 tradeDirection = direction;
-                const liveData = await marketInfo.getLiveData();
+                entryPrice = currentPrice;  // Track entry price for ATR stop-loss
+                const liveData = await marketInfo.getLiveData(targetedMarket);
                 const tokenId = direction === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
 
                 currentBuyOrder = {
@@ -478,7 +553,7 @@ function createTrendFollowingBot(botParams: BotParams): SimulatedBot {
  * Forms a candle during first N minutes, waits for breakout, then pullback confirmation
  */
 function createFirstCandleBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params } = botParams;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket } = botParams;
 
     const candleMinutes = (params.candleMinutes as number) ?? 15;
     const breakoutBuffer = (params.breakoutBuffer as number) ?? 50;
@@ -510,7 +585,7 @@ function createFirstCandleBot(botParams: BotParams): SimulatedBot {
     };
 
     const checkOrderFill = async (order: SimulatedTrade): Promise<boolean> => {
-        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side);
+        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side, targetedMarket);
         if (order.side === Side.BUY && currentPrice <= order.price) return true;
         if (order.side === Side.SELL && currentPrice >= order.price) return true;
         return false;
@@ -520,7 +595,9 @@ function createFirstCandleBot(botParams: BotParams): SimulatedBot {
         name,
 
         async onTick() {
-            const minute = clock.getMinutes();
+            const rawMinute = clock.getMinutes();
+            const isQuarterlyMarket = targetedMarket.includes('Quarterly');
+            const minute = isQuarterlyMarket ? rawMinute % 15 : rawMinute;
             const btcPrice = await cdMarketData.getCurrentPrice();
 
             // Check buy order fill
@@ -531,7 +608,7 @@ function createFirstCandleBot(botParams: BotParams): SimulatedBot {
 
                     // Create sell order
                     if (!currentSellOrder && breakoutDirection) {
-                        const liveData = await marketInfo.getLiveData();
+                        const liveData = await marketInfo.getLiveData(targetedMarket);
                         const tokenId = breakoutDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
                         currentSellOrder = {
                             timestamp: clock.now(),
@@ -556,7 +633,7 @@ function createFirstCandleBot(botParams: BotParams): SimulatedBot {
             }
 
             // Handle cutoff
-            if (minute >= cutoffMinute && state !== 'TRADE_ENTERED') {
+            if (isAfterCutoff(clock, targetedMarket, cutoffMinute) && state !== 'TRADE_ENTERED') {
                 if (currentBuyOrder?.status === 'PENDING') {
                     currentBuyOrder.status = 'CANCELED';
                 }
@@ -603,7 +680,7 @@ function createFirstCandleBot(botParams: BotParams): SimulatedBot {
                         }
 
                         if (isPullbackConfirmed) {
-                            const liveData = await marketInfo.getLiveData();
+                            const liveData = await marketInfo.getLiveData(targetedMarket);
                             const tokenId = breakoutDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
 
                             currentBuyOrder = {
@@ -665,7 +742,7 @@ function createFirstCandleBot(botParams: BotParams): SimulatedBot {
  * FirstCandleV2 Bot - Same as FirstCandle but with dynamic pricing based on market
  */
 function createFirstCandleV2Bot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params } = botParams;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket } = botParams;
 
     const candleMinutes = (params.candleMinutes as number) ?? 15;
     const breakoutBuffer = (params.breakoutBuffer as number) ?? 50;
@@ -701,7 +778,7 @@ function createFirstCandleV2Bot(botParams: BotParams): SimulatedBot {
     };
 
     const checkOrderFill = async (order: SimulatedTrade): Promise<boolean> => {
-        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side);
+        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side, targetedMarket);
         if (order.side === Side.BUY && currentPrice <= order.price) return true;
         if (order.side === Side.SELL && currentPrice >= order.price) return true;
         return false;
@@ -711,7 +788,9 @@ function createFirstCandleV2Bot(botParams: BotParams): SimulatedBot {
         name,
 
         async onTick() {
-            const minute = clock.getMinutes();
+            const rawMinute = clock.getMinutes();
+            const isQuarterlyMarket = targetedMarket.includes('Quarterly');
+            const minute = isQuarterlyMarket ? rawMinute % 15 : rawMinute;
             const btcPrice = await cdMarketData.getCurrentPrice();
 
             // Check buy order fill
@@ -722,10 +801,10 @@ function createFirstCandleV2Bot(botParams: BotParams): SimulatedBot {
 
                     // Create sell order with dynamic pricing
                     if (!currentSellOrder && breakoutDirection && actualBuyPrice) {
-                        const liveData = await marketInfo.getLiveData();
+                        const liveData = await marketInfo.getLiveData(targetedMarket);
                         const tokenId = breakoutDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
 
-                        const currentBidPrice = await marketInfo.getPrice(tokenId, Side.SELL);
+                        const currentBidPrice = await marketInfo.getPrice(tokenId, Side.SELL, targetedMarket);
                         const marketSellPrice = Math.round((currentBidPrice - sellPriceBuffer) * 100) / 100;
                         const minSellPrice = Math.round((actualBuyPrice + minProfitMargin) * 100) / 100;
                         // Cap at maxSellPrice (MAX_SELL_PRICE)
@@ -754,7 +833,7 @@ function createFirstCandleV2Bot(botParams: BotParams): SimulatedBot {
             }
 
             // Handle cutoff
-            if (minute >= cutoffMinute && state !== 'TRADE_ENTERED') {
+            if (isAfterCutoff(clock, targetedMarket, cutoffMinute) && state !== 'TRADE_ENTERED') {
                 if (currentBuyOrder?.status === 'PENDING') {
                     currentBuyOrder.status = 'CANCELED';
                 }
@@ -801,11 +880,11 @@ function createFirstCandleV2Bot(botParams: BotParams): SimulatedBot {
                         }
 
                         if (isPullbackConfirmed) {
-                            const liveData = await marketInfo.getLiveData();
+                            const liveData = await marketInfo.getLiveData(targetedMarket);
                             const tokenId = breakoutDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
 
                             // Dynamic buy price based on current ask
-                            const currentAskPrice = await marketInfo.getPrice(tokenId, Side.BUY);
+                            const currentAskPrice = await marketInfo.getPrice(tokenId, Side.BUY, targetedMarket);
                             const dynamicBuyPrice = Math.round((currentAskPrice + buyPriceBuffer) * 100) / 100;
                             actualBuyPrice = dynamicBuyPrice;
 
@@ -869,7 +948,7 @@ function createFirstCandleV2Bot(botParams: BotParams): SimulatedBot {
  * Candle 1: Bullish, Candle 2: Indecision, Candle 3: Bearish -> Buy DOWN
  */
 function createEveningStarBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params } = botParams;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket } = botParams;
 
     const candleMinutes = (params.candleMinutes as number) ?? 10;
     const minBullishMove = (params.minBullishMove as number) ?? 50;
@@ -912,7 +991,7 @@ function createEveningStarBot(botParams: BotParams): SimulatedBot {
     const getCandleIndex = (minute: number) => Math.floor(minute / candleMinutes);
 
     const checkOrderFill = async (order: SimulatedTrade): Promise<boolean> => {
-        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side);
+        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side, targetedMarket);
         if (order.side === Side.BUY && currentPrice <= order.price) return true;
         if (order.side === Side.SELL && currentPrice >= order.price) return true;
         return false;
@@ -932,7 +1011,7 @@ function createEveningStarBot(botParams: BotParams): SimulatedBot {
                 currentBuyOrder.pnl = -(currentBuyOrder.price * currentBuyOrder.amount);
 
                 if (!currentSellOrder) {
-                    const liveData = await marketInfo.getLiveData();
+                    const liveData = await marketInfo.getLiveData(targetedMarket);
                     currentSellOrder = {
                         timestamp: clock.now(),
                         botName: name,
@@ -952,7 +1031,7 @@ function createEveningStarBot(botParams: BotParams): SimulatedBot {
             }
 
             // Handle cutoff
-            if (minute >= cutoffMinute && state !== 'TRADE_ENTERED') {
+            if (isAfterCutoff(clock, targetedMarket, cutoffMinute) && state !== 'TRADE_ENTERED') {
                 if (currentBuyOrder?.status === 'PENDING') currentBuyOrder.status = 'CANCELED';
                 state = 'PAST_CUTOFF';
                 return;
@@ -1003,7 +1082,7 @@ function createEveningStarBot(botParams: BotParams): SimulatedBot {
 
             // Create buy order when pattern detected
             if (state === 'PATTERN_DETECTED' && !currentBuyOrder) {
-                const liveData = await marketInfo.getLiveData();
+                const liveData = await marketInfo.getLiveData(targetedMarket);
                 currentBuyOrder = {
                     timestamp: clock.now(),
                     botName: name,
@@ -1052,7 +1131,7 @@ function createEveningStarBot(botParams: BotParams): SimulatedBot {
  * Candle 1: Bearish, Candle 2: Indecision, Candle 3: Bullish -> Buy UP
  */
 function createMorningStarBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params } = botParams;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket } = botParams;
 
     const candleMinutes = (params.candleMinutes as number) ?? 10;
     const minBearishMove = (params.minBearishMove as number) ?? 50;
@@ -1095,7 +1174,7 @@ function createMorningStarBot(botParams: BotParams): SimulatedBot {
     const getCandleIndex = (minute: number) => Math.floor(minute / candleMinutes);
 
     const checkOrderFill = async (order: SimulatedTrade): Promise<boolean> => {
-        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side);
+        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side, targetedMarket);
         if (order.side === Side.BUY && currentPrice <= order.price) return true;
         if (order.side === Side.SELL && currentPrice >= order.price) return true;
         return false;
@@ -1115,7 +1194,7 @@ function createMorningStarBot(botParams: BotParams): SimulatedBot {
                 currentBuyOrder.pnl = -(currentBuyOrder.price * currentBuyOrder.amount);
 
                 if (!currentSellOrder) {
-                    const liveData = await marketInfo.getLiveData();
+                    const liveData = await marketInfo.getLiveData(targetedMarket);
                     currentSellOrder = {
                         timestamp: clock.now(),
                         botName: name,
@@ -1135,7 +1214,7 @@ function createMorningStarBot(botParams: BotParams): SimulatedBot {
             }
 
             // Handle cutoff
-            if (minute >= cutoffMinute && state !== 'TRADE_ENTERED') {
+            if (isAfterCutoff(clock, targetedMarket, cutoffMinute) && state !== 'TRADE_ENTERED') {
                 if (currentBuyOrder?.status === 'PENDING') currentBuyOrder.status = 'CANCELED';
                 state = 'PAST_CUTOFF';
                 return;
@@ -1186,7 +1265,7 @@ function createMorningStarBot(botParams: BotParams): SimulatedBot {
 
             // Create buy order when pattern detected
             if (state === 'PATTERN_DETECTED' && !currentBuyOrder) {
-                const liveData = await marketInfo.getLiveData();
+                const liveData = await marketInfo.getLiveData(targetedMarket);
                 currentBuyOrder = {
                     timestamp: clock.now(),
                     botName: name,
@@ -1236,7 +1315,7 @@ function createMorningStarBot(botParams: BotParams): SimulatedBot {
  * When Z-score >= threshold: price is high, buy DOWN (expect reversion down)
  */
 function createMeanReversionBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params } = botParams;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket } = botParams;
 
     const lookbackPeriods = (params.lookbackPeriods as number) ?? 20;
     const entryThreshold = (params.entryThreshold as number) ?? 2.0;
@@ -1279,7 +1358,7 @@ function createMeanReversionBot(botParams: BotParams): SimulatedBot {
     };
 
     const checkOrderFill = async (order: SimulatedTrade): Promise<boolean> => {
-        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side);
+        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side, targetedMarket);
         if (order.side === Side.BUY && currentPrice <= order.price) return true;
         if (order.side === Side.SELL && currentPrice >= order.price) return true;
         return false;
@@ -1304,7 +1383,7 @@ function createMeanReversionBot(botParams: BotParams): SimulatedBot {
                 currentBuyOrder.pnl = -(currentBuyOrder.price * currentBuyOrder.amount);
 
                 if (!currentSellOrder && tradeDirection) {
-                    const liveData = await marketInfo.getLiveData();
+                    const liveData = await marketInfo.getLiveData(targetedMarket);
                     const tokenId = tradeDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
                     currentSellOrder = {
                         timestamp: clock.now(),
@@ -1325,7 +1404,7 @@ function createMeanReversionBot(botParams: BotParams): SimulatedBot {
             }
 
             // Handle cutoff
-            if (minute >= cutoffMinute) {
+            if (isAfterCutoff(clock, targetedMarket, cutoffMinute)) {
                 if (currentBuyOrder?.status === 'PENDING') currentBuyOrder.status = 'CANCELED';
                 return;
             }
@@ -1342,7 +1421,7 @@ function createMeanReversionBot(botParams: BotParams): SimulatedBot {
             if (zScore <= -entryThreshold) {
                 // Price significantly below mean - buy UP
                 tradeDirection = 'UP';
-                const liveData = await marketInfo.getLiveData();
+                const liveData = await marketInfo.getLiveData(targetedMarket);
                 currentBuyOrder = {
                     timestamp: clock.now(),
                     botName: name,
@@ -1357,7 +1436,7 @@ function createMeanReversionBot(botParams: BotParams): SimulatedBot {
             } else if (zScore >= entryThreshold) {
                 // Price significantly above mean - buy DOWN
                 tradeDirection = 'DOWN';
-                const liveData = await marketInfo.getLiveData();
+                const liveData = await marketInfo.getLiveData(targetedMarket);
                 currentBuyOrder = {
                     timestamp: clock.now(),
                     botName: name,
@@ -1401,6 +1480,739 @@ function createMeanReversionBot(botParams: BotParams): SimulatedBot {
     };
 }
 
+/**
+ * EarlyBuyerV2 Bot - Early entry with flops-based filtering
+ * Checks market volatility (flops) before entering trades in a specific direction
+ */
+function createEarlyBuyerV2Bot(botParams: BotParams): SimulatedBot {
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket } = botParams;
+
+    const targetBuyPrice = (params.targetBuyPrice as number) ?? 0.50;
+    const targetSellPrice = (params.targetSellPrice as number) ?? 0.60;
+    const targetSize = (params.targetSize as number) ?? 10;
+    const cutoffMinute = (params.cutoffMinute as number) ?? 30;
+    // btcDirection: can be 'UP', 'DOWN', or numeric (0 = DOWN, 1 = UP from genetic algorithm)
+    const btcDirectionParam = params.btcDirection;
+    const btcDirection = typeof btcDirectionParam === 'number'
+        ? (btcDirectionParam >= 1 ? 'UP' : 'DOWN')
+        : ((btcDirectionParam as string) ?? 'UP');
+    const minFlops = (params.minFlops as number) ?? 3;
+    const flopsLookbackHours = (params.flopsLookbackHours as number) ?? 4;
+
+    const trades: SimulatedTrade[] = [];
+    let currentBuyOrder: SimulatedTrade | null = null;
+    let currentSellOrder: SimulatedTrade | null = null;
+    let isPastCutoff = false;
+    let hasCheckedFlops = false;
+    let flopsCheckPassed = false;
+
+    const resetState = () => {
+        currentBuyOrder = null;
+        currentSellOrder = null;
+        isPastCutoff = false;
+        hasCheckedFlops = false;
+        flopsCheckPassed = false;
+    };
+
+    const checkFlops = (): boolean => {
+        if (hasCheckedFlops) return flopsCheckPassed;
+        hasCheckedFlops = true;
+
+        const averages = cdMarketData.getAverages(flopsLookbackHours);
+        if (!averages) {
+            flopsCheckPassed = false;
+            return false;
+        }
+
+        const avgFlops = (averages.openFlops + averages.averageFlops) / 2;
+        flopsCheckPassed = avgFlops >= minFlops;
+        return flopsCheckPassed;
+    };
+
+    const checkOrderFill = async (order: SimulatedTrade): Promise<boolean> => {
+        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side, targetedMarket);
+        if (order.side === Side.BUY && currentPrice <= order.price) return true;
+        if (order.side === Side.SELL && currentPrice >= order.price) return true;
+        return false;
+    };
+
+    return {
+        name,
+
+        async onTick() {
+            if (isPastCutoff) return;
+
+            const minute = clock.getMinutes();
+
+            try {
+                // Check order fills
+                if (currentBuyOrder?.status === 'PENDING' && await checkOrderFill(currentBuyOrder)) {
+                    currentBuyOrder.status = 'MATCHED';
+                    currentBuyOrder.pnl = -(currentBuyOrder.price * currentBuyOrder.amount);
+
+                    // Create sell order
+                    if (!currentSellOrder) {
+                        const liveData = await marketInfo.getLiveData(targetedMarket);
+                        const tokenId = btcDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
+                        currentSellOrder = {
+                            timestamp: clock.now(),
+                            botName: name,
+                            side: Side.SELL,
+                            tokenId,
+                            price: targetSellPrice,
+                            amount: targetSize,
+                            status: 'PENDING',
+                        };
+                        trades.push(currentSellOrder);
+                    }
+                }
+
+                if (currentSellOrder?.status === 'PENDING' && await checkOrderFill(currentSellOrder)) {
+                    currentSellOrder.status = 'MATCHED';
+                    currentSellOrder.pnl = currentSellOrder.price * currentSellOrder.amount;
+                }
+
+                // Handle cutoff
+                if (isAfterCutoff(clock, targetedMarket, cutoffMinute)) {
+                    isPastCutoff = true;
+                    if (currentBuyOrder?.status === 'PENDING') currentBuyOrder.status = 'CANCELED';
+                    return;
+                }
+
+                // Create buy order if conditions met
+                if (!currentBuyOrder && checkFlops()) {
+                    const liveData = await marketInfo.getLiveData(targetedMarket);
+                    const tokenId = btcDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
+                    currentBuyOrder = {
+                        timestamp: clock.now(),
+                        botName: name,
+                        side: Side.BUY,
+                        tokenId,
+                        price: targetBuyPrice,
+                        amount: targetSize,
+                        status: 'PENDING',
+                    };
+                    trades.push(currentBuyOrder);
+                }
+            } catch {
+                // Price data not available
+            }
+        },
+
+        async onHourChange() {
+            if (currentBuyOrder?.status === 'PENDING') currentBuyOrder.status = 'EXPIRED';
+            if (currentSellOrder?.status === 'PENDING') currentSellOrder.status = 'EXPIRED';
+
+            if (currentBuyOrder?.status === 'MATCHED' && (!currentSellOrder || currentSellOrder.status !== 'MATCHED')) {
+                const hourWinner = marketInfo.getHourWinner(clock.now() - 30 * 60 * 1000);
+                const isUpToken = currentBuyOrder.tokenId.includes('UP');
+                const won = (hourWinner === 'UP' && isUpToken) || (hourWinner === 'DOWN' && !isUpToken);
+
+                trades.push({
+                    timestamp: clock.now(),
+                    botName: name,
+                    side: Side.BUY,
+                    tokenId: currentBuyOrder.tokenId,
+                    price: 0,
+                    amount: currentBuyOrder.amount,
+                    status: 'EXPIRED',
+                    pnl: won ? currentBuyOrder.amount : 0,
+                });
+            }
+
+            resetState();
+        },
+
+        getTrades() { return trades; },
+        reset() { trades.length = 0; resetState(); },
+    };
+}
+
+// ============================================================================
+// Normal Distribution Helper
+// ============================================================================
+
+/**
+ * Approximation of standard normal cumulative distribution function (CDF)
+ * Returns probability that a standard normal random variable is <= x
+ */
+function normalCDF(x: number): number {
+    const a1 = 0.254829592;
+    const a2 = -0.284496736;
+    const a3 = 1.421413741;
+    const a4 = -1.453152027;
+    const a5 = 1.061405429;
+    const p = 0.3275911;
+
+    const sign = x < 0 ? -1 : 1;
+    const absX = Math.abs(x) / Math.sqrt(2);
+
+    const t = 1.0 / (1.0 + p * absX);
+    const y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-absX * absX);
+
+    return 0.5 * (1.0 + sign * y);
+}
+
+// ============================================================================
+// EsotericNormalization Bot Implementations
+// ============================================================================
+
+/**
+ * EsotericNormalization Bot - Uses normal distribution to predict token prices
+ *
+ * The bot calculates an "expected token price" based on:
+ * 1. BTC price movement from period start (determines mean/direction)
+ * 2. Time elapsed in period (affects distribution spread - flattens over time)
+ *
+ * Early in period: Large price movements still uncertain, token ~0.50
+ * Late in period: Same price movements more decisive, token approaches 0 or 1
+ *
+ * Trades when actual token price differs significantly from expected price.
+ */
+function createEsotericNormalizationBot(botParams: BotParams): SimulatedBot {
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket } = botParams;
+
+    const PERIOD_MINUTES = 60;
+
+    // Distribution shape parameters
+    const baseStdDev = (params.baseStdDev as number) ?? 150;              // Initial std dev in $ at period start
+    const minStdDevRatio = (params.minStdDevRatio as number) ?? 0.25;    // Min std dev as ratio of base at period end
+    const timeDecayPower = (params.timeDecayPower as number) ?? 1.5;     // How fast std dev shrinks (higher = faster)
+    const priceScaleMultiplier = (params.priceScaleMultiplier as number) ?? 1.0;  // Multiplier for price sensitivity
+    const priceScaleConstant = (params.priceScaleConstant as number) ?? 0;        // Constant offset for price calc
+
+    // Trading parameters
+    const purchaseThreshold = (params.purchaseThreshold as number) ?? 0.08;  // Min diff to trigger buy
+    const sellPremium = (params.sellPremium as number) ?? 0.04;              // Sell this much above expected
+    const targetSize = (params.targetSize as number) ?? 10;
+    const cutoffMinute = (params.cutoffMinute as number) ?? 45;
+    const maxTradesPerPeriod = (params.maxTradesPerPeriod as number) ?? 2;
+
+    const trades: SimulatedTrade[] = [];
+    let startPrice: number | null = null;
+    let currentBuyOrder: SimulatedTrade | null = null;
+    let currentSellOrder: SimulatedTrade | null = null;
+    let tradesThisPeriod = 0;
+    let lastExpectedPrice = 0.5;
+
+    const resetState = () => {
+        startPrice = null;
+        currentBuyOrder = null;
+        currentSellOrder = null;
+        tradesThisPeriod = 0;
+        lastExpectedPrice = 0.5;
+    };
+
+    /**
+     * Calculate the expected token price based on BTC price movement and time
+     * Returns expected price for UP token (0-1)
+     */
+    const calculateExpectedPrice = (currentBtcPrice: number, minuteInPeriod: number): number => {
+        if (startPrice === null) return 0.5;
+
+        // Price difference from start (positive = BTC went up)
+        const priceChange = (currentBtcPrice - startPrice) * priceScaleMultiplier + priceScaleConstant;
+
+        // Time factor: 0 at start, 1 at end
+        const timeFactor = Math.min(1, minuteInPeriod / PERIOD_MINUTES);
+
+        // Standard deviation shrinks over time (curve gets steeper)
+        // At start: stdDev = baseStdDev
+        // At end: stdDev = baseStdDev * minStdDevRatio
+        const stdDev = baseStdDev * (1 - (1 - minStdDevRatio) * Math.pow(timeFactor, timeDecayPower));
+
+        // Z-score: how many std devs is the price change
+        const zScore = priceChange / stdDev;
+
+        // CDF gives probability that UP wins (expected UP token price)
+        const expectedUpPrice = normalCDF(zScore);
+
+        // Clamp to reasonable range
+        return Math.max(0.02, Math.min(0.98, expectedUpPrice));
+    };
+
+    const checkOrderFill = async (order: SimulatedTrade): Promise<boolean> => {
+        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side, targetedMarket);
+        if (order.side === Side.BUY && currentPrice <= order.price) return true;
+        if (order.side === Side.SELL && currentPrice >= order.price) return true;
+        return false;
+    };
+
+    return {
+        name,
+
+        async onTick() {
+            const minute = clock.getMinutes();
+
+            try {
+                const currentBtcPrice = await cdMarketData.getCurrentPrice();
+
+                // Capture start price at beginning of period
+                if (startPrice === null) {
+                    startPrice = currentBtcPrice;
+                }
+
+                // Calculate expected token prices
+                const expectedUpPrice = calculateExpectedPrice(currentBtcPrice, minute);
+                const expectedDownPrice = 1 - expectedUpPrice;
+                lastExpectedPrice = expectedUpPrice;
+
+                // Get actual market prices
+                const liveData = await marketInfo.getLiveData(targetedMarket);
+                const actualUpPrice = parseFloat(liveData.BtcUp.asks[0]?.price ?? '0.50');
+                const actualDownPrice = parseFloat(liveData.BtcDown.asks[0]?.price ?? '0.50');
+
+                // Check order fills
+                if (currentBuyOrder?.status === 'PENDING' && await checkOrderFill(currentBuyOrder)) {
+                    currentBuyOrder.status = 'MATCHED';
+                    currentBuyOrder.pnl = -(currentBuyOrder.price * currentBuyOrder.amount);
+                    trades.push({ ...currentBuyOrder });
+
+                    // Create sell order at expected price + premium
+                    if (!currentSellOrder) {
+                        const isUpToken = currentBuyOrder.tokenId.includes('UP');
+                        const expectedSellPrice = isUpToken ? expectedUpPrice : expectedDownPrice;
+                        const sellPrice = Math.min(0.95, expectedSellPrice + sellPremium);
+
+                        currentSellOrder = {
+                            timestamp: clock.now(),
+                            botName: name,
+                            side: Side.SELL,
+                            tokenId: currentBuyOrder.tokenId,
+                            price: sellPrice,
+                            amount: targetSize,
+                            status: 'PENDING',
+                        };
+                    }
+                }
+
+                if (currentSellOrder?.status === 'PENDING') {
+                    // Update sell price based on current expected value
+                    const isUpToken = currentSellOrder.tokenId.includes('UP');
+                    const currentExpected = isUpToken ? expectedUpPrice : expectedDownPrice;
+                    currentSellOrder.price = Math.min(0.95, currentExpected + sellPremium);
+
+                    if (await checkOrderFill(currentSellOrder)) {
+                        currentSellOrder.status = 'MATCHED';
+                        currentSellOrder.pnl = currentSellOrder.price * currentSellOrder.amount;
+                        trades.push({
+                            ...currentSellOrder,
+                            pnl: currentSellOrder.price * currentSellOrder.amount
+                        });
+                        currentBuyOrder = null;
+                        currentSellOrder = null;
+                    }
+                }
+
+                // Check for new trade opportunity
+                if (minute < cutoffMinute && !currentBuyOrder && tradesThisPeriod < maxTradesPerPeriod) {
+                    // Look for mispriced UP token
+                    const upDiff = expectedUpPrice - actualUpPrice;
+                    // Look for mispriced DOWN token
+                    const downDiff = expectedDownPrice - actualDownPrice;
+
+                    let selectedToken: 'UP' | 'DOWN' | null = null;
+                    let buyPrice = 0;
+
+                    if (upDiff >= purchaseThreshold && upDiff >= downDiff) {
+                        selectedToken = 'UP';
+                        buyPrice = actualUpPrice;
+                    } else if (downDiff >= purchaseThreshold) {
+                        selectedToken = 'DOWN';
+                        buyPrice = actualDownPrice;
+                    }
+
+                    if (selectedToken) {
+                        const tokenId = selectedToken === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
+                        currentBuyOrder = {
+                            timestamp: clock.now(),
+                            botName: name,
+                            side: Side.BUY,
+                            tokenId,
+                            price: buyPrice,
+                            amount: targetSize,
+                            status: 'PENDING',
+                        };
+                        tradesThisPeriod++;
+                    }
+                }
+
+            } catch {
+                // Price data not available
+            }
+        },
+
+        async onHourChange() {
+            if (currentBuyOrder?.status === 'PENDING') currentBuyOrder.status = 'EXPIRED';
+            if (currentSellOrder?.status === 'PENDING') currentSellOrder.status = 'EXPIRED';
+
+            // Settle matched buy that wasn't sold
+            if (currentBuyOrder?.status === 'MATCHED' && (!currentSellOrder || currentSellOrder.status !== 'MATCHED')) {
+                const hourWinner = marketInfo.getHourWinner(clock.now() - 30 * 60 * 1000);
+                const isUpToken = currentBuyOrder.tokenId.includes('UP');
+                const won = (hourWinner === 'UP' && isUpToken) || (hourWinner === 'DOWN' && !isUpToken);
+
+                trades.push({
+                    timestamp: clock.now(),
+                    botName: name,
+                    side: Side.BUY,
+                    tokenId: currentBuyOrder.tokenId,
+                    price: 0,
+                    amount: currentBuyOrder.amount,
+                    status: 'EXPIRED',
+                    pnl: won ? currentBuyOrder.amount : 0,
+                });
+            }
+
+            resetState();
+        },
+
+        getTrades() { return trades; },
+        reset() { trades.length = 0; resetState(); },
+    };
+}
+
+/**
+ * Quarterly EsotericNormalization Bot - Normal distribution prediction for 15-minute markets
+ */
+function createQuarterlyEsotericNormalizationBot(botParams: BotParams): SimulatedBot {
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket } = botParams;
+
+    const PERIOD_MINUTES = 15;
+
+    // Distribution shape parameters (adjusted for shorter period)
+    const baseStdDev = (params.baseStdDev as number) ?? 75;               // Smaller for 15-min period
+    const minStdDevRatio = (params.minStdDevRatio as number) ?? 0.25;
+    const timeDecayPower = (params.timeDecayPower as number) ?? 1.5;
+    const priceScaleMultiplier = (params.priceScaleMultiplier as number) ?? 1.0;
+    const priceScaleConstant = (params.priceScaleConstant as number) ?? 0;
+
+    // Trading parameters
+    const purchaseThreshold = (params.purchaseThreshold as number) ?? 0.08;
+    const sellPremium = (params.sellPremium as number) ?? 0.04;
+    const targetSize = (params.targetSize as number) ?? 10;
+    const cutoffMinute = (params.cutoffMinute as number) ?? 10;  // Within 15-min period
+    const maxTradesPerPeriod = (params.maxTradesPerPeriod as number) ?? 1;
+
+    const trades: SimulatedTrade[] = [];
+    let startPrice: number | null = null;
+    let currentBuyOrder: SimulatedTrade | null = null;
+    let currentSellOrder: SimulatedTrade | null = null;
+    let tradesThisPeriod = 0;
+    let lastExpectedPrice = 0.5;
+
+    const resetState = () => {
+        startPrice = null;
+        currentBuyOrder = null;
+        currentSellOrder = null;
+        tradesThisPeriod = 0;
+        lastExpectedPrice = 0.5;
+    };
+
+    const getMinuteInPeriod = (): number => {
+        return clock.getMinutes() % PERIOD_MINUTES;
+    };
+
+    const calculateExpectedPrice = (currentBtcPrice: number, minuteInPeriod: number): number => {
+        if (startPrice === null) return 0.5;
+
+        const priceChange = (currentBtcPrice - startPrice) * priceScaleMultiplier + priceScaleConstant;
+        const timeFactor = Math.min(1, minuteInPeriod / PERIOD_MINUTES);
+        const stdDev = baseStdDev * (1 - (1 - minStdDevRatio) * Math.pow(timeFactor, timeDecayPower));
+        const zScore = priceChange / stdDev;
+        const expectedUpPrice = normalCDF(zScore);
+
+        return Math.max(0.02, Math.min(0.98, expectedUpPrice));
+    };
+
+    const checkOrderFill = async (order: SimulatedTrade): Promise<boolean> => {
+        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side, targetedMarket);
+        if (order.side === Side.BUY && currentPrice <= order.price) return true;
+        if (order.side === Side.SELL && currentPrice >= order.price) return true;
+        return false;
+    };
+
+    return {
+        name,
+
+        async onTick() {
+            const minuteInPeriod = getMinuteInPeriod();
+
+            try {
+                const currentBtcPrice = await cdMarketData.getCurrentPrice();
+
+                // Capture start price at beginning of period
+                if (startPrice === null) {
+                    startPrice = currentBtcPrice;
+                }
+
+                const expectedUpPrice = calculateExpectedPrice(currentBtcPrice, minuteInPeriod);
+                const expectedDownPrice = 1 - expectedUpPrice;
+                lastExpectedPrice = expectedUpPrice;
+
+                const liveData = await marketInfo.getLiveData(targetedMarket);
+                const actualUpPrice = parseFloat(liveData.BtcUp.asks[0]?.price ?? '0.50');
+                const actualDownPrice = parseFloat(liveData.BtcDown.asks[0]?.price ?? '0.50');
+
+                // Check order fills
+                if (currentBuyOrder?.status === 'PENDING' && await checkOrderFill(currentBuyOrder)) {
+                    currentBuyOrder.status = 'MATCHED';
+                    currentBuyOrder.pnl = -(currentBuyOrder.price * currentBuyOrder.amount);
+                    trades.push({ ...currentBuyOrder });
+
+                    if (!currentSellOrder) {
+                        const isUpToken = currentBuyOrder.tokenId.includes('UP');
+                        const expectedSellPrice = isUpToken ? expectedUpPrice : expectedDownPrice;
+                        const sellPrice = Math.min(0.95, expectedSellPrice + sellPremium);
+
+                        currentSellOrder = {
+                            timestamp: clock.now(),
+                            botName: name,
+                            side: Side.SELL,
+                            tokenId: currentBuyOrder.tokenId,
+                            price: sellPrice,
+                            amount: targetSize,
+                            status: 'PENDING',
+                        };
+                    }
+                }
+
+                if (currentSellOrder?.status === 'PENDING') {
+                    const isUpToken = currentSellOrder.tokenId.includes('UP');
+                    const currentExpected = isUpToken ? expectedUpPrice : expectedDownPrice;
+                    currentSellOrder.price = Math.min(0.95, currentExpected + sellPremium);
+
+                    if (await checkOrderFill(currentSellOrder)) {
+                        currentSellOrder.status = 'MATCHED';
+                        currentSellOrder.pnl = currentSellOrder.price * currentSellOrder.amount;
+                        trades.push({ ...currentSellOrder });
+                        currentBuyOrder = null;
+                        currentSellOrder = null;
+                    }
+                }
+
+                // Check for new trade opportunity
+                if (minuteInPeriod < cutoffMinute && !currentBuyOrder && tradesThisPeriod < maxTradesPerPeriod) {
+                    const upDiff = expectedUpPrice - actualUpPrice;
+                    const downDiff = expectedDownPrice - actualDownPrice;
+
+                    let selectedToken: 'UP' | 'DOWN' | null = null;
+                    let buyPrice = 0;
+
+                    if (upDiff >= purchaseThreshold && upDiff >= downDiff) {
+                        selectedToken = 'UP';
+                        buyPrice = actualUpPrice;
+                    } else if (downDiff >= purchaseThreshold) {
+                        selectedToken = 'DOWN';
+                        buyPrice = actualDownPrice;
+                    }
+
+                    if (selectedToken) {
+                        const tokenId = selectedToken === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
+                        currentBuyOrder = {
+                            timestamp: clock.now(),
+                            botName: name,
+                            side: Side.BUY,
+                            tokenId,
+                            price: buyPrice,
+                            amount: targetSize,
+                            status: 'PENDING',
+                        };
+                        tradesThisPeriod++;
+                    }
+                }
+
+            } catch {
+                // Price data not available
+            }
+        },
+
+        async onHourChange() {
+            // Settle at period end (called every 15 minutes for quarterly markets)
+            if (currentBuyOrder?.status === 'PENDING') currentBuyOrder.status = 'EXPIRED';
+            if (currentSellOrder?.status === 'PENDING') currentSellOrder.status = 'EXPIRED';
+
+            if (currentBuyOrder?.status === 'MATCHED' && (!currentSellOrder || currentSellOrder.status !== 'MATCHED')) {
+                const quarterWinner = marketInfo.getQuarterWinner(clock.now() - 60 * 1000);
+                const isUpToken = currentBuyOrder.tokenId.includes('UP');
+                const won = (quarterWinner === 'UP' && isUpToken) || (quarterWinner === 'DOWN' && !isUpToken);
+
+                trades.push({
+                    timestamp: clock.now(),
+                    botName: name,
+                    side: Side.BUY,
+                    tokenId: currentBuyOrder.tokenId,
+                    price: 0,
+                    amount: currentBuyOrder.amount,
+                    status: 'EXPIRED',
+                    pnl: won ? currentBuyOrder.amount : 0,
+                });
+            }
+
+            resetState();
+        },
+
+        getTrades() { return trades; },
+        reset() { trades.length = 0; resetState(); },
+    };
+}
+
+/**
+ * Quarterly EarlyBuyerV2 Bot - Early entry with flops-based filtering for 15-minute markets
+ * Checks market volatility (flops) before entering trades in a specific direction
+ */
+function createQuarterlyEarlyBuyerV2Bot(botParams: BotParams): SimulatedBot {
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket } = botParams;
+
+    const PERIOD_MINUTES = 15;
+
+    const targetBuyPrice = (params.targetBuyPrice as number) ?? 0.50;
+    const targetSellPrice = (params.targetSellPrice as number) ?? 0.60;
+    const targetSize = (params.targetSize as number) ?? 10;
+    const cutoffMinute = (params.cutoffMinute as number) ?? 10;  // Within 15-min period
+    // btcDirection: can be 'UP', 'DOWN', or numeric (0 = DOWN, 1 = UP from genetic algorithm)
+    const btcDirectionParam = params.btcDirection;
+    const btcDirection = typeof btcDirectionParam === 'number'
+        ? (btcDirectionParam >= 1 ? 'UP' : 'DOWN')
+        : ((btcDirectionParam as string) ?? 'UP');
+    const minFlops = (params.minFlops as number) ?? 3;
+    const flopsLookbackHours = (params.flopsLookbackHours as number) ?? 4;
+
+    const trades: SimulatedTrade[] = [];
+    let currentBuyOrder: SimulatedTrade | null = null;
+    let currentSellOrder: SimulatedTrade | null = null;
+    let isPastCutoff = false;
+    let hasCheckedFlops = false;
+    let flopsCheckPassed = false;
+
+    const resetState = () => {
+        currentBuyOrder = null;
+        currentSellOrder = null;
+        isPastCutoff = false;
+        hasCheckedFlops = false;
+        flopsCheckPassed = false;
+    };
+
+    const getMinuteInPeriod = (): number => {
+        return clock.getMinutes() % PERIOD_MINUTES;
+    };
+
+    const checkFlops = (): boolean => {
+        if (hasCheckedFlops) return flopsCheckPassed;
+        hasCheckedFlops = true;
+
+        const averages = cdMarketData.getAverages(flopsLookbackHours);
+        if (!averages) {
+            flopsCheckPassed = false;
+            return false;
+        }
+
+        const avgFlops = (averages.openFlops + averages.averageFlops) / 2;
+        flopsCheckPassed = avgFlops >= minFlops;
+        return flopsCheckPassed;
+    };
+
+    const checkOrderFill = async (order: SimulatedTrade): Promise<boolean> => {
+        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side, targetedMarket);
+        if (order.side === Side.BUY && currentPrice <= order.price) return true;
+        if (order.side === Side.SELL && currentPrice >= order.price) return true;
+        return false;
+    };
+
+    return {
+        name,
+
+        async onTick() {
+            if (isPastCutoff) return;
+
+            const minuteInPeriod = getMinuteInPeriod();
+
+            try {
+                // Check order fills
+                if (currentBuyOrder?.status === 'PENDING' && await checkOrderFill(currentBuyOrder)) {
+                    currentBuyOrder.status = 'MATCHED';
+                    currentBuyOrder.pnl = -(currentBuyOrder.price * currentBuyOrder.amount);
+
+                    // Create sell order
+                    if (!currentSellOrder) {
+                        const liveData = await marketInfo.getLiveData(targetedMarket);
+                        const tokenId = btcDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
+                        currentSellOrder = {
+                            timestamp: clock.now(),
+                            botName: name,
+                            side: Side.SELL,
+                            tokenId,
+                            price: targetSellPrice,
+                            amount: targetSize,
+                            status: 'PENDING',
+                        };
+                        trades.push(currentSellOrder);
+                    }
+                }
+
+                if (currentSellOrder?.status === 'PENDING' && await checkOrderFill(currentSellOrder)) {
+                    currentSellOrder.status = 'MATCHED';
+                    currentSellOrder.pnl = currentSellOrder.price * currentSellOrder.amount;
+                }
+
+                // Handle cutoff (within 15-minute period)
+                if (isAfterCutoff(clock, targetedMarket, cutoffMinute)) {
+                    isPastCutoff = true;
+                    if (currentBuyOrder?.status === 'PENDING') currentBuyOrder.status = 'CANCELED';
+                    return;
+                }
+
+                // Create buy order if conditions met
+                if (!currentBuyOrder && checkFlops()) {
+                    const liveData = await marketInfo.getLiveData(targetedMarket);
+                    const tokenId = btcDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
+                    currentBuyOrder = {
+                        timestamp: clock.now(),
+                        botName: name,
+                        side: Side.BUY,
+                        tokenId,
+                        price: targetBuyPrice,
+                        amount: targetSize,
+                        status: 'PENDING',
+                    };
+                    trades.push(currentBuyOrder);
+                }
+            } catch {
+                // Price data not available
+            }
+        },
+
+        async onHourChange() {
+            // Settle at period end (called every 15 minutes for quarterly markets)
+            if (currentBuyOrder?.status === 'PENDING') currentBuyOrder.status = 'EXPIRED';
+            if (currentSellOrder?.status === 'PENDING') currentSellOrder.status = 'EXPIRED';
+
+            // Settle matched buy that wasn't sold
+            if (currentBuyOrder?.status === 'MATCHED' && (!currentSellOrder || currentSellOrder.status !== 'MATCHED')) {
+                const quarterWinner = marketInfo.getQuarterWinner(clock.now() - 60 * 1000);
+                const isUpToken = currentBuyOrder.tokenId.includes('UP');
+                const won = (quarterWinner === 'UP' && isUpToken) || (quarterWinner === 'DOWN' && !isUpToken);
+
+                trades.push({
+                    timestamp: clock.now(),
+                    botName: name,
+                    side: Side.BUY,
+                    tokenId: currentBuyOrder.tokenId,
+                    price: 0,
+                    amount: currentBuyOrder.amount,
+                    status: 'EXPIRED',
+                    pnl: won ? currentBuyOrder.amount : 0,
+                });
+            }
+
+            resetState();
+        },
+
+        getTrades() { return trades; },
+        reset() { trades.length = 0; resetState(); },
+    };
+}
+
 // ============================================================================
 // Quarterly Market Bot Implementations (15-minute periods)
 // ============================================================================
@@ -1410,7 +2222,7 @@ function createMeanReversionBot(botParams: BotParams): SimulatedBot {
  * Uses smaller candle periods appropriate for quarterly timeframe
  */
 function createQuarterlyFirstCandleBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params } = botParams;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket } = botParams;
 
     const targetSize = (params.targetSize as number) ?? 10;
     const candleMinutes = (params.candleMinutes as number) ?? 3;  // Smaller candle for 15-min period
@@ -1474,7 +2286,7 @@ function createQuarterlyFirstCandleBot(botParams: BotParams): SimulatedBot {
 
                     // Create sell order with dynamic pricing
                     if (!currentSellOrder && breakoutDirection && actualBuyPrice) {
-                        const liveData = await marketInfo.getLiveData(TargetedMarket.BITCOIN_QUARTERLY);
+                        const liveData = await marketInfo.getLiveData(targetedMarket);
                         const tokenId = breakoutDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
 
                         const dynamicSellPrice = Math.min(0.95, actualBuyPrice + (targetSellPrice - targetBuyPrice));
@@ -1497,7 +2309,7 @@ function createQuarterlyFirstCandleBot(botParams: BotParams): SimulatedBot {
                             (breakoutDirection === 'DOWN' && currentPrice >= candleLow - pullbackBuffer);
 
                         if (isPullbackConfirmed) {
-                            const liveData = await marketInfo.getLiveData(TargetedMarket.BITCOIN_QUARTERLY);
+                            const liveData = await marketInfo.getLiveData(targetedMarket);
                             const tokenId = breakoutDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
 
                             currentBuyOrder = {
@@ -1515,26 +2327,32 @@ function createQuarterlyFirstCandleBot(botParams: BotParams): SimulatedBot {
 
                 // Simulate order fills
                 if (currentBuyOrder?.status === 'PENDING') {
-                    const liveData = await marketInfo.getLiveData(TargetedMarket.BITCOIN_QUARTERLY);
+                    const liveData = await marketInfo.getLiveData(targetedMarket);
                     const orderBook = currentBuyOrder.tokenId.includes('UP') ? liveData.BtcUp : liveData.BtcDown;
                     const askPrice = parseFloat(orderBook.asks[0]?.price ?? '1');
 
                     if (currentBuyOrder.price >= askPrice) {
                         currentBuyOrder.status = 'MATCHED';
                         actualBuyPrice = askPrice;
-                        trades.push({ ...currentBuyOrder });
+                        trades.push({
+                            ...currentBuyOrder,
+                            pnl: -currentBuyOrder.amount * currentBuyOrder.price
+                        });
                     }
                 }
 
                 if (currentSellOrder?.status === 'PENDING' && currentBuyOrder?.status === 'MATCHED') {
-                    const liveData = await marketInfo.getLiveData(TargetedMarket.BITCOIN_QUARTERLY);
+                    const liveData = await marketInfo.getLiveData(targetedMarket);
                     const orderBook = currentSellOrder.tokenId.includes('UP') ? liveData.BtcUp : liveData.BtcDown;
                     const bidPrice = parseFloat(orderBook.bids[0]?.price ?? '0');
 
                     if (currentSellOrder.price <= bidPrice) {
                         currentSellOrder.status = 'MATCHED';
                         currentSellOrder.pnl = (bidPrice - (actualBuyPrice ?? targetBuyPrice)) * targetSize;
-                        trades.push({ ...currentSellOrder });
+                        trades.push({
+                            ...currentSellOrder,
+                            pnl: -currentSellOrder.amount * currentSellOrder.price
+                        });
                     }
                 }
 
@@ -1544,7 +2362,28 @@ function createQuarterlyFirstCandleBot(botParams: BotParams): SimulatedBot {
         },
 
         async onHourChange() {
-            // Quarterly markets reset every 15 minutes, handled by quarterly event
+            // Settle at period end (called every 15 minutes for quarterly markets)
+            if (currentBuyOrder?.status === 'PENDING') currentBuyOrder.status = 'EXPIRED';
+            if (currentSellOrder?.status === 'PENDING') currentSellOrder.status = 'EXPIRED';
+
+            // Settle matched buy that wasn't sold
+            if (currentBuyOrder?.status === 'MATCHED' && (!currentSellOrder || currentSellOrder.status !== 'MATCHED')) {
+                const quarterWinner = marketInfo.getQuarterWinner(clock.now() - 60 * 1000);
+                const isUpToken = currentBuyOrder.tokenId.includes('UP');
+                const won = (quarterWinner === 'UP' && isUpToken) || (quarterWinner === 'DOWN' && !isUpToken);
+
+                trades.push({
+                    timestamp: clock.now(),
+                    botName: name,
+                    side: Side.BUY,
+                    tokenId: currentBuyOrder.tokenId,
+                    price: 0,
+                    amount: currentBuyOrder.amount,
+                    status: 'EXPIRED',
+                    pnl: won ? currentBuyOrder.amount : 0,
+                });
+            }
+            resetState();
         },
 
         getTrades() { return trades; },
@@ -1556,7 +2395,7 @@ function createQuarterlyFirstCandleBot(botParams: BotParams): SimulatedBot {
  * Quarterly Mean Reversion Bot - mean reversion for 15-minute markets
  */
 function createQuarterlyMeanReversionBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params } = botParams;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket } = botParams;
 
     const targetSize = (params.targetSize as number) ?? 10;
     const lookbackPeriods = (params.lookbackPeriods as number) ?? 10;
@@ -1604,7 +2443,7 @@ function createQuarterlyMeanReversionBot(botParams: BotParams): SimulatedBot {
 
                 // Create sell order if we have a buy
                 if (!currentSellOrder && tradeDirection && currentBuyOrder?.status === 'MATCHED') {
-                    const liveData = await marketInfo.getLiveData(TargetedMarket.BITCOIN_QUARTERLY);
+                    const liveData = await marketInfo.getLiveData(targetedMarket);
                     const tokenId = tradeDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
                     currentSellOrder = {
                         timestamp: clock.now(),
@@ -1625,7 +2464,7 @@ function createQuarterlyMeanReversionBot(botParams: BotParams): SimulatedBot {
 
                         if (zScore < -entryThreshold) {
                             tradeDirection = 'UP';
-                            const liveData = await marketInfo.getLiveData(TargetedMarket.BITCOIN_QUARTERLY);
+                            const liveData = await marketInfo.getLiveData(targetedMarket);
                             currentBuyOrder = {
                                 timestamp: clock.now(),
                                 botName: name,
@@ -1637,7 +2476,7 @@ function createQuarterlyMeanReversionBot(botParams: BotParams): SimulatedBot {
                             };
                         } else if (zScore > entryThreshold) {
                             tradeDirection = 'DOWN';
-                            const liveData = await marketInfo.getLiveData(TargetedMarket.BITCOIN_QUARTERLY);
+                            const liveData = await marketInfo.getLiveData(targetedMarket);
                             currentBuyOrder = {
                                 timestamp: clock.now(),
                                 botName: name,
@@ -1653,47 +2492,32 @@ function createQuarterlyMeanReversionBot(botParams: BotParams): SimulatedBot {
 
                 // Simulate order fills
                 if (currentBuyOrder?.status === 'PENDING') {
-                    const liveData = await marketInfo.getLiveData(TargetedMarket.BITCOIN_QUARTERLY);
+                    const liveData = await marketInfo.getLiveData(targetedMarket);
                     const orderBook = currentBuyOrder.tokenId.includes('UP') ? liveData.BtcUp : liveData.BtcDown;
                     const askPrice = parseFloat(orderBook.asks[0]?.price ?? '1');
 
                     if (currentBuyOrder.price >= askPrice) {
                         currentBuyOrder.status = 'MATCHED';
-                        trades.push({ ...currentBuyOrder });
+                        trades.push({
+                            ...currentBuyOrder,
+                            pnl: -currentBuyOrder.amount * currentBuyOrder.price
+                        });
                     }
                 }
 
                 if (currentSellOrder?.status === 'PENDING' && currentBuyOrder?.status === 'MATCHED') {
-                    const liveData = await marketInfo.getLiveData(TargetedMarket.BITCOIN_QUARTERLY);
+                    const liveData = await marketInfo.getLiveData(targetedMarket);
                     const orderBook = currentSellOrder.tokenId.includes('UP') ? liveData.BtcUp : liveData.BtcDown;
                     const bidPrice = parseFloat(orderBook.bids[0]?.price ?? '0');
 
                     if (currentSellOrder.price <= bidPrice) {
                         currentSellOrder.status = 'MATCHED';
                         currentSellOrder.pnl = (bidPrice - targetBuyPrice) * targetSize;
-                        trades.push({ ...currentSellOrder });
-                    }
-                }
-
-                // Settle at period end
-                if (minuteInPeriod === PERIOD_MINUTES - 1) {
-                    if (currentBuyOrder?.status === 'MATCHED' && (!currentSellOrder || currentSellOrder.status !== 'MATCHED')) {
-                        const quarterWinner = marketInfo.getQuarterWinner(clock.now());
-                        const isUpToken = currentBuyOrder.tokenId.includes('UP');
-                        const won = (quarterWinner === 'UP' && isUpToken) || (quarterWinner === 'DOWN' && !isUpToken);
-
                         trades.push({
-                            timestamp: clock.now(),
-                            botName: name,
-                            side: Side.BUY,
-                            tokenId: currentBuyOrder.tokenId,
-                            price: 0,
-                            amount: currentBuyOrder.amount,
-                            status: 'EXPIRED',
-                            pnl: won ? currentBuyOrder.amount : 0,
+                            ...currentSellOrder,
+                            pnl: currentSellOrder.amount * currentSellOrder.price
                         });
                     }
-                    resetState();
                 }
 
             } catch {
@@ -1702,7 +2526,27 @@ function createQuarterlyMeanReversionBot(botParams: BotParams): SimulatedBot {
         },
 
         async onHourChange() {
-            // Also reset on hour change for safety
+            // Settle at period end (called every 15 minutes for quarterly markets)
+            if (currentBuyOrder?.status === 'PENDING') currentBuyOrder.status = 'EXPIRED';
+            if (currentSellOrder?.status === 'PENDING') currentSellOrder.status = 'EXPIRED';
+
+            // Settle matched buy that wasn't sold
+            if (currentBuyOrder?.status === 'MATCHED' && (!currentSellOrder || currentSellOrder.status !== 'MATCHED')) {
+                const quarterWinner = marketInfo.getQuarterWinner(clock.now() - 60 * 1000);
+                const isUpToken = currentBuyOrder.tokenId.includes('UP');
+                const won = (quarterWinner === 'UP' && isUpToken) || (quarterWinner === 'DOWN' && !isUpToken);
+
+                trades.push({
+                    timestamp: clock.now(),
+                    botName: name,
+                    side: Side.BUY,
+                    tokenId: currentBuyOrder.tokenId,
+                    price: 0,
+                    amount: currentBuyOrder.amount,
+                    status: 'EXPIRED',
+                    pnl: won ? currentBuyOrder.amount : 0,
+                });
+            }
             resetState();
         },
 
@@ -1713,55 +2557,175 @@ function createQuarterlyMeanReversionBot(botParams: BotParams): SimulatedBot {
 
 /**
  * Quarterly Trend Following Bot - trend following for 15-minute markets
+ * Uses same indicators as hourly version: MA crossovers, ADX, ATR, Donchian
  */
 function createQuarterlyTrendFollowingBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params } = botParams;
-
-    const targetSize = (params.targetSize as number) ?? 10;
-    const shortMaPeriod = (params.shortMaPeriod as number) ?? 3;
-    const longMaPeriod = (params.longMaPeriod as number) ?? 8;
-    const momentumThreshold = (params.momentumThreshold as number) ?? 0.5;  // % price change threshold
-    const targetBuyPrice = (params.targetBuyPrice as number) ?? 0.50;
-    const targetSellPrice = (params.targetSellPrice as number) ?? 0.60;
-    const cutoffMinute = (params.cutoffMinute as number) ?? 10;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket } = botParams;
 
     const PERIOD_MINUTES = 15;
+
+    // Parameters matching actual TrendFollowing bot (adjusted defaults for quarterly)
+    const shortMaPeriod = (params.shortMaPeriod as number) ?? 3;
+    const longMaPeriod = (params.longMaPeriod as number) ?? 10;
+    const adxPeriod = (params.adxPeriod as number) ?? 7;
+    const adxThreshold = (params.adxThreshold as number) ?? 20;
+    const atrPeriod = (params.atrPeriod as number) ?? 7;
+    const atrStopMultiple = (params.atrStopMultiple as number) ?? 2.0;
+    const targetBuyPrice = (params.targetBuyPrice as number) ?? 0.50;
+    const targetSellPrice = (params.targetSellPrice as number) ?? 0.60;
+    const targetSize = (params.targetSize as number) ?? 10;
+    const cutoffMinute = (params.cutoffMinute as number) ?? 10;
+
+    type TradingState = 'WAITING_DATA' | 'MONITORING' | 'POSITION_OPEN' | 'PAST_CUTOFF';
+
     const trades: SimulatedTrade[] = [];
     const priceHistory: number[] = [];
-
+    let state: TradingState = 'WAITING_DATA';
     let tradeDirection: 'UP' | 'DOWN' | null = null;
+    let previousShortMa: number | null = null;
+    let previousLongMa: number | null = null;
     let currentBuyOrder: SimulatedTrade | null = null;
     let currentSellOrder: SimulatedTrade | null = null;
-
-    const resetState = () => {
-        tradeDirection = null;
-        currentBuyOrder = null;
-        currentSellOrder = null;
-    };
+    let entryPrice: number | null = null;
 
     const getMinuteInPeriod = (): number => {
         return clock.getMinutes() % PERIOD_MINUTES;
     };
 
-    const calculateMA = (periods: number): number | null => {
-        if (priceHistory.length < periods) return null;
-        const slice = priceHistory.slice(-periods);
-        return slice.reduce((a, b) => a + b, 0) / periods;
+    // --- Technical Indicator Calculations ---
+
+    const calculateSMA = (prices: number[], period: number): number => {
+        const slice = prices.slice(-period);
+        return slice.reduce((sum, p) => sum + p, 0) / slice.length;
+    };
+
+    const wilderSmooth = (values: number[], period: number): number => {
+        if (values.length < period) return 0;
+        let smooth = values.slice(0, period).reduce((a, b) => a + b, 0);
+        for (let i = period; i < values.length; i++) {
+            smooth = smooth - (smooth / period) + values[i];
+        }
+        return smooth / period;
+    };
+
+    const calculateADX = (prices: number[], period: number): number => {
+        if (prices.length < period + 1) return 0;
+
+        const trueRanges: number[] = [];
+        const plusDMs: number[] = [];
+        const minusDMs: number[] = [];
+
+        for (let i = 1; i < prices.length; i++) {
+            const current = prices[i];
+            const prev = prices[i - 1];
+            const tr = Math.abs(current - prev);
+            trueRanges.push(tr);
+
+            const upMove = current - prev;
+            const downMove = prev - current;
+            plusDMs.push(upMove > downMove && upMove > 0 ? upMove : 0);
+            minusDMs.push(downMove > upMove && downMove > 0 ? downMove : 0);
+        }
+
+        const smoothTR = wilderSmooth(trueRanges, period);
+        const smoothPlusDM = wilderSmooth(plusDMs, period);
+        const smoothMinusDM = wilderSmooth(minusDMs, period);
+
+        if (smoothTR === 0) return 0;
+
+        const plusDI = (smoothPlusDM / smoothTR) * 100;
+        const minusDI = (smoothMinusDM / smoothTR) * 100;
+        const diSum = plusDI + minusDI;
+
+        if (diSum === 0) return 0;
+        return (Math.abs(plusDI - minusDI) / diSum) * 100;
+    };
+
+    const calculateATR = (prices: number[], period: number): number => {
+        if (prices.length < period + 1) return 0;
+
+        const trueRanges: number[] = [];
+        for (let i = 1; i < prices.length; i++) {
+            const tr = Math.abs(prices[i] - prices[i - 1]);
+            trueRanges.push(tr);
+        }
+
+        const recentTRs = trueRanges.slice(-period);
+        return recentTRs.reduce((a, b) => a + b, 0) / recentTRs.length;
+    };
+
+    const calculateDonchian = (prices: number[], period: number): { high: number; low: number } => {
+        const slice = prices.slice(-period);
+        return { high: Math.max(...slice), low: Math.min(...slice) };
+    };
+
+    const calculateIndicators = () => {
+        const requiredPeriods = Math.max(longMaPeriod, adxPeriod, atrPeriod) + 10;
+        if (priceHistory.length < requiredPeriods) return null;
+
+        const prices = priceHistory.slice(-requiredPeriods);
+        const currentPrice = prices[prices.length - 1];
+
+        return {
+            shortMa: calculateSMA(prices, shortMaPeriod),
+            longMa: calculateSMA(prices, longMaPeriod),
+            adx: calculateADX(prices, adxPeriod),
+            atr: calculateATR(prices, atrPeriod),
+            currentPrice,
+            ...calculateDonchian(prices, longMaPeriod),
+        };
+    };
+
+    const detectCrossover = (shortMa: number, longMa: number): 'GOLDEN_CROSS' | 'DEATH_CROSS' | 'NONE' => {
+        if (previousShortMa === null || previousLongMa === null) return 'NONE';
+        const prevShortAboveLong = previousShortMa > previousLongMa;
+        const currShortAboveLong = shortMa > longMa;
+
+        if (!prevShortAboveLong && currShortAboveLong) return 'GOLDEN_CROSS';
+        if (prevShortAboveLong && !currShortAboveLong) return 'DEATH_CROSS';
+        return 'NONE';
+    };
+
+    const checkOrderFill = async (order: SimulatedTrade): Promise<boolean> => {
+        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side, targetedMarket);
+        if (order.side === Side.BUY && currentPrice <= order.price) return true;
+        if (order.side === Side.SELL && currentPrice >= order.price) return true;
+        return false;
+    };
+
+    const resetState = () => {
+        // DON'T clear priceHistory - indicators need continuous historical data across periods
+        // priceHistory.length = 0;
+        state = 'WAITING_DATA';
+        tradeDirection = null;
+        previousShortMa = null;
+        previousLongMa = null;
+        currentBuyOrder = null;
+        currentSellOrder = null;
+        entryPrice = null;
     };
 
     return {
         name,
+
         async onTick() {
             const minuteInPeriod = getMinuteInPeriod();
+            const btcPrice = await cdMarketData.getCurrentPrice();
 
-            try {
-                const currentPrice = await cdMarketData.getCurrentPrice();
-                priceHistory.push(currentPrice);
-                if (priceHistory.length > 50) priceHistory.shift();
+            // Build price history
+            priceHistory.push(btcPrice);
+            if (priceHistory.length > (longMaPeriod + adxPeriod + atrPeriod) * 2) {
+                priceHistory.shift();
+            }
 
-                // Create sell order if we have a buy
-                if (!currentSellOrder && tradeDirection && currentBuyOrder?.status === 'MATCHED') {
-                    const liveData = await marketInfo.getLiveData(TargetedMarket.BITCOIN_QUARTERLY);
+            // Check order fills
+            if (currentBuyOrder?.status === 'PENDING' && await checkOrderFill(currentBuyOrder)) {
+                currentBuyOrder.status = 'MATCHED';
+                currentBuyOrder.pnl = -(currentBuyOrder.price * currentBuyOrder.amount);
+
+                // Create sell order
+                if (!currentSellOrder && tradeDirection) {
+                    const liveData = await marketInfo.getLiveData(targetedMarket);
                     const tokenId = tradeDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
                     currentSellOrder = {
                         timestamp: clock.now(),
@@ -1772,104 +2736,140 @@ function createQuarterlyTrendFollowingBot(botParams: BotParams): SimulatedBot {
                         amount: targetSize,
                         status: 'PENDING',
                     };
+                    trades.push(currentSellOrder);
                 }
-
-                // Entry logic - only before cutoff
-                if (minuteInPeriod < cutoffMinute && !currentBuyOrder) {
-                    const shortMA = calculateMA(shortMaPeriod);
-                    const longMA = calculateMA(longMaPeriod);
-
-                    if (shortMA && longMA && priceHistory.length >= 2) {
-                        const momentum = ((currentPrice - priceHistory[priceHistory.length - 2]) / priceHistory[priceHistory.length - 2]) * 100;
-
-                        // Bullish: short MA > long MA and positive momentum
-                        if (shortMA > longMA && momentum > momentumThreshold) {
-                            tradeDirection = 'UP';
-                            const liveData = await marketInfo.getLiveData(TargetedMarket.BITCOIN_QUARTERLY);
-                            currentBuyOrder = {
-                                timestamp: clock.now(),
-                                botName: name,
-                                side: Side.BUY,
-                                tokenId: liveData.BtcUpTokenId,
-                                price: targetBuyPrice,
-                                amount: targetSize,
-                                status: 'PENDING',
-                            };
-                        }
-                        // Bearish: short MA < long MA and negative momentum
-                        else if (shortMA < longMA && momentum < -momentumThreshold) {
-                            tradeDirection = 'DOWN';
-                            const liveData = await marketInfo.getLiveData(TargetedMarket.BITCOIN_QUARTERLY);
-                            currentBuyOrder = {
-                                timestamp: clock.now(),
-                                botName: name,
-                                side: Side.BUY,
-                                tokenId: liveData.BtcDownTokenId,
-                                price: targetBuyPrice,
-                                amount: targetSize,
-                                status: 'PENDING',
-                            };
-                        }
-                    }
-                }
-
-                // Simulate order fills
-                if (currentBuyOrder?.status === 'PENDING') {
-                    const liveData = await marketInfo.getLiveData(TargetedMarket.BITCOIN_QUARTERLY);
-                    const orderBook = currentBuyOrder.tokenId.includes('UP') ? liveData.BtcUp : liveData.BtcDown;
-                    const askPrice = parseFloat(orderBook.asks[0]?.price ?? '1');
-
-                    if (currentBuyOrder.price >= askPrice) {
-                        currentBuyOrder.status = 'MATCHED';
-                        trades.push({ ...currentBuyOrder });
-                    }
-                }
-
-                if (currentSellOrder?.status === 'PENDING' && currentBuyOrder?.status === 'MATCHED') {
-                    const liveData = await marketInfo.getLiveData(TargetedMarket.BITCOIN_QUARTERLY);
-                    const orderBook = currentSellOrder.tokenId.includes('UP') ? liveData.BtcUp : liveData.BtcDown;
-                    const bidPrice = parseFloat(orderBook.bids[0]?.price ?? '0');
-
-                    if (currentSellOrder.price <= bidPrice) {
-                        currentSellOrder.status = 'MATCHED';
-                        currentSellOrder.pnl = (bidPrice - targetBuyPrice) * targetSize;
-                        trades.push({ ...currentSellOrder });
-                    }
-                }
-
-                // Settle at period end
-                if (minuteInPeriod === PERIOD_MINUTES - 1) {
-                    if (currentBuyOrder?.status === 'MATCHED' && (!currentSellOrder || currentSellOrder.status !== 'MATCHED')) {
-                        const quarterWinner = marketInfo.getQuarterWinner(clock.now());
-                        const isUpToken = currentBuyOrder.tokenId.includes('UP');
-                        const won = (quarterWinner === 'UP' && isUpToken) || (quarterWinner === 'DOWN' && !isUpToken);
-
-                        trades.push({
-                            timestamp: clock.now(),
-                            botName: name,
-                            side: Side.BUY,
-                            tokenId: currentBuyOrder.tokenId,
-                            price: 0,
-                            amount: currentBuyOrder.amount,
-                            status: 'EXPIRED',
-                            pnl: won ? currentBuyOrder.amount : 0,
-                        });
-                    }
-                    resetState();
-                }
-
-            } catch {
-                // Price data not available
             }
+
+            if (currentSellOrder?.status === 'PENDING' && await checkOrderFill(currentSellOrder)) {
+                currentSellOrder.status = 'MATCHED';
+                currentSellOrder.pnl = currentSellOrder.price * currentSellOrder.amount;
+            }
+
+            // Handle cutoff
+            if (isAfterCutoff(clock, targetedMarket, cutoffMinute) && state !== 'POSITION_OPEN') {
+                if (currentBuyOrder?.status === 'PENDING') currentBuyOrder.status = 'CANCELED';
+                state = 'PAST_CUTOFF';
+                return;
+            }
+
+            if (state === 'PAST_CUTOFF') return;
+
+            // Calculate indicators
+            const indicators = calculateIndicators();
+            if (!indicators) {
+                state = 'WAITING_DATA';
+                return;
+            }
+
+            const { shortMa, longMa, adx, atr, currentPrice, high: donchianHigh, low: donchianLow } = indicators;
+
+            // Handle POSITION_OPEN state - monitor for ATR-based stop-loss
+            if (state === 'POSITION_OPEN') {
+                if (entryPrice !== null && atr > 0) {
+                    const stopDistance = atr * atrStopMultiple;
+                    const priceAgainstPosition = tradeDirection === 'UP'
+                        ? currentPrice < entryPrice - stopDistance
+                        : currentPrice > entryPrice + stopDistance;
+                    const trendReversed = tradeDirection === 'UP'
+                        ? shortMa < longMa
+                        : shortMa > longMa;
+
+                    if (priceAgainstPosition && trendReversed && currentBuyOrder?.status === 'PENDING') {
+                        currentBuyOrder.status = 'CANCELED';
+                        state = 'PAST_CUTOFF';
+                    }
+                }
+
+                previousShortMa = shortMa;
+                previousLongMa = longMa;
+                return;
+            }
+
+            if (state === 'WAITING_DATA') {
+                state = 'MONITORING';
+                previousShortMa = shortMa;
+                previousLongMa = longMa;
+                return;
+            }
+
+            // Check for entry signals
+            const signal = detectCrossover(shortMa, longMa);
+            const trendStrong = adx >= adxThreshold;
+
+            let shouldEnter = false;
+            let direction: 'UP' | 'DOWN' | null = null;
+
+            // MA Crossover signals
+            if (signal === 'GOLDEN_CROSS' && trendStrong) {
+                shouldEnter = true;
+                direction = 'UP';
+            } else if (signal === 'DEATH_CROSS' && trendStrong) {
+                shouldEnter = true;
+                direction = 'DOWN';
+            }
+
+            // Donchian breakout signals
+            if (!shouldEnter && trendStrong) {
+                if (currentPrice >= donchianHigh && shortMa > longMa) {
+                    shouldEnter = true;
+                    direction = 'UP';
+                } else if (currentPrice <= donchianLow && shortMa < longMa) {
+                    shouldEnter = true;
+                    direction = 'DOWN';
+                }
+            }
+
+            // Enter trade
+            if (shouldEnter && direction && !currentBuyOrder) {
+                tradeDirection = direction;
+                entryPrice = currentPrice;
+                const liveData = await marketInfo.getLiveData(targetedMarket);
+                const tokenId = direction === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
+
+                currentBuyOrder = {
+                    timestamp: clock.now(),
+                    botName: name,
+                    side: Side.BUY,
+                    tokenId,
+                    price: targetBuyPrice,
+                    amount: targetSize,
+                    status: 'PENDING',
+                };
+                trades.push(currentBuyOrder);
+                state = 'POSITION_OPEN';
+            }
+
+            previousShortMa = shortMa;
+            previousLongMa = longMa;
         },
 
         async onHourChange() {
-            // Also reset on hour change for safety
+            // Settle at period end (called every 15 minutes for quarterly markets)
+            if (currentBuyOrder?.status === 'PENDING') currentBuyOrder.status = 'EXPIRED';
+            if (currentSellOrder?.status === 'PENDING') currentSellOrder.status = 'EXPIRED';
+
+            // Settle matched buy that wasn't sold
+            if (currentBuyOrder?.status === 'MATCHED' && (!currentSellOrder || currentSellOrder.status !== 'MATCHED')) {
+                const quarterWinner = marketInfo.getQuarterWinner(clock.now() - 60 * 1000);
+                const isUpToken = currentBuyOrder.tokenId.includes('UP');
+                const won = (quarterWinner === 'UP' && isUpToken) || (quarterWinner === 'DOWN' && !isUpToken);
+
+                trades.push({
+                    timestamp: clock.now(),
+                    botName: name,
+                    side: Side.BUY,
+                    tokenId: currentBuyOrder.tokenId,
+                    price: 0,
+                    amount: currentBuyOrder.amount,
+                    status: 'EXPIRED',
+                    pnl: won ? currentBuyOrder.amount : 0,
+                });
+            }
             resetState();
         },
 
         getTrades() { return trades; },
-        reset() { trades.length = 0; resetState(); priceHistory.length = 0; },
+        reset() { trades.length = 0; resetState(); },
     };
 }
 
@@ -1879,7 +2879,7 @@ function createQuarterlyTrendFollowingBot(botParams: BotParams): SimulatedBot {
  * stop-loss based on candle range, multiple trades per hour support
  */
 function createNCandleBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params } = botParams;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket } = botParams;
 
     // Parameters
     const candleMinutes = (params.candleMinutes as number) ?? 10;
@@ -1951,7 +2951,7 @@ function createNCandleBot(botParams: BotParams): SimulatedBot {
     };
 
     const checkOrderFill = async (order: SimulatedTrade): Promise<boolean> => {
-        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side);
+        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side, targetedMarket);
         if (order.side === Side.BUY && currentPrice <= order.price) return true;
         if (order.side === Side.SELL && currentPrice >= order.price) return true;
         return false;
@@ -2013,9 +3013,9 @@ function createNCandleBot(botParams: BotParams): SimulatedBot {
 
                     // Create sell order with dynamic pricing
                     if (!currentSellOrder && breakoutDirection && actualBuyPrice) {
-                        const liveData = await marketInfo.getLiveData();
+                        const liveData = await marketInfo.getLiveData(targetedMarket);
                         const tokenId = breakoutDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
-                        const currentBidPrice = await marketInfo.getPrice(tokenId, Side.SELL);
+                        const currentBidPrice = await marketInfo.getPrice(tokenId, Side.SELL, targetedMarket);
 
                         const marketSellPrice = Math.round((currentBidPrice - sellPriceBuffer) * 100) / 100;
                         const minSellPrice = Math.round((actualBuyPrice + minProfitMargin) * 100) / 100;
@@ -2037,9 +3037,9 @@ function createNCandleBot(botParams: BotParams): SimulatedBot {
 
             // Check stop-loss if buy matched but sell pending
             if (currentBuyOrder?.status === 'MATCHED' && currentSellOrder?.status === 'PENDING' && stopLossPrice && breakoutDirection) {
-                const liveData = await marketInfo.getLiveData();
+                const liveData = await marketInfo.getLiveData(targetedMarket);
                 const tokenId = breakoutDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
-                const currentBidPrice = await marketInfo.getPrice(tokenId, Side.SELL);
+                const currentBidPrice = await marketInfo.getPrice(tokenId, Side.SELL, targetedMarket);
 
                 if (currentBidPrice <= stopLossPrice) {
                     // Stop-loss triggered - update sell order to emergency price
@@ -2068,7 +3068,7 @@ function createNCandleBot(botParams: BotParams): SimulatedBot {
             }
 
             // Handle cutoff
-            if (minute >= cutoffMinute && state !== 'TRADE_ACTIVE') {
+            if (isAfterCutoff(clock, targetedMarket, cutoffMinute) && state !== 'TRADE_ACTIVE') {
                 if (currentBuyOrder?.status === 'PENDING') {
                     currentBuyOrder.status = 'CANCELED';
                 }
@@ -2122,9 +3122,9 @@ function createNCandleBot(botParams: BotParams): SimulatedBot {
                     }
 
                     if (isPullbackConfirmed) {
-                        const liveData = await marketInfo.getLiveData();
+                        const liveData = await marketInfo.getLiveData(targetedMarket);
                         const tokenId = breakoutDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
-                        const currentAskPrice = await marketInfo.getPrice(tokenId, Side.BUY);
+                        const currentAskPrice = await marketInfo.getPrice(tokenId, Side.BUY, targetedMarket);
 
                         const dynamicBuyPrice = Math.round((currentAskPrice + buyPriceBuffer) * 100) / 100;
                         actualBuyPrice = dynamicBuyPrice;
@@ -2192,22 +3192,30 @@ function createNCandleBot(botParams: BotParams): SimulatedBot {
  * stop-loss based on candle range, multiple trades per period support
  */
 function createQuarterlyNCandleBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params } = botParams;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket } = botParams;
 
     // Parameters adjusted for 15-minute periods
     const candleMinutes = (params.candleMinutes as number) ?? 3;
-    const breakoutBuffer = (params.breakoutBuffer as number) ?? 30;
-    const pullbackBuffer = (params.pullbackBuffer as number) ?? 50;
+    const rawBreakoutBuffer = (params.breakoutBuffer as number) ?? 50;
+    const rawPullbackBuffer = (params.pullbackBuffer as number) ?? 100;
     const buyPriceBuffer = (params.buyPriceBuffer as number) ?? 0.02;
     const sellPriceBuffer = (params.sellPriceBuffer as number) ?? 0.02;
     const minProfitMargin = (params.minProfitMargin as number) ?? 0.05;
     const stopLossMultiplier = (params.stopLossMultiplier as number) ?? 1.5;
     const targetSize = (params.targetSize as number) ?? 10;
-    const cutoffMinute = (params.cutoffMinute as number) ?? 10;  // Within 15-min period
+    const rawCutoffMinute = (params.cutoffMinute as number) ?? 10;
     const maxTradesPerPeriod = (params.maxTradesPerPeriod as number) ?? 2;
     const maxSellPrice = 0.95;
 
     const PERIOD_MINUTES = 15;
+
+    // Runtime constraints to ensure valid trading conditions:
+    // 1. cutoffMinute must be > candleMinutes + 3 (time for breakout/pullback pattern)
+    const minCutoff = candleMinutes + 4;
+    const cutoffMinute = Math.max(rawCutoffMinute, minCutoff);
+    // 2. pullbackBuffer must be >= breakoutBuffer for pullback to be confirmable at breakout
+    const breakoutBuffer = rawBreakoutBuffer;
+    const pullbackBuffer = Math.max(rawPullbackBuffer, rawBreakoutBuffer);
 
     type TradingState = 'FORMING_CANDLE' | 'WAITING_BREAKOUT' | 'WAITING_PULLBACK' | 'TRADE_ACTIVE' | 'PAST_CUTOFF';
 
@@ -2274,7 +3282,7 @@ function createQuarterlyNCandleBot(botParams: BotParams): SimulatedBot {
     };
 
     const checkOrderFill = async (order: SimulatedTrade): Promise<boolean> => {
-        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side, TargetedMarket.BITCOIN_QUARTERLY);
+        const currentPrice = await marketInfo.getPrice(order.tokenId, order.side, targetedMarket);
         if (order.side === Side.BUY && currentPrice <= order.price) return true;
         if (order.side === Side.SELL && currentPrice >= order.price) return true;
         return false;
@@ -2289,11 +3297,10 @@ function createQuarterlyNCandleBot(botParams: BotParams): SimulatedBot {
                 currentCandle.close = btcPrice;
                 candleRange = currentCandle.high - currentCandle.low;
 
-                if (state === 'WAITING_BREAKOUT' || state === 'WAITING_PULLBACK') {
-                    state = 'FORMING_CANDLE';
-                    breakoutDirection = null;
-                    breakoutConfirmedPrice = null;
-                }
+                // For quarterly markets, DON'T reset state on new candles
+                // Allow breakout/pullback patterns to span multiple candles
+                // since the 15-minute period is too short for patterns to
+                // develop within a single candle window
             }
 
             currentCandle = {
@@ -2328,7 +3335,7 @@ function createQuarterlyNCandleBot(botParams: BotParams): SimulatedBot {
 
                 // Settle matched buy that wasn't sold
                 if (currentBuyOrder?.status === 'MATCHED' && (!currentSellOrder || currentSellOrder.status !== 'MATCHED')) {
-                    const quarterWinner = marketInfo.getQuarterWinner(clock.now() - 5 * 60 * 1000);
+                    const quarterWinner = marketInfo.getQuarterWinner(clock.now() - 60 * 1000);
                     const isUpToken = currentBuyOrder.tokenId.startsWith('UP-');
                     const won = (quarterWinner === 'UP' && isUpToken) || (quarterWinner === 'DOWN' && !isUpToken);
 
@@ -2363,9 +3370,9 @@ function createQuarterlyNCandleBot(botParams: BotParams): SimulatedBot {
 
                         // Create sell order with dynamic pricing
                         if (!currentSellOrder && breakoutDirection && actualBuyPrice) {
-                            const liveData = await marketInfo.getLiveData(TargetedMarket.BITCOIN_QUARTERLY);
+                            const liveData = await marketInfo.getLiveData(targetedMarket);
                             const tokenId = breakoutDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
-                            const currentBidPrice = await marketInfo.getPrice(tokenId, Side.SELL, TargetedMarket.BITCOIN_QUARTERLY);
+                            const currentBidPrice = await marketInfo.getPrice(tokenId, Side.SELL, targetedMarket);
 
                             const marketSellPrice = Math.round((currentBidPrice - sellPriceBuffer) * 100) / 100;
                             const minSellPrice = Math.round((actualBuyPrice + minProfitMargin) * 100) / 100;
@@ -2387,9 +3394,9 @@ function createQuarterlyNCandleBot(botParams: BotParams): SimulatedBot {
 
                 // Check stop-loss
                 if (currentBuyOrder?.status === 'MATCHED' && currentSellOrder?.status === 'PENDING' && stopLossPrice && breakoutDirection) {
-                    const liveData = await marketInfo.getLiveData(TargetedMarket.BITCOIN_QUARTERLY);
+                    const liveData = await marketInfo.getLiveData(targetedMarket);
                     const tokenId = breakoutDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
-                    const currentBidPrice = await marketInfo.getPrice(tokenId, Side.SELL, TargetedMarket.BITCOIN_QUARTERLY);
+                    const currentBidPrice = await marketInfo.getPrice(tokenId, Side.SELL, targetedMarket);
 
                     if (currentBidPrice <= stopLossPrice) {
                         currentSellOrder.price = Math.max(0.01, currentBidPrice - 0.02);
@@ -2417,7 +3424,7 @@ function createQuarterlyNCandleBot(botParams: BotParams): SimulatedBot {
                 }
 
                 // Handle cutoff
-                if (minuteInPeriod >= cutoffMinute && state !== 'TRADE_ACTIVE') {
+                if (isAfterCutoff(clock, targetedMarket, cutoffMinute) && state !== 'TRADE_ACTIVE') {
                     if (currentBuyOrder?.status === 'PENDING') {
                         currentBuyOrder.status = 'CANCELED';
                     }
@@ -2471,9 +3478,9 @@ function createQuarterlyNCandleBot(botParams: BotParams): SimulatedBot {
                         }
 
                         if (isPullbackConfirmed) {
-                            const liveData = await marketInfo.getLiveData(TargetedMarket.BITCOIN_QUARTERLY);
+                            const liveData = await marketInfo.getLiveData(targetedMarket);
                             const tokenId = breakoutDirection === 'UP' ? liveData.BtcUpTokenId : liveData.BtcDownTokenId;
-                            const currentAskPrice = await marketInfo.getPrice(tokenId, Side.BUY, TargetedMarket.BITCOIN_QUARTERLY);
+                            const currentAskPrice = await marketInfo.getPrice(tokenId, Side.BUY, targetedMarket);
 
                             const dynamicBuyPrice = Math.round((currentAskPrice + buyPriceBuffer) * 100) / 100;
                             actualBuyPrice = dynamicBuyPrice;
@@ -2501,7 +3508,28 @@ function createQuarterlyNCandleBot(botParams: BotParams): SimulatedBot {
         },
 
         async onHourChange() {
-            // Quarterly markets reset every 15 minutes, handled by period tracking in onTick
+            // Settle at period end (called every 15 minutes for quarterly markets)
+            if (currentBuyOrder?.status === 'PENDING') currentBuyOrder.status = 'EXPIRED';
+            if (currentSellOrder?.status === 'PENDING') currentSellOrder.status = 'EXPIRED';
+
+            // Settle matched buy that wasn't sold
+            if (currentBuyOrder?.status === 'MATCHED' && (!currentSellOrder || currentSellOrder.status !== 'MATCHED')) {
+                const quarterWinner = marketInfo.getQuarterWinner(clock.now() - 60 * 1000);
+                const isUpToken = currentBuyOrder.tokenId.includes('UP');
+                const won = (quarterWinner === 'UP' && isUpToken) || (quarterWinner === 'DOWN' && !isUpToken);
+
+                trades.push({
+                    timestamp: clock.now(),
+                    botName: name,
+                    side: Side.BUY,
+                    tokenId: currentBuyOrder.tokenId,
+                    price: 0,
+                    amount: currentBuyOrder.amount,
+                    status: 'EXPIRED',
+                    pnl: won ? currentBuyOrder.amount : 0,
+                });
+            }
+            resetState();
         },
 
         getTrades() {
@@ -2749,6 +3777,8 @@ const trendFollowingBounds: ParameterBounds = {
     longMaPeriod: { min: 4, max: 60, step: 1 },
     adxPeriod: { min: 2, max: 50, step: 1 },
     adxThreshold: { min: 7, max: 80 },
+    atrPeriod: { min: 5, max: 30, step: 1 },
+    atrStopMultiple: { min: 1.0, max: 4.0 },
     targetBuyPrice: { min: 0.05, max: 0.95 },
     targetSellPrice: { min: 0.05, max: 0.95 },
     cutoffMinute: { min: 10, max: 50, step: 5 },
@@ -2757,8 +3787,8 @@ const trendFollowingBounds: ParameterBounds = {
 const firstCandleBounds: ParameterBounds = {
     targetSize: { min: 5, max: 20, step: 1 },
     candleMinutes: { min: 5, max: 30, step: 2 },
-    breakoutBuffer: { min: 10, max: 300 },
-    pullbackBuffer: { min: 10, max: 400 },
+    breakoutBuffer: { min: 0, max: 1000 },
+    pullbackBuffer: { min: 0, max: 1000 },
     targetBuyPrice: { min: 0.05, max: 0.95 },
     targetSellPrice: { min: 0.05, max: 0.95 },
     cutoffMinute: { min: 5, max: 55, step: 5 },
@@ -2768,7 +3798,7 @@ const firstCandleV2Bounds: ParameterBounds = {
     targetSize: { min: 5, max: 20, step: 1 },
     candleMinutes: { min: 5, max: 30, step: 2 },
     breakoutBuffer: { min: 10, max: 300 },
-    pullbackBuffer: { min: 5, max: 400 },
+    pullbackBuffer: { min: 0, max: 1000 },
     buyPriceBuffer: { min: 0.01, max: 0.90 },
     sellPriceBuffer: { min: 0.01, max: 0.90 },
     minProfitMargin: { min: 0.01, max: 0.90 },
@@ -2810,13 +3840,13 @@ const meanReversionBounds: ParameterBounds = {
 const nCandleBounds: ParameterBounds = {
     targetSize: { min: 5, max: 20, step: 1 },
     candleMinutes: { min: 3, max: 20, step: 1 },
-    breakoutBuffer: { min: 20, max: 200 },
-    pullbackBuffer: { min: 20, max: 250 },
+    breakoutBuffer: { min: 0, max: 200 },
+    pullbackBuffer: { min: 0, max: 250 },
     buyPriceBuffer: { min: 0.01, max: 0.10 },
     sellPriceBuffer: { min: 0.01, max: 0.10 },
     minProfitMargin: { min: 0.02, max: 0.15 },
     stopLossMultiplier: { min: 0.5, max: 3.0 },
-    cutoffMinute: { min: 30, max: 55, step: 5 },
+    cutoffMinute: { min: 10, max: 55, step: 5 },
     maxTradesPerHour: { min: 1, max: 5, step: 1 },
 };
 
@@ -2826,9 +3856,9 @@ const nCandleBounds: ParameterBounds = {
 
 const quarterlyFirstCandleBounds: ParameterBounds = {
     targetSize: { min: 5, max: 20, step: 1 },
-    candleMinutes: { min: 1, max: 7, step: 1 },  // Smaller for 15-min period
-    breakoutBuffer: { min: 10, max: 150 },
-    pullbackBuffer: { min: 10, max: 200 },
+    candleMinutes: { min: 1, max: 12, step: 1 },  // Smaller for 15-min period
+    breakoutBuffer: { min: 0, max: 500 },
+    pullbackBuffer: { min: 0, max: 500 },
     targetBuyPrice: { min: 0.05, max: 0.95 },
     targetSellPrice: { min: 0.05, max: 0.95 },
     cutoffMinute: { min: 5, max: 13, step: 1 },  // Within 15-min period
@@ -2845,9 +3875,12 @@ const quarterlyMeanReversionBounds: ParameterBounds = {
 
 const quarterlyTrendFollowingBounds: ParameterBounds = {
     targetSize: { min: 5, max: 20, step: 1 },
-    shortMaPeriod: { min: 1, max: 10, step: 1 },
-    longMaPeriod: { min: 3, max: 20, step: 1 },
-    momentumThreshold: { min: 0.1, max: 2.0 },
+    shortMaPeriod: { min: 1, max: 8, step: 1 },
+    longMaPeriod: { min: 1, max: 20, step: 1 },
+    adxPeriod: { min: 1, max: 15, step: 1 },
+    adxThreshold: { min: 1, max: 50 },
+    atrPeriod: { min: 1, max: 15, step: 1 },
+    atrStopMultiple: { min: 1.0, max: 4.0 },
     targetBuyPrice: { min: 0.05, max: 0.95 },
     targetSellPrice: { min: 0.05, max: 0.95 },
     cutoffMinute: { min: 5, max: 13, step: 1 },
@@ -2855,15 +3888,65 @@ const quarterlyTrendFollowingBounds: ParameterBounds = {
 
 const quarterlyNCandleBounds: ParameterBounds = {
     targetSize: { min: 5, max: 20, step: 1 },
-    candleMinutes: { min: 1, max: 5, step: 1 },  // Smaller candles for 15-min period
-    breakoutBuffer: { min: 10, max: 100 },
-    pullbackBuffer: { min: 10, max: 100 },
-    buyPriceBuffer: { min: 0.01, max: 0.08 },
-    sellPriceBuffer: { min: 0.01, max: 0.08 },
-    minProfitMargin: { min: 0.02, max: 0.10 },
-    stopLossMultiplier: { min: 0.5, max: 2.5 },
-    cutoffMinute: { min: 5, max: 12, step: 1 },  // Within 15-min period
+    candleMinutes: { min: 1, max: 4, step: 1 },  // Short candles (1-4 min) to leave time for breakout/pullback
+    breakoutBuffer: { min: 20, max: 150 },       // BTC price movement in $ to confirm breakout
+    pullbackBuffer: { min: 50, max: 200 },       // Must be >= breakoutBuffer for pattern to work
+    buyPriceBuffer: { min: 0.01, max: 0.05 },
+    sellPriceBuffer: { min: 0.01, max: 0.05 },
+    minProfitMargin: { min: 0.02, max: 0.08 },
+    stopLossMultiplier: { min: 0.5, max: 2.0 },
+    cutoffMinute: { min: 8, max: 13, step: 1 },  // Leave time after candle forms (min 8 ensures candle + pattern time)
+    maxTradesPerPeriod: { min: 1, max: 2, step: 1 },
+};
+
+const earlyBuyerV2Bounds: ParameterBounds = {
+    targetBuyPrice: { min: 0.40, max: 0.55 },    // Target buying below fair value
+    targetSellPrice: { min: 0.55, max: 0.75 },   // Target selling above fair value
+    targetSize: { min: 5, max: 25, step: 1 },
+    cutoffMinute: { min: 15, max: 45, step: 1 }, // For hourly markets, how late to enter
+    minFlops: { min: 1, max: 6 },                // Minimum market volatility to trade
+    flopsLookbackHours: { min: 2, max: 12, step: 1 },  // Hours of flops data to average
+    btcDirection: { min: 0, max: 1, step: 1 },   // 0 = DOWN, 1 = UP (will be converted to string)
+};
+
+const quarterlyEarlyBuyerV2Bounds: ParameterBounds = {
+    targetBuyPrice: { min: 0.05, max: 0.95 },    // Target buying below fair value
+    targetSellPrice: { min: 0.05, max: 0.95 },   // Target selling above fair value
+    targetSize: { min: 5, max: 25, step: 1 },
+    cutoffMinute: { min: 4, max: 12, step: 1 },  // Within 15-min period
+    minFlops: { min: 1, max: 10 },                // Minimum market volatility to trade
+    flopsLookbackHours: { min: 2, max: 12, step: 1 },  // Hours of flops data to average
+    btcDirection: { min: 0, max: 1, step: 1 },   // 0 = DOWN, 1 = UP (will be converted to string)
+};
+
+const esotericNormalizationBounds: ParameterBounds = {
+    // Distribution shape parameters
+    baseStdDev: { min: 0, max: 300 },              // Initial std dev in $ at period start
+    minStdDevRatio: { min: 0.1, max: 0.5 },         // Min std dev as ratio of base at period end
+    timeDecayPower: { min: 0.5, max: 3.0 },         // How fast std dev shrinks (higher = faster)
+    priceScaleMultiplier: { min: 0.5, max: 2.0 },   // Multiplier for price sensitivity
+    priceScaleConstant: { min: -50, max: 50 },      // Constant offset for price calc
+    // Trading parameters
+    purchaseThreshold: { min: 0.04, max: 0.15 },    // Min diff to trigger buy
+    sellPremium: { min: 0.02, max: 0.10 },          // Sell this much above expected
+    targetSize: { min: 5, max: 25, step: 1 },
+    cutoffMinute: { min: 30, max: 50, step: 1 },    // For hourly markets
     maxTradesPerPeriod: { min: 1, max: 3, step: 1 },
+};
+
+const quarterlyEsotericNormalizationBounds: ParameterBounds = {
+    // Distribution shape parameters (adjusted for 15-min period)
+    baseStdDev: { min: 0, max: 150 },              // Smaller for shorter period
+    minStdDevRatio: { min: 0.1, max: 0.5 },
+    timeDecayPower: { min: 0.5, max: 3.0 },
+    priceScaleMultiplier: { min: 0.5, max: 2.0 },
+    priceScaleConstant: { min: -25, max: 25 },
+    // Trading parameters
+    purchaseThreshold: { min: 0.04, max: 0.15 },
+    sellPremium: { min: 0.02, max: 0.10 },
+    targetSize: { min: 5, max: 25, step: 1 },
+    cutoffMinute: { min: 5, max: 12, step: 1 },     // Within 15-min period
+    maxTradesPerPeriod: { min: 1, max: 2, step: 1 },
 };
 
 const geneticStrategies = [
@@ -2880,6 +3963,12 @@ const geneticStrategies = [
     { name: 'QuarterlyMeanReversion', factory: createQuarterlyMeanReversionBot, bounds: quarterlyMeanReversionBounds },
     { name: 'QuarterlyTrendFollowing', factory: createQuarterlyTrendFollowingBot, bounds: quarterlyTrendFollowingBounds },
     { name: 'QuarterlyNCandle', factory: createQuarterlyNCandleBot, bounds: quarterlyNCandleBounds },
+    { name: 'QuarterlyEarlyBuyerV2', factory: createQuarterlyEarlyBuyerV2Bot, bounds: quarterlyEarlyBuyerV2Bounds },
+    { name: 'QuarterlyEsotericNormalization', factory: createQuarterlyEsotericNormalizationBot, bounds: quarterlyEsotericNormalizationBounds },
+    // Flops-based Strategies (Hourly)
+    { name: 'EarlyBuyerV2', factory: createEarlyBuyerV2Bot, bounds: earlyBuyerV2Bounds },
+    // Normal Distribution Strategies
+    { name: 'EsotericNormalization', factory: createEsotericNormalizationBot, bounds: esotericNormalizationBounds },
 ];
 
 // ============================================================================
@@ -2896,6 +3985,8 @@ async function main() {
     let populationSize = 15;
     let strategyFilter: string | null = null;
     let coinType: CoinType = CoinType.BTC;
+    let auditTradesCount = 0; // Number of top trades to audit (0 = disabled)
+    let targetedMarket: TargetedMarket = TargetedMarket.BITCOIN_HOURLY;
 
     for (let i = 0; i < args.length; i++) {
         switch (args[i]) {
@@ -2925,16 +4016,48 @@ async function main() {
                 break;
             case '--coin':
             case '-c':
-                const coinArg = (args[i + 1] || '').toLowerCase();
-                if (coinArg === 'btc') coinType = CoinType.BTC;
-                else if (coinArg === 'eth') coinType = CoinType.ETH;
-                else if (coinArg === 'sol') coinType = CoinType.SOL;
-                else if (coinArg === 'xrp') coinType = CoinType.XRP;
-                else {
-                    console.error(`Invalid coin type: ${args[i + 1]}. Valid options: btc, eth, sol, xrp`);
-                    process.exit(1);
+                {
+                    const coinArg = (args[i + 1] || '').toLowerCase();
+                    if (coinArg === 'btc') coinType = CoinType.BTC;
+                    else if (coinArg === 'eth') coinType = CoinType.ETH;
+                    else if (coinArg === 'sol') coinType = CoinType.SOL;
+                    else if (coinArg === 'xrp') coinType = CoinType.XRP;
+                    else {
+                        console.error(`Invalid coin type: ${args[i + 1]}. Valid options: btc, eth, sol, xrp`);
+                        process.exit(1);
+                    }
+                    break;
                 }
+            case '--audit-trades':
+            case '-a':
+                auditTradesCount = parseInt(args[i + 1]) || 10;
                 break;
+            case '--market':
+            case '-M':
+                {
+                    const marketArg = (args[i + 1] || '').toLowerCase();
+                    if (marketArg === 'btc-hourly' || marketArg === 'bitcoin-hourly') {
+                        targetedMarket = TargetedMarket.BITCOIN_HOURLY;
+                    } else if (marketArg === 'btc-quarterly' || marketArg === 'bitcoin-quarterly') {
+                        targetedMarket = TargetedMarket.BITCOIN_QUARTERLY;
+                    } else if (marketArg === 'eth-hourly' || marketArg === 'ethereum-hourly') {
+                        targetedMarket = TargetedMarket.ETHEREUM_HOURLY;
+                    } else if (marketArg === 'eth-quarterly' || marketArg === 'ethereum-quarterly') {
+                        targetedMarket = TargetedMarket.ETHEREUM_QUARTERLY;
+                    } else if (marketArg === 'sol-quarterly' || marketArg === 'solana-quarterly') {
+                        targetedMarket = TargetedMarket.SOLANA_QUARTERLY;
+                    } else if (marketArg === 'solana-hourly' || marketArg === 'sol-hourly') {
+                        targetedMarket = TargetedMarket.SOLANA_HOURLY
+                    } else if (marketArg === 'xrp-hourly') {
+                        targetedMarket = TargetedMarket.XRP_HOURLY;
+                    } else if (marketArg === 'xrp-quarterly') {
+                        targetedMarket = TargetedMarket.XRP_QUARTERLY;
+                    } else {
+                        console.error(`Invalid market: ${args[i + 1]}. Valid options: btc-hourly, btc-quarterly, eth-hourly, eth-quarterly, sol-quarterly,  sol-hourly, xrp-hourly, xrp-quarterly`);
+                        process.exit(1);
+                    }
+                    break;
+                }
             case '--help':
             case '-h':
                 printHelp();
@@ -2950,6 +4073,8 @@ async function main() {
         lookbackDays,
         tickIntervalMs: 60 * 1000,
         coinType,
+        auditTradesCount,
+        targetedMarket,
     });
 
     if (useGenetic) {
@@ -2981,7 +4106,7 @@ async function main() {
         let strategies = geneticStrategies;
         if (strategyFilter) {
             strategies = geneticStrategies.filter(s =>
-                s.name.toLowerCase().includes(strategyFilter!.toLowerCase())
+                s.name.toLowerCase() == strategyFilter!.toLowerCase()
             );
             if (strategies.length === 0) {
                 logger.error(`\nNo strategies matching '${strategyFilter}' found.`);
@@ -3032,20 +4157,22 @@ Usage: npm run histSim -- [options]
 Options:
   -d, --days <n>        Lookback days for simulation (default: 7)
   -c, --coin <type>     Coin type to simulate: btc, eth, sol, xrp (default: btc)
+  -M, --market <type>   Target market: btc-hourly, btc-quarterly, eth-hourly, eth-quarterly (default: btc-hourly)
   -g, --genetic         Use genetic algorithm optimization instead of parameter sweep
   -m, --max-gen <n>     Maximum generations for genetic optimization (default: 50)
   -t, --threshold <n>   Convergence threshold - stop if improvement < n (default: 1.0)
   -p, --population <n>  Population size per generation (default: 15)
   -s, --strategy <name> Only optimize specific strategy (e.g., "FirstCandle", "QuarterlyFirstCandle")
+  -a, --audit-trades <n> Write top N and avg trades with parameters to audit file (default: 10 when enabled)
   -h, --help            Show this help message
 
 Available Strategies:
   Hourly Markets (60-min periods):
     Contrarian, TrendFollowing, FirstCandle, FirstCandleV2,
-    EveningStar, MorningStar, MeanReversion
+    EveningStar, MorningStar, MeanReversion, EarlyBuyerV2,
 
   Quarterly Markets (15-min periods):
-    QuarterlyFirstCandle, QuarterlyMeanReversion, QuarterlyTrendFollowing
+    QuarterlyFirstCandle, QuarterlyMeanReversion, QuarterlyTrendFollowing, QuarterlyEarlyBuyerV2
 
 Examples:
   npm run histSim -- --days 14

@@ -85,6 +85,7 @@ export interface TradeOrderProps {
     clobTokenId: string;
     status: TradeStatus;
     side: Side;
+    isAudited?: boolean;
 }
 
 // ============================================================================

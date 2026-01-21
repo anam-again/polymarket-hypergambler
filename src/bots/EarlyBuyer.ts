@@ -1,7 +1,7 @@
 import { Side } from "@polymarket/clob-client";
 
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
-import { BtcDirection } from "../types/interfaces.js";
+import { BtcDirection, MarketSchedule } from "../types/interfaces.js";
 
 interface EarlyBuyerProps extends QuantBotProps {
     targetBuyPrice: number;
@@ -73,7 +73,7 @@ export class EarlyBuyer extends QuantBot implements QuantBotRun {
     private startTradingLoop(): void {
         this.tickWrapper(1000 * 5, 1000 * 2, async () => {
             await this.updateOrders();
-            
+
             if (this.isPastCutoff) {
                 return;
             }
@@ -147,7 +147,11 @@ export class EarlyBuyer extends QuantBot implements QuantBotRun {
 
     private isAfterCutoff(): boolean {
         const currentMinute = this.clock.getMinutes();
-        return currentMinute >= this.cutoffMinute;
+        if (this.marketSchedule === MarketSchedule.QUARTERLY) {
+            return currentMinute % 15 >= this.cutoffMinute;
+        } else {
+            return currentMinute >= this.cutoffMinute;
+        }
     }
 
     private async handleCutoff(): Promise<void> {

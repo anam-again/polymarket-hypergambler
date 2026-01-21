@@ -46,7 +46,8 @@ npm run histSim -- --genetic --days 7
 npm run histSim -- -g -s FirstCandle -p 200 -m 100 -c sol
 
 # Quarterly market strategies
-npm run histSim -- -g -s QuarterlyFirstCandle -p 200 -m 100 -c btc -d 1
+npm run histSim -- -g -s QuarterlyFirstCandle -p 200 -m 100 -d 10 -a 10 -c btc
+npm run histSim -- -g -s QuarterlyFirstCandle -M eth-quarterly -c eth -p 75  -m 20 -d 20
 ```
 
 ### CLI Options
@@ -59,15 +60,25 @@ npm run histSim -- -g -s QuarterlyFirstCandle -p 200 -m 100 -c btc -d 1
 | `-p, --population` | Population size                | 15      |
 | `-s, --strategy`   | Filter to specific strategy    | all     |
 | `-c, --coin`       | Coin type (btc, eth, sol, xrp) | btc     |
+| `-c, --coin`       | Coin type (btc, eth, sol, xrp) | btc     |
+| `--audit-trades -a`| Avg/Best trades to audit       | 0/OFF   |
+| `--market  -m`     | Required with coins            | btc-ho..|
 
 ### Available Strategies
 
 **Hourly Markets (60-min periods):**
 - Contrarian, TrendFollowing, FirstCandle, FirstCandleV2
-- EveningStar, MorningStar, MeanReversion, NCandle
+- EveningStar, MorningStar, MeanReversion, NCandle, EsotericNormalization
 
 **Quarterly Markets (15-min periods):**
-- QuarterlyFirstCandle, QuarterlyMeanReversion, QuarterlyTrendFollowing, QuarterlyNCandle
+- QuarterlyFirstCandle, QuarterlyMeanReversion, QuarterlyTrendFollowing, QuarterlyNCandle, QuarterlyEsotericNormalization
+
+**Quarterly -m markets**
+Probably need to   be set with your  coin
+- btc-hourly, bitcoin-hourly
+- btc-quarterly, bitcoin-quarterly
+- eth-hourly, ethereum-hourly
+- eth-quarterly, ethereum-quarterly
 
 ### Output
 Simulation logs are saved to `./logs/simulator/` with timestamped filenames.

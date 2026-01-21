@@ -2,6 +2,7 @@ import { Side } from "@polymarket/clob-client";
 
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
 import { CDMarketData } from "../nonBots/CDMarketData.js";
+import { MarketSchedule } from "../types/interfaces.js";
 
 // ============================================================================
 // Types & Interfaces
@@ -239,12 +240,16 @@ export class NCandle extends QuantBot implements QuantBotRun {
             };
             this.lastCandleIndex = candleIndex;
 
-            // If we were waiting for breakout/pullback and candle changed,
-            // we can use the new candle
-            if (this.state === 'WAITING_BREAKOUT' || this.state === 'WAITING_PULLBACK') {
-                this.state = 'FORMING_CANDLE';
-                this.breakoutDirection = undefined;
-                this.breakoutConfirmedPrice = undefined;
+            // For HOURLY markets: reset state on new candles since there's plenty of time
+            // For QUARTERLY markets: DON'T reset state - allow breakout/pullback patterns
+            // to span multiple candles since the 15-minute period is too short for
+            // patterns to develop within a single candle window
+            if (this.marketSchedule === MarketSchedule.HOURLY) {
+                if (this.state === 'WAITING_BREAKOUT' || this.state === 'WAITING_PULLBACK') {
+                    this.state = 'FORMING_CANDLE';
+                    this.breakoutDirection = undefined;
+                    this.breakoutConfirmedPrice = undefined;
+                }
             }
         }
 
@@ -388,12 +393,14 @@ export class NCandle extends QuantBot implements QuantBotRun {
             Side.BUY
         );
 
-        this.state = 'TRADE_ACTIVE';
-        this.recordTrade();
+        if (this.buyOrder) {
+            this.state = 'TRADE_ACTIVE';
+            this.recordTrade();
 
-        this.buyOrder?.once('tradeMatched', () => {
-            this.createSellOrder();
-        });
+            this.buyOrder?.once('tradeMatched', () => {
+                this.createSellOrder();
+            });
+        }
     }
 
     private async createSellOrder(): Promise<void> {
@@ -559,7 +566,11 @@ export class NCandle extends QuantBot implements QuantBotRun {
 
     private isAfterCutoff(): boolean {
         const currentMinute = this.clock.getMinutes();
-        return currentMinute >= this.cutoffMinute;
+        if (this.marketSchedule === MarketSchedule.QUARTERLY) {
+            return currentMinute % 15 >= this.cutoffMinute;
+        } else {
+            return currentMinute >= this.cutoffMinute;
+        }
     }
 
     private async handleCutoff(): Promise<void> {

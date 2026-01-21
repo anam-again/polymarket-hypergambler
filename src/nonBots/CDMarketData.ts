@@ -77,12 +77,16 @@ enum LogPath {
 
 export class CDMarketData implements QuantBotRun {
 
+    // Todo typeremove these
+    public PROD_MODE = false;
+    public name = 'CDMarketData';
+
     // -------------------------------------------------------------------------
     // Constants
     // -------------------------------------------------------------------------
 
-    private static readonly PRICE_CACHE_TIMEOUT_MS = 1 * 29 * 1000;
-    private static readonly PRICE_UPDATE_INTERVAL_MS = 1 * 30 * 1000;
+    private static readonly PRICE_CACHE_TIMEOUT_MS = 1 * 15 * 1000;
+    private static readonly PRICE_UPDATE_INTERVAL_MS = 1 * 15 * 1000;
     private static readonly RETRY_ATTEMPTS = 5;
 
     private static readonly ERROR_LOG_PATH = './logs/market/CDMarketWriterError.log';
@@ -197,12 +201,16 @@ export class CDMarketData implements QuantBotRun {
     marketToSymbol(market: TargetedMarket): BinanceSymbol {
         switch (market) {
             case TargetedMarket.BITCOIN_HOURLY:
+            case TargetedMarket.BITCOIN_QUARTERLY:
                 return BinanceSymbol.BTCUSDT;
             case TargetedMarket.ETHEREUM_HOURLY:
+            case TargetedMarket.ETHEREUM_QUARTERLY:
                 return BinanceSymbol.ETHUSDT;
             case TargetedMarket.SOLANA_HOURLY:
+            case TargetedMarket.SOLANA_QUARTERLY:
                 return BinanceSymbol.SOLUSDT;
             case TargetedMarket.XRP_HOURLY:
+            case TargetedMarket.XRP_QUARTERLY:
                 return BinanceSymbol.XRPUSDT;
             default:
                 throw Error(`Unknown market supplied to marketToSymbol: ${market}`);
@@ -240,7 +248,7 @@ export class CDMarketData implements QuantBotRun {
         return averages?.averagePrice ?? null;
     }
 
-    public getRecentPrices(market: TargetedMarket,  n: number): RecentPriceEntry[] {
+    public getRecentPrices(market: TargetedMarket, n: number): RecentPriceEntry[] {
         const symbol = this.marketToSymbol(market);
         return this.readMinuteLogFile(n, symbol);
     }

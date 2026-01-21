@@ -5,9 +5,11 @@ import { MockMarketInfo } from './MockMarketInfo.js';
 import { analyzeWithRegression, LinearRegression, RegressionResult } from './LinearRegression.js';
 import { GeneticOptimizer, GeneticConfig, ParameterBounds, OptimizationResult, CoinType } from './GeneticOptimizer.js';
 import { SimulatorLogger } from './SimulatorLogger.js';
+import { TargetedMarket } from '../types/interfaces.js';
 
-// Re-export CoinType for convenience
+// Re-export CoinType and TargetedMarket for convenience
 export { CoinType } from './GeneticOptimizer.js';
+export { TargetedMarket } from '../types/interfaces.js';
 
 // ============================================================================
 // Types & Interfaces
@@ -17,6 +19,8 @@ export interface SimulationConfig {
     lookbackDays: number;
     tickIntervalMs?: number;  // Virtual time increment (default: 60000 = 1 minute)
     coinType?: CoinType;      // Coin type to simulate (default: BTC)
+    auditTradesCount?: number; // Number of top trades to write to audit (0 = disabled)
+    targetedMarket?: TargetedMarket; // Market to simulate (default: BITCOIN_HOURLY)
 }
 
 export interface BotConfig {
@@ -31,6 +35,7 @@ export interface BotParams {
     marketInfo: MockMarketInfo;
     cdMarketData: MockCDMarketData;
     params: Record<string, unknown>;
+    targetedMarket: TargetedMarket;
 }
 
 export interface SimulatedBot {
@@ -81,6 +86,8 @@ export class HistoricalSimulator {
             ...config,
             tickIntervalMs: config.tickIntervalMs ?? 60 * 1000,
             coinType: config.coinType ?? CoinType.BTC,
+            auditTradesCount: config.auditTradesCount ?? 0,
+            targetedMarket: config.targetedMarket ?? TargetedMarket.BITCOIN_HOURLY,
         };
         this.logger = new SimulatorLogger(`sim-${this.config.coinType}`);
     }
@@ -131,12 +138,22 @@ export class HistoricalSimulator {
             marketInfo: this.marketInfo,
             cdMarketData: this.cdMarketData,
             params,
+            targetedMarket: this.config.targetedMarket!,
         });
 
-        // Register hour change handler
-        this.clock.on('hourly', async () => {
-            await bot.onHourChange();
-        });
+        // Register period change handler based on market type
+        const isQuarterly = this.config.targetedMarket?.toString().includes('Quarterly');
+        if (isQuarterly) {
+            // For quarterly markets, reset every 15 minutes
+            this.clock.on('quarterly', async () => {
+                await bot.onHourChange();
+            });
+        } else {
+            // For hourly markets, reset every hour
+            this.clock.on('hourly', async () => {
+                await bot.onHourChange();
+            });
+        }
 
         // Run the simulation
         let tickCount = 0;
@@ -144,7 +161,7 @@ export class HistoricalSimulator {
 
         while (!this.clock.isComplete()) {
             await bot.onTick();
-            this.clock.tick();
+            await this.clock.tick();  // Now properly awaits period change handlers
             tickCount++;
 
             // Progress update every 1000 ticks
@@ -165,6 +182,12 @@ export class HistoricalSimulator {
         // Write trade audits
         this.logger.createAuditFile(botConfig.name);
         this.logger.writeSimulatedTradeAudits(botConfig.name, trades);
+
+        // Write top trades and average stats if enabled
+        if (this.config.auditTradesCount && this.config.auditTradesCount > 0) {
+            this.logger.writeTopTradesWithParams(trades, params, this.config.auditTradesCount);
+            this.logger.writeAverageTradeStats(trades, params);
+        }
 
         // Cleanup
         this.clock.clearListeners();
@@ -463,6 +486,13 @@ export class HistoricalSimulator {
         // Write trade audit file for the best individual
         const auditPath = this.logger.createAuditFile(botName, optimizer.getGeneration());
         this.logger.writeSimulatedTradeAudits(botName, bestTrades);
+
+        // Write top trades and average stats if enabled
+        const bestParams = optimizer.getResult().bestIndividual.params;
+        if (this.config.auditTradesCount && this.config.auditTradesCount > 0) {
+            this.logger.writeTopTradesWithParams(bestTrades, bestParams, this.config.auditTradesCount);
+            this.logger.writeAverageTradeStats(bestTrades, bestParams);
+        }
         this.logger.log(`\nTrade audit written to: ${auditPath}`);
 
         return optimizer.getResult();
@@ -498,17 +528,27 @@ export class HistoricalSimulator {
             marketInfo: this.marketInfo,
             cdMarketData: this.cdMarketData,
             params,
+            targetedMarket: this.config.targetedMarket!,
         });
 
-        // Register hour change handler
-        this.clock.on('hourly', async () => {
-            await bot.onHourChange();
-        });
+        // Register period change handler based on market type
+        const isQuarterly = this.config.targetedMarket?.toString().includes('Quarterly');
+        if (isQuarterly) {
+            // For quarterly markets, reset every 15 minutes
+            this.clock.on('quarterly', async () => {
+                await bot.onHourChange();
+            });
+        } else {
+            // For hourly markets, reset every hour
+            this.clock.on('hourly', async () => {
+                await bot.onHourChange();
+            });
+        }
 
         // Run the simulation
         while (!this.clock.isComplete()) {
             await bot.onTick();
-            this.clock.tick();
+            await this.clock.tick();  // Now properly awaits period change handlers
         }
 
         // Calculate results

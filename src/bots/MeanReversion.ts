@@ -2,6 +2,7 @@ import { Side } from "@polymarket/clob-client";
 
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
 import { CDMarketData } from "../nonBots/CDMarketData.js";
+import { MarketSchedule } from "../types/interfaces.js";
 
 // ============================================================================
 // Types & Interfaces
@@ -280,11 +281,13 @@ export class MeanReversion extends QuantBot implements QuantBotRun {
             Side.BUY
         );
 
-        this.state = 'POSITION_OPEN';
+        if (this.buyOrder) {
+            this.state = 'POSITION_OPEN';
 
-        this.buyOrder?.once('tradeMatched', () => {
-            this.createSellOrder();
-        });
+            this.buyOrder?.once('tradeMatched', () => {
+                this.createSellOrder();
+            });
+        }
     }
 
     private async createSellOrder(): Promise<void> {
@@ -326,7 +329,11 @@ export class MeanReversion extends QuantBot implements QuantBotRun {
 
     private isAfterCutoff(): boolean {
         const currentMinute = this.clock.getMinutes();
-        return currentMinute >= this.cutoffMinute;
+        if (this.marketSchedule === MarketSchedule.QUARTERLY) {
+            return currentMinute % 15 >= this.cutoffMinute;
+        } else {
+            return currentMinute >= this.cutoffMinute;
+        }
     }
 
     private async handleCutoff(): Promise<void> {

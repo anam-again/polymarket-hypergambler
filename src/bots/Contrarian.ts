@@ -152,16 +152,11 @@ export class Contrarian extends QuantBot implements QuantBotRun {
             }
 
             if (!this.sellOrder && this.buyOrder && this.buyOrder.status === TradeStatus.MATCHED) {
-                makeSellOrder();
+                await makeSellOrder();
             }
 
             if (this.isAfterCutoff()) {
-                this.trades.forEach((trade) => {
-                    if (trade.status === TradeStatus.LIVE && trade.side == Side.BUY) {
-                        this.cancelTrade(trade);
-                    }
-                })
-                this.doNothing = true;
+                await this.handleCutoff();
                 return;
             }
 
@@ -201,5 +196,22 @@ export class Contrarian extends QuantBot implements QuantBotRun {
                 })
             }
         });
+    }
+
+    // -------------------------------------------------------------------------
+    // Cutoff Handling
+    // -------------------------------------------------------------------------
+
+    private async handleCutoff(): Promise<void> {
+        this.doNothing = true;
+        await this.cancelLiveBuyOrders();
+    }
+
+    private async cancelLiveBuyOrders(): Promise<void> {
+        for (const trade of this.trades) {
+            if (trade.status === TradeStatus.LIVE && trade.side === Side.BUY) {
+                await this.cancelTrade(trade);
+            }
+        }
     }
 }

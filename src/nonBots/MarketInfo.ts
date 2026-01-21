@@ -38,10 +38,10 @@ enum LOG_DIR {
     ETHEREUM_HOURLY = './logs/pmarket-price/ethereum.log',
     SOLANA_HOURLY = './logs/pmarket-price/solana.log',
     XRP_HOURLY = './logs/pmarket-price/xrp.log',
-    BITCOIN_QUARTERLY = './logs/pmarket-price/btc-minutely.log',
-    ETHEREUM_QUARTERLY = './logs/pmarket-price/eth-minutely.log',
-    SOLANA_QUARTERLY = './logs/pmarket-price/sol-minutely.log',
-    XRP_QUARTERLY = './logs/pmarket-price/xrp-minutely.log',
+    BITCION_MINUTELY = './logs/pmarket-price/btc-minutely.log',
+    ETHEREUM_MINUTELY = './logs/pmarket-price/ethereum-minutely.log',
+    SOLANA_MINUTELY = './logs/pmarket-price/solana-minutely.log',
+    XRP_MINUTELY = './logs/pmarket-price/xrp-minutely.log',
 }
 
 export class MarketInfo {
@@ -404,13 +404,13 @@ export class MarketInfo {
             case TargetedMarket.XRP_HOURLY:
                 return LOG_DIR.XRP_HOURLY;
             case TargetedMarket.BITCOIN_QUARTERLY:
-                return LOG_DIR.BITCOIN_QUARTERLY
+                return LOG_DIR.BITCION_MINUTELY
             case TargetedMarket.ETHEREUM_QUARTERLY:
-                return LOG_DIR.ETHEREUM_QUARTERLY;
+                return LOG_DIR.ETHEREUM_MINUTELY;
             case TargetedMarket.SOLANA_QUARTERLY:
-                return LOG_DIR.SOLANA_QUARTERLY;
+                return LOG_DIR.SOLANA_MINUTELY;
             case TargetedMarket.XRP_QUARTERLY:
-                return LOG_DIR.XRP_QUARTERLY;
+                return LOG_DIR.XRP_MINUTELY;
             default:
                 throw Error(`Unknown market supplied to getLogFromMarket: ${targetedMarket}`)
         }

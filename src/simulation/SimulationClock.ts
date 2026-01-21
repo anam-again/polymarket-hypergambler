@@ -1,5 +1,8 @@
 import { IClock, ClockEventType } from '../types/interfaces.js';
 
+// Listener can be sync or async
+type ClockListener = () => void | Promise<void>;
+
 /**
  * SimulationClock manages virtual time for historical simulations.
  * It allows advancing time in configurable increments and provides
@@ -11,8 +14,11 @@ export class SimulationClock implements IClock {
     private readonly endTime: number;
     private readonly incrementMs: number;
 
-    private hourlyListeners: (() => void)[] = [];
-    private quarterlyListeners: (() => void)[] = [];
+    private hourlyListeners: ClockListener[] = [];
+    private quarterlyListeners: ClockListener[] = [];
+
+    // Track pending reset operations to prevent race conditions
+    private pendingReset: Promise<void> | null = null;
 
     constructor(startTime: number, endTime: number, incrementMs: number = 60 * 1000) {
         this.startTime = startTime;
@@ -46,8 +52,14 @@ export class SimulationClock implements IClock {
     /**
      * Advances the clock by one increment.
      * @returns true if time was advanced, false if end time reached.
+     * Note: This is now async to properly handle period change events.
      */
-    public tick(): boolean {
+    public async tick(): Promise<boolean> {
+        // Wait for any pending reset to complete before advancing time
+        if (this.pendingReset) {
+            await this.pendingReset;
+        }
+
         const previousDate = new Date(this.currentTime);
         const previousHour = previousDate.getHours();
         const previousQuarter = Math.floor(previousDate.getMinutes() / 15);
@@ -65,15 +77,25 @@ export class SimulationClock implements IClock {
 
         // Emit quarterly event (also triggers at hour boundaries)
         if (currentHour !== previousHour || currentQuarter !== previousQuarter) {
-            this.emitQuarterlyChange();
+            await this.emitQuarterlyChange();
         }
 
         // Emit hourly event
         if (currentHour !== previousHour) {
-            this.emitHourlyChange();
+            await this.emitHourlyChange();
         }
 
         return true;
+    }
+
+    /**
+     * Waits for any pending reset operation to complete.
+     * Call this before performing operations that shouldn't race with resets.
+     */
+    public async waitForPendingReset(): Promise<void> {
+        if (this.pendingReset) {
+            await this.pendingReset;
+        }
     }
 
     /**
@@ -108,8 +130,9 @@ export class SimulationClock implements IClock {
 
     /**
      * Register a callback for hourly or quarterly events.
+     * Callbacks can be sync or async - async callbacks will be awaited.
      */
-    public on(event: ClockEventType, callback: () => void): void {
+    public on(event: ClockEventType, callback: ClockListener): void {
         if (event === 'hourly') {
             this.hourlyListeners.push(callback);
         } else if (event === 'quarterly') {
@@ -120,7 +143,7 @@ export class SimulationClock implements IClock {
     /**
      * Unregister a callback.
      */
-    public off(event: ClockEventType, callback: () => void): void {
+    public off(event: ClockEventType, callback: ClockListener): void {
         if (event === 'hourly') {
             const index = this.hourlyListeners.indexOf(callback);
             if (index !== -1) {
@@ -142,16 +165,28 @@ export class SimulationClock implements IClock {
         this.quarterlyListeners = [];
     }
 
-    private emitHourlyChange(): void {
-        for (const listener of this.hourlyListeners) {
-            listener();
-        }
+    private async emitHourlyChange(): Promise<void> {
+        const resetPromise = (async () => {
+            for (const listener of this.hourlyListeners) {
+                await listener();
+            }
+        })();
+
+        this.pendingReset = resetPromise;
+        await resetPromise;
+        this.pendingReset = null;
     }
 
-    private emitQuarterlyChange(): void {
-        for (const listener of this.quarterlyListeners) {
-            listener();
-        }
+    private async emitQuarterlyChange(): Promise<void> {
+        const resetPromise = (async () => {
+            for (const listener of this.quarterlyListeners) {
+                await listener();
+            }
+        })();
+
+        this.pendingReset = resetPromise;
+        await resetPromise;
+        this.pendingReset = null;
     }
 
     /**

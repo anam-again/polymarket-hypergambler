@@ -5,7 +5,9 @@
       "Bash(powershell -Command:*)",
       "Bash(node -e:*)",
       "Bash(npx tsc:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)"
     ]
   }
 }

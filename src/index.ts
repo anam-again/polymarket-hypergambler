@@ -3,7 +3,7 @@ import { Credentials } from "./nonBots/Credentials.js";
 import { EarlyBuyer } from "./bots/EarlyBuyer.js";
 import { BtcDirection, TargetedMarket } from "./types/interfaces.js";
 import { MarketInfo } from "./nonBots/MarketInfo.js";
-import { QuantBotRun } from "./bots/QuantBot.js";
+import { OrderBatcher, QuantBotRun, runBotsWithRestartOnFailure } from "./bots/QuantBot.js";
 import { Contrarian } from "./bots/Contrarian.js";
 import { CDMarketData } from "./nonBots/CDMarketData.js";
 import { ContrarianV2 } from "./bots/ContrarianV2.js";
@@ -17,6 +17,10 @@ import { LogCleaner } from "./nonBots/LogCleaner.js";
 import { EveningStar } from "./bots/EveningStar.js";
 import { MorningStar } from "./bots/MorningStar.js";
 import { NCandle } from "./bots/NCandle.js";
+import { EsotericNormalization } from "./bots/EsotericNormalization.js";
+import { Redeemer } from "./nonBots/Redeemer.js";
+import { exit } from "process";
+import { checkIfBotsHaveMatchingNames, formatDuration, getMsUntilNextHour, targetMarketToShortname } from "./utils/utils.js";
 
 
 const credentials = new Credentials();
@@ -30,842 +34,213 @@ const commonProps = {
   client: clobClient,
   marketInfo,
 }
+const commonTestProps = {
+  ...commonProps,
+  PROD_MODE: false,
+  hourlyDollarLimit: 20,
+  targetSize: 20,
+}
+
+const commonProdProps = {
+  ...commonProps,
+  PROD_MODE: true,
+}
 
 console.log('intitializing bots...')
 
 const cdMarketData = CDMarketData.getInstance();
 
+OrderBatcher.initialize(clobClient, 200);
+
+// const redeemer = new Redeemer({
+//   intervalHours: 1,
+// });
+
+// await redeemer.redeemAll();
+
+// exit(1);
+
 const prodBots: QuantBotRun[] = [
-  new Contrarian({
-    name: 'contrarian-5h-b50-s80',
-    PROD_MODE: true,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    lookbackHours: 5,
-    hourlyDollarLimit: 2.5,
-    targetBuyPrice: .50,
-    targetSellPrice: .80,
-    targetSize: 5,
-    cutoffMinute: 10,
-    ...commonProps,
+  ...([
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 50, pullbackBuffer: 100, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 50 },
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 25, pullbackBuffer: 50, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 50 },
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 10, pullbackBuffer: 20, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 50 },
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.ETHEREUM_HOURLY, candleMinutes: 10, breakoutBuffer: 50, pullbackBuffer: 100, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 50 },
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.ETHEREUM_HOURLY, candleMinutes: 10, breakoutBuffer: 25, pullbackBuffer: 50, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 50 },
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, candleMinutes: 4, breakoutBuffer: 50, pullbackBuffer: 20, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 10 },
+  ]).map((v) => {
+    return new FirstCandle({
+      ...v,
+      name: `fcandle-${targetMarketToShortname(v.targetedMarket)}-${v.candleMinutes}m-bb${v.breakoutBuffer}-pp${100}-b${v.targetBuyPrice}-s${v.targetSellPrice}`,
+      ...commonProdProps,
+    })
   }),
-  new FirstCandle({
-    name: 'firstcandle-10m-bb50-pp100-b60-s90',
-    PROD_MODE: true,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    breakoutBuffer: 50,
-    pullbackBuffer: 100,
-    targetBuyPrice: 0.60,
-    targetSellPrice: 0.90,
-    targetSize: 5,
-    cutoffMinute: 50,
-    ...commonProps,
+  ...([
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 50, pullbackBuffer: 100, targetSize: 10, cutoffMinute: 50, buyPriceBuffer: .02, sellPriceBuffer: .34, minProfitMargin: .57 },
+  ]).map((v) => {
+    return new FirstCandleV2({
+      ...v,
+      name: `fcandleV2-${targetMarketToShortname(v.targetedMarket)}-cm${v.candleMinutes}-bb${v.breakoutBuffer}-pp${v.pullbackBuffer}-bpb${v.buyPriceBuffer}-spb${v.sellPriceBuffer}-mpm${v.minProfitMargin}`,
+      ...commonProdProps,
+    })
   }),
-  new FirstCandle({
-    name: 'firstcandle-10m-bb25-pp50-b60-s90',
-    PROD_MODE: true,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    breakoutBuffer: 25,
-    pullbackBuffer: 50,
-    targetBuyPrice: 0.60,
-    targetSellPrice: 0.90,
-    targetSize: 5,
-    cutoffMinute: 50,
-    ...commonProps,
-  }),
-  new FirstCandle({
-    name: 'firstcandle-10m-bb10-pp20-b60-s90',
-    PROD_MODE: true,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    breakoutBuffer: 10,
-    pullbackBuffer: 20,
-    targetBuyPrice: 0.60,
-    targetSellPrice: 0.90,
-    targetSize: 5,
-    cutoffMinute: 50,
-    ...commonProps,
-  }),
-  new FirstCandleV2({
-    name: 'gen-firstcandleV2-1',
-    PROD_MODE: true,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    targetSize: 5,
-    candleMinutes: 6,
-    breakoutBuffer: 182,
-    pullbackBuffer: 322,
-    buyPriceBuffer: .02,
-    sellPriceBuffer: .34,
-    minProfitMargin: .57,
-    cutoffMinute: 35,
-    ...commonProps,
-  }),
-  new EarlyBuyer({
-    name: 'early-up-b45-s55',
-    PROD_MODE: true,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 2.5,
-    cutoffMinute: 20,
-    targetBuyPrice: .45,
-    targetSize: 5,
-    targetSellPrice: .55,
-    btcDirection: BtcDirection.UP,
-    ...commonProps,
-  }),
-  new EarlyBuyer({
-    name: 'early-down-b45-s55',
-    PROD_MODE: true,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 2.5,
-    cutoffMinute: 20,
-    targetBuyPrice: .45,
-    targetSize: 5,
-    targetSellPrice: .55,
-    btcDirection: BtcDirection.DOWN,
-    ...commonProps,
-  }),
-  new Contrarian({
-    name: 'eth1h-contrarian-5h-b50-s80',
-    PROD_MODE: true,
-    targetedMarket: TargetedMarket.ETHEREUM_HOURLY,
-    lookbackHours: 5,
-    hourlyDollarLimit: 2.5,
-    targetBuyPrice: .50,
-    targetSellPrice: .80,
-    targetSize: 5,
-    cutoffMinute: 10,
-    ...commonProps,
-  }),
-  new FirstCandle({
-    name: 'eth1h-firstcandle-10m-bb50-pp100-b60-s90',
-    PROD_MODE: true,
-    targetedMarket: TargetedMarket.ETHEREUM_HOURLY,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    breakoutBuffer: 50,
-    pullbackBuffer: 100,
-    targetBuyPrice: 0.60,
-    targetSellPrice: 0.90,
-    targetSize: 5,
-    cutoffMinute: 50,
-    ...commonProps,
-  }),
-  new FirstCandle({
-    name: 'eth1h-firstcandle-10m-bb25-pp50-b60-s90',
-    PROD_MODE: true,
-    targetedMarket: TargetedMarket.ETHEREUM_HOURLY,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    breakoutBuffer: 25,
-    pullbackBuffer: 50,
-    targetBuyPrice: 0.60,
-    targetSellPrice: 0.90,
-    targetSize: 5,
-    cutoffMinute: 50,
-    ...commonProps,
+  ...([
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .13, targetSellPrice: .80, targetSize: 10, cutoffMinute: 9 },
+  ]).map((v) => {
+    return new TrendFollowing({
+      ...v,
+      name: `trendfollowing-${targetMarketToShortname(v.targetedMarket)}-smp${v.shortMaPeriod}-lmp${v.longMaPeriod}-co${v.cutoffMinute}-b${v.targetBuyPrice}-s${v.targetSellPrice}`,
+      ...commonProdProps,
+    })
   }),
 ]
 
 const testBots: QuantBotRun[] = [
-  new Arbitrage98({
-    name: 'arbitrage-98',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 10.0,
-    ...commonProps,
+  ...([
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY },
+  ]).map((v) => {
+    return new Arbitrage98({
+      name: `arbitrage98-${targetMarketToShortname(v.targetedMarket)}`,
+      ...v,
+      ...commonTestProps,
+    })
   }),
-  new ContrarianV2({
-    name: 'contrarianV2-5h-b50-s99',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    lookbackHours: 5,
-    cdLookbackHours: 5,
-    hourlyDollarLimit: 2.5,
-    targetBuyPrice: .50,
-    targetSellPrice: .99,
-    targetSize: 5,
-    cutoffMinute: 10,
-    ...commonProps,
+  ...([
+    { targetedMarket: TargetedMarket.ETHEREUM_HOURLY, lookbackHours: 5, targetBuyPrice: .50, targetSellPrice: .80, cutoffMinute: 10 },
+    { targetedMarket: TargetedMarket.SOLANA_HOURLY, lookbackHours: 5, targetBuyPrice: .50, targetSellPrice: .80, cutoffMinute: 10 },
+    { targetedMarket: TargetedMarket.XRP_HOURLY, lookbackHours: 5, targetBuyPrice: .50, targetSellPrice: .80, cutoffMinute: 10 },
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, lookbackHours: 1, targetBuyPrice: .50, targetSellPrice: .80, cutoffMinute: 10 },
+    { targetedMarket: TargetedMarket.ETHEREUM_QUARTERLY, lookbackHours: 1, targetBuyPrice: .50, targetSellPrice: .80, cutoffMinute: 10 },
+    { targetedMarket: TargetedMarket.SOLANA_QUARTERLY, lookbackHours: 1, targetBuyPrice: .50, targetSellPrice: .80, cutoffMinute: 10 },
+    { targetedMarket: TargetedMarket.XRP_QUARTERLY, lookbackHours: 1, targetBuyPrice: .50, targetSellPrice: .80, cutoffMinute: 10 },
+  ]).map((v) => {
+    return new Contrarian({
+      name: `contrarianV2-${targetMarketToShortname(v.targetedMarket)}-${v.lookbackHours}h-b${v.targetBuyPrice}-s${v.targetSellPrice}`,
+      ...v,
+      ...commonTestProps,
+    })
   }),
-  new EarlyBuyerV2({
-    name: 'earlyV2-up-b40-s60-f1',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 2.0,
-    cutoffMinute: 20,
-    targetBuyPrice: .40,
-    targetSize: 5,
-    targetSellPrice: .60,
-    flopsLookbackHours: 5,
-    minFlops: 1,
-    btcDirection: BtcDirection.UP,
-    ...commonProps,
+  ...([
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, lookbackHours: 5, cdLookbackHours: 5, targetBuyPrice: .50, targetSellPrice: .99, cutoffMinute: 10 },
+  ]).map((v) => {
+    return new ContrarianV2({
+      name: `contrarianV2-${targetMarketToShortname(v.targetedMarket)}-${v.lookbackHours}h-b${v.targetBuyPrice}-s${v.targetSellPrice}`,
+      ...v,
+      ...commonTestProps,
+    })
   }),
-  new EarlyBuyerV2({
-    name: 'earlyV2-up-b40-s60-f2',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 2.0,
-    cutoffMinute: 20,
-    targetBuyPrice: .40,
-    targetSize: 5,
-    targetSellPrice: .60,
-    flopsLookbackHours: 5,
-    minFlops: 2,
-    btcDirection: BtcDirection.UP,
-    ...commonProps,
+  ...([
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, cutoffMinute: 20, targetBuyPrice: .4, targetSellPrice: .6, flopsLookbackHours: 5, minFlops: 1 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, cutoffMinute: 20, targetBuyPrice: .4, targetSellPrice: .6, flopsLookbackHours: 5, minFlops: 2 },
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, cutoffMinute: 6, targetBuyPrice: .4, targetSellPrice: .6, flopsLookbackHours: 5, minFlops: 2 },
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, cutoffMinute: 6, targetBuyPrice: .12, targetSellPrice: .46, flopsLookbackHours: 5, minFlops: 2 },
+    { targetedMarket: TargetedMarket.ETHEREUM_QUARTERLY, cutoffMinute: 6, targetBuyPrice: .4, targetSellPrice: .6, flopsLookbackHours: 5, minFlops: 2 },
+    { targetedMarket: TargetedMarket.ETHEREUM_QUARTERLY, cutoffMinute: 6, targetBuyPrice: .12, targetSellPrice: .46, flopsLookbackHours: 5, minFlops: 2 },
+    { targetedMarket: TargetedMarket.SOLANA_QUARTERLY, cutoffMinute: 6, targetBuyPrice: .4, targetSellPrice: .6, flopsLookbackHours: 5, minFlops: 2 },
+    { targetedMarket: TargetedMarket.SOLANA_QUARTERLY, cutoffMinute: 6, targetBuyPrice: .12, targetSellPrice: .46, flopsLookbackHours: 5, minFlops: 2 },
+    { targetedMarket: TargetedMarket.XRP_QUARTERLY, cutoffMinute: 6, targetBuyPrice: .4, targetSellPrice: .6, flopsLookbackHours: 5, minFlops: 2 },
+    { targetedMarket: TargetedMarket.XRP_QUARTERLY, cutoffMinute: 6, targetBuyPrice: .12, targetSellPrice: .46, flopsLookbackHours: 5, minFlops: 2 },
+  ]).map((v) => {
+    return [BtcDirection.UP, BtcDirection.DOWN].map((d) => {
+      return new EarlyBuyerV2({
+        name: `earlyV2-${targetMarketToShortname(v.targetedMarket)}-${d.toLowerCase()}-b${v.targetBuyPrice}-s${v.targetSellPrice}-f${v.minFlops}`,
+        btcDirection: d,
+        ...v,
+        ...commonTestProps,
+      })
+    })
+  }).flat(1),
+  ...([
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, cutoffMinute: 55, targetAmount: 5, triggerPrice: .75, targetBuyPrice: .78, targetSellPrice: .90, flopsLookbackHours: 5, maxFlops: 1 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, cutoffMinute: 55, targetAmount: 5, triggerPrice: .65, targetBuyPrice: .68, targetSellPrice: .85, flopsLookbackHours: 5, maxFlops: 1 },
+  ]).map((v) => {
+    return new EarlyLimitV2({
+      name: `elimV2-${targetMarketToShortname(v.targetedMarket)}-l${v.triggerPrice}-b${v.targetBuyPrice}-s${v.targetSellPrice}`,
+      ...v,
+      ...commonTestProps,
+    })
   }),
-  new EarlyLimitV2({
-    name: 'elimV2-l75-b78-s90',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    cutoffMinute: 55,
-    hourlyDollarLimit: 5,
-    targetAmount: 5,
-    triggerPrice: .75,
-    targetBuyPrice: .78,
-    targetSellPrice: .90,
-    flopsLookbackHours: 5,
-    maxFlops: 1,
-    ...commonProps,
+  ...([
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 50, pullbackBuffer: 100, targetBuyPrice: .60, targetSellPrice: .90, cutoffMinute: 50 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 25, pullbackBuffer: 50, targetBuyPrice: .60, targetSellPrice: .90, cutoffMinute: 50 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 10, pullbackBuffer: 20, targetBuyPrice: .60, targetSellPrice: .90, cutoffMinute: 50 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 8, breakoutBuffer: 34, pullbackBuffer: 400, targetBuyPrice: .58, targetSellPrice: .98, cutoffMinute: 35 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 6, breakoutBuffer: 189, pullbackBuffer: 315, targetBuyPrice: .27, targetSellPrice: .68, cutoffMinute: 45 },
+    { targetedMarket: TargetedMarket.ETHEREUM_HOURLY, candleMinutes: 10, breakoutBuffer: 50, pullbackBuffer: 100, targetBuyPrice: .60, targetSellPrice: .90, cutoffMinute: 50 },
+    { targetedMarket: TargetedMarket.ETHEREUM_HOURLY, candleMinutes: 10, breakoutBuffer: 25, pullbackBuffer: 50, targetBuyPrice: .60, targetSellPrice: .90, cutoffMinute: 50 },
+    { targetedMarket: TargetedMarket.ETHEREUM_HOURLY, candleMinutes: 10, breakoutBuffer: 10, pullbackBuffer: 20, targetBuyPrice: .60, targetSellPrice: .90, cutoffMinute: 50 },
+    { targetedMarket: TargetedMarket.SOLANA_HOURLY, candleMinutes: 10, breakoutBuffer: 5, pullbackBuffer: 2, targetBuyPrice: .60, targetSellPrice: .90, cutoffMinute: 50 },
+    { targetedMarket: TargetedMarket.SOLANA_HOURLY, candleMinutes: 10, breakoutBuffer: 2, pullbackBuffer: 1, targetBuyPrice: .60, targetSellPrice: .90, cutoffMinute: 50 },
+    { targetedMarket: TargetedMarket.SOLANA_HOURLY, candleMinutes: 10, breakoutBuffer: 10, pullbackBuffer: 5, targetBuyPrice: .60, targetSellPrice: .90, cutoffMinute: 50 },
+    { targetedMarket: TargetedMarket.XRP_HOURLY, candleMinutes: 10, breakoutBuffer: .1, pullbackBuffer: .05, targetBuyPrice: .60, targetSellPrice: .90, cutoffMinute: 50 },
+    { targetedMarket: TargetedMarket.XRP_HOURLY, candleMinutes: 10, breakoutBuffer: .2, pullbackBuffer: .1, targetBuyPrice: .60, targetSellPrice: .90, cutoffMinute: 50 },
+    { targetedMarket: TargetedMarket.XRP_HOURLY, candleMinutes: 10, breakoutBuffer: .03, pullbackBuffer: .02, targetBuyPrice: .60, targetSellPrice: .90, cutoffMinute: 50 },
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, candleMinutes: 4, breakoutBuffer: 20, pullbackBuffer: 5, targetBuyPrice: .52, targetSellPrice: .90, cutoffMinute: 12 },
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, candleMinutes: 4, breakoutBuffer: 50, pullbackBuffer: 10, targetBuyPrice: .52, targetSellPrice: .90, cutoffMinute: 12 },
+    { targetedMarket: TargetedMarket.ETHEREUM_QUARTERLY, candleMinutes: 4, breakoutBuffer: 10, pullbackBuffer: 4, targetBuyPrice: .52, targetSellPrice: .90, cutoffMinute: 12 },
+    { targetedMarket: TargetedMarket.ETHEREUM_QUARTERLY, candleMinutes: 4, breakoutBuffer: 20, pullbackBuffer: 6, targetBuyPrice: .52, targetSellPrice: .90, cutoffMinute: 12 },
+    { targetedMarket: TargetedMarket.SOLANA_QUARTERLY, candleMinutes: 4, breakoutBuffer: 1, pullbackBuffer: .5, targetBuyPrice: .52, targetSellPrice: .90, cutoffMinute: 12 },
+    { targetedMarket: TargetedMarket.SOLANA_QUARTERLY, candleMinutes: 4, breakoutBuffer: 2, pullbackBuffer: .7, targetBuyPrice: .52, targetSellPrice: .90, cutoffMinute: 12 },
+    { targetedMarket: TargetedMarket.XRP_QUARTERLY, candleMinutes: 4, breakoutBuffer: .1, pullbackBuffer: .02, targetBuyPrice: .52, targetSellPrice: .90, cutoffMinute: 12 },
+    { targetedMarket: TargetedMarket.XRP_QUARTERLY, candleMinutes: 4, breakoutBuffer: .2, pullbackBuffer: .04, targetBuyPrice: .52, targetSellPrice: .90, cutoffMinute: 12 },
+  ]).map((v) => {
+    return new FirstCandle({
+      ...v,
+      name: `fcandle-${targetMarketToShortname(v.targetedMarket)}-${v.candleMinutes}m-bb${v.candleMinutes}-pp${v.pullbackBuffer}-b${v.targetBuyPrice}-s${v.targetSellPrice}`,
+      ...commonTestProps,
+    })
   }),
-  new EarlyLimitV2({
-    name: 'elimV2-l65-b68-s85',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    cutoffMinute: 55,
-    hourlyDollarLimit: 5,
-    targetAmount: 5,
-    triggerPrice: .65,
-    targetBuyPrice: .68,
-    targetSellPrice: .85,
-    flopsLookbackHours: 5,
-    maxFlops: 1,
-    ...commonProps,
+  ...([
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 50, pullbackBuffer: 100, targetSize: 10, cutoffMinute: 50, buyPriceBuffer: .02, sellPriceBuffer: .10, minProfitMargin: .05 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 25, pullbackBuffer: 50, cutoffMinute: 50, buyPriceBuffer: .02, sellPriceBuffer: .10, minProfitMargin: .05 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 10, pullbackBuffer: 20, cutoffMinute: 50, buyPriceBuffer: .02, sellPriceBuffer: .10, minProfitMargin: .05 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 8, breakoutBuffer: 10, pullbackBuffer: 353, cutoffMinute: 50, buyPriceBuffer: .04, sellPriceBuffer: .45, minProfitMargin: .9 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 8, breakoutBuffer: 30, pullbackBuffer: 109, cutoffMinute: 45, buyPriceBuffer: .04, sellPriceBuffer: .01, minProfitMargin: .8 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 8, breakoutBuffer: 183, pullbackBuffer: 290, cutoffMinute: 55, buyPriceBuffer: .01, sellPriceBuffer: .57, minProfitMargin: .9 },
+    { targetedMarket: TargetedMarket.ETHEREUM_HOURLY, candleMinutes: 6, breakoutBuffer: 182, pullbackBuffer: 322, cutoffMinute: 35, buyPriceBuffer: .02, sellPriceBuffer: .34, minProfitMargin: .4 },
+    { targetedMarket: TargetedMarket.SOLANA_HOURLY, candleMinutes: 6, breakoutBuffer: 5, pullbackBuffer: 3, cutoffMinute: 35, buyPriceBuffer: .02, sellPriceBuffer: .02, minProfitMargin: .4 },
+    { targetedMarket: TargetedMarket.XRP_HOURLY, candleMinutes: 6, breakoutBuffer: .05, pullbackBuffer: .02, cutoffMinute: 35, buyPriceBuffer: .02, sellPriceBuffer: .02, minProfitMargin: .4 },
+  ]).map((v) => {
+    return new FirstCandleV2({
+      ...v,
+      name: `fcandleV2-${targetMarketToShortname(v.targetedMarket)}-cm${v.candleMinutes}-bb${v.breakoutBuffer}-pp${v.pullbackBuffer}-bpb${v.buyPriceBuffer}-spb${v.sellPriceBuffer}-mpm${v.minProfitMargin}`,
+      ...commonTestProps,
+    })
   }),
-  new FirstCandle({
-    name: 'firstcandle-10m-bb50-pp100-b60-s90',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    breakoutBuffer: 50,
-    pullbackBuffer: 100,
-    targetBuyPrice: 0.60,
-    targetSellPrice: 0.90,
-    targetSize: 5,
-    cutoffMinute: 50,
-    ...commonProps,
+  ...([
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, lookbackPeriods: 15, entryThreshold: 2, exitThreshold: .5, targetBuyPrice: .55, targetSellPrice: .85, cutoffMinute: 45 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, lookbackPeriods: 30, entryThreshold: 1.0, exitThreshold: 2.5, targetBuyPrice: .50, targetSellPrice: .89, cutoffMinute: 45 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, lookbackPeriods: 60, entryThreshold: 2.0, exitThreshold: 0.5, targetBuyPrice: .55, targetSellPrice: .85, cutoffMinute: 45 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, lookbackPeriods: 60, entryThreshold: 2.5, exitThreshold: 1, targetBuyPrice: .26, targetSellPrice: .95, cutoffMinute: 50 },
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, lookbackPeriods: 7, entryThreshold: 2.3, exitThreshold: 1, targetBuyPrice: .06, targetSellPrice: .78, cutoffMinute: 8 },
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, lookbackPeriods: 7, entryThreshold: 2.3, exitThreshold: 1, targetBuyPrice: .06, targetSellPrice: .98, cutoffMinute: 8 },
+    { targetedMarket: TargetedMarket.ETHEREUM_QUARTERLY, lookbackPeriods: 7, entryThreshold: 2.3, exitThreshold: 1, targetBuyPrice: .06, targetSellPrice: .98, cutoffMinute: 8 },
+    { targetedMarket: TargetedMarket.SOLANA_QUARTERLY, lookbackPeriods: 7, entryThreshold: 2.3, exitThreshold: 1, targetBuyPrice: .06, targetSellPrice: .98, cutoffMinute: 8 },
+    { targetedMarket: TargetedMarket.XRP_QUARTERLY, lookbackPeriods: 7, entryThreshold: 2.3, exitThreshold: 1, targetBuyPrice: .06, targetSellPrice: .98, cutoffMinute: 8 },
+  ]).map((v) => {
+    return new MeanReversion({
+      ...v,
+      name: `mrev-${targetMarketToShortname(v.targetedMarket)}-${v.lookbackPeriods}p-et${v.entryThreshold}-b${v.targetBuyPrice}-s${v.targetSellPrice}`,
+      ...commonTestProps,
+    })
   }),
-  new FirstCandle({
-    name: 'firstcandle-10m-bb25-pp50-b60-s90',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    breakoutBuffer: 25,
-    pullbackBuffer: 50,
-    targetBuyPrice: 0.60,
-    targetSellPrice: 0.90,
-    targetSize: 5,
-    cutoffMinute: 50,
-    ...commonProps,
+  ...([
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, shortMaPeriod: 5, longMaPeriod: 20, adxPeriod: 14, adxThreshold: 25, atrPeriod: 14, atrStopMultiple: 2.0, targetBuyPrice: .55, targetSellPrice: .95, cutoffMinute: 45 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, shortMaPeriod: 10, longMaPeriod: 40, adxPeriod: 28, adxThreshold: 25, atrPeriod: 14, atrStopMultiple: 2.0, targetBuyPrice: .55, targetSellPrice: .85, cutoffMinute: 45 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, shortMaPeriod: 5, longMaPeriod: 20, adxPeriod: 20, adxThreshold: 20, atrPeriod: 20, atrStopMultiple: 1.0, targetBuyPrice: .52, targetSellPrice: .93, cutoffMinute: 45 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, shortMaPeriod: 5, longMaPeriod: 22, adxPeriod: 22, adxThreshold: 18.5, atrPeriod: 14, atrStopMultiple: 1.0, targetBuyPrice: .16, targetSellPrice: .65, cutoffMinute: 40 },
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, shortMaPeriod: 2, longMaPeriod: 5, adxPeriod: 3, adxThreshold: 6, atrPeriod: 4, atrStopMultiple: 2.0, targetBuyPrice: .52, targetSellPrice: .95, cutoffMinute: 10 },
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, shortMaPeriod: 4, longMaPeriod: 10, adxPeriod: 6, adxThreshold: 12, atrPeriod: 8, atrStopMultiple: 2.0, targetBuyPrice: .52, targetSellPrice: .95, cutoffMinute: 10 },
+  ]).map((v) => {
+    return new TrendFollowing({
+      ...v,
+      name: `trendfollowing-${targetMarketToShortname(v.targetedMarket)}-smp${v.shortMaPeriod}-lmp${v.longMaPeriod}-co${v.cutoffMinute}-b${v.targetBuyPrice}-s${v.targetSellPrice}`,
+      ...commonTestProps,
+    })
   }),
-  new FirstCandle({
-    name: 'firstcandle-10m-bb10-pp20-b60-s90',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    breakoutBuffer: 10,
-    pullbackBuffer: 20,
-    targetBuyPrice: 0.60,
-    targetSellPrice: 0.90,
-    targetSize: 5,
-    cutoffMinute: 50,
-    ...commonProps,
-  }),
-  new FirstCandleV2({
-    name: 'fcv2-10m-bb50-pp100-bbuf2-sbuf2-mp5',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    breakoutBuffer: 50,
-    pullbackBuffer: 100,
-    buyPriceBuffer: 0.02,
-    sellPriceBuffer: 0.10,
-    minProfitMargin: 0.05,
-    targetSize: 5,
-    cutoffMinute: 50,
-    ...commonProps,
-  }),
-  new FirstCandleV2({
-    name: 'fcv2-10m-bb25-pp50-bbuf2-sbuf2-mp5',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    breakoutBuffer: 25,
-    pullbackBuffer: 50,
-    buyPriceBuffer: 0.02,
-    sellPriceBuffer: 0.10,
-    minProfitMargin: 0.05,
-    targetSize: 5,
-    cutoffMinute: 50,
-    ...commonProps,
-  }),
-  new FirstCandleV2({
-    name: 'fcv2-10m-bb10-pp20-bbuf2-sbuf2-mp5',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    breakoutBuffer: 10,
-    pullbackBuffer: 20,
-    buyPriceBuffer: 0.02,
-    sellPriceBuffer: 0.10,
-    minProfitMargin: 0.05,
-    targetSize: 5,
-    cutoffMinute: 50,
-    ...commonProps,
-  }),
-  new MeanReversion({
-    name: 'meanrev-15p-z2',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    lookbackPeriods: 15,
-    entryThreshold: 2.0,
-    exitThreshold: 0.5,
-    targetBuyPrice: 0.55,
-    targetSellPrice: 0.85,
-    targetSize: 5,
-    cutoffMinute: 45,
-    ...commonProps,
-  }),
-  new MeanReversion({
-    name: 'meanrev-30p-z2',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    lookbackPeriods: 30,
-    entryThreshold: 1.0,
-    exitThreshold: 2.5,
-    targetBuyPrice: 0.50,
-    targetSellPrice: 0.89,
-    targetSize: 5,
-    cutoffMinute: 45,
-    ...commonProps,
-  }),
-  new MeanReversion({
-    name: 'meanrev-60p-z2',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    lookbackPeriods: 60,
-    entryThreshold: 2.0,
-    exitThreshold: 0.5,
-    targetBuyPrice: 0.55,
-    targetSellPrice: 0.85,
-    targetSize: 5,
-    cutoffMinute: 45,
-    ...commonProps,
-  }),
-  new TrendFollowing({
-    name: 'trend-sm5-lm-20-adx25-b55-s95',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    shortMaPeriod: 5,
-    longMaPeriod: 20,
-    adxPeriod: 14,
-    adxThreshold: 25,
-    atrPeriod: 14,
-    atrStopMultiple: 2.0,
-    targetBuyPrice: 0.55,
-    targetSellPrice: 0.95,
-    targetSize: 5,
-    cutoffMinute: 45,
-    ...commonProps,
-  }),
-  new TrendFollowing({
-    name: 'trend-sm10-lm40-adx25-b55-s85',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    shortMaPeriod: 10,
-    longMaPeriod: 40,
-    adxPeriod: 28,
-    adxThreshold: 25,
-    atrPeriod: 24,
-    atrStopMultiple: 2.0,
-    targetBuyPrice: 0.55,
-    targetSellPrice: 0.85,
-    targetSize: 5,
-    cutoffMinute: 45,
-    ...commonProps,
-  }),
-  new TrendFollowing({
-    name: 'trend-sm5-lm20-adx20-b52-s93',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    shortMaPeriod: 5,
-    longMaPeriod: 20,
-    adxPeriod: 20,
-    adxThreshold: 20,
-    atrPeriod: 20,
-    atrStopMultiple: 1.0,
-    targetBuyPrice: 0.52,
-    targetSellPrice: 0.93,
-    targetSize: 5,
-    cutoffMinute: 45,
-    ...commonProps,
-  }),
-
-  //Jan9
-  new FirstCandleV2({
-    name: 'gen-fcandleV2-1',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    targetSize: 5,
-    candleMinutes: 8,
-    breakoutBuffer: 10,
-    pullbackBuffer: 353,
-    buyPriceBuffer: .0317,
-    sellPriceBuffer: .45,
-    minProfitMargin: .9,
-    cutoffMinute: 20,
-    ...commonProps,
-  }),
-  new FirstCandleV2({
-    name: 'gen-fcandleV2-2',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    targetSize: 5,
-    candleMinutes: 8,
-    breakoutBuffer: 30,
-    pullbackBuffer: 109,
-    buyPriceBuffer: .04,
-    sellPriceBuffer: .01,
-    minProfitMargin: .80,
-    cutoffMinute: 45,
-    ...commonProps,
-  }),
-  new FirstCandleV2({
-    name: 'gen-fcandleV2-3',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    targetSize: 5,
-    candleMinutes: 8,
-    breakoutBuffer: 183,
-    pullbackBuffer: 290,
-    buyPriceBuffer: .01,
-    sellPriceBuffer: .57,
-    minProfitMargin: .9,
-    cutoffMinute: 55,
-    ...commonProps,
-  }),
-  new FirstCandle({
-    name: 'gen-fcandle-1',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    targetSize: 5,
-    candleMinutes: 8,
-    breakoutBuffer: 34,
-    pullbackBuffer: 400,
-    targetBuyPrice: .58,
-    targetSellPrice: .98,
-    cutoffMinute: 35,
-    ...commonProps,
-  }),
-  new FirstCandle({
-    name: 'gen-fcandle-2',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    hourlyDollarLimit: 5,
-    targetSize: 5,
-    candleMinutes: 6,
-    breakoutBuffer: 189,
-    pullbackBuffer: 315,
-    targetBuyPrice: .27,
-    targetSellPrice: .68,
-    cutoffMinute: 45,
-    ...commonProps,
-  }),
-  new MeanReversion({
-    name: 'gen-mrev-1',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    exitThreshold: 1, // unused
-    targetSize: 5,
-    hourlyDollarLimit: 5,
-    lookbackPeriods: 15,
-    entryThreshold: 2.53,
-    targetBuyPrice: .26,
-    targetSellPrice: .95,
-    cutoffMinute: 50,
-    ...commonProps,
-  }),
-  new MorningStar({
-    name: 'gen-mstar-1',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    targetSize: 5,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    minBearishMove: 150,
-    maxIndecisionRange: 74,
-    minBullishMove: 35,
-    targetBuyPrice: .22,
-    targetSellPrice: .48,
-    cutoffMinute: 50,
-    ...commonProps,
-  }),
-  new EveningStar({
-    name: 'gen-estar-1',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    targetSize: 5,
-    hourlyDollarLimit: 5,
-    candleMinutes: 14,
-    minBullishMove: 75,
-    maxIndecisionRange: 55,
-    minBearishMove: 51.5,
-    targetBuyPrice: .25,
-    targetSellPrice: .73,
-    cutoffMinute: 50,
-    ...commonProps,
-  }),
-  new TrendFollowing({
-    name: 'gen-tfollow-1',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    targetSize: 10,
-    hourlyDollarLimit: 5,
-    shortMaPeriod: 5,
-    longMaPeriod: 22,
-    adxPeriod: 22,
-    adxThreshold: 18.5,
-    atrPeriod: 14,
-    atrStopMultiple: 1, // unused;
-    targetBuyPrice: .16,
-    targetSellPrice: .65,
-    cutoffMinute: 40,
-    ...commonProps,
-  }),
-  ////// Ethereum Hourly
-  new Contrarian({
-    name: 'eth1h-contrarian-5h-b50-s80',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.ETHEREUM_HOURLY,
-    lookbackHours: 5,
-    hourlyDollarLimit: 2.5,
-    targetBuyPrice: .50,
-    targetSellPrice: .80,
-    targetSize: 5,
-    cutoffMinute: 10,
-    ...commonProps,
-  }),
-  new FirstCandle({
-    name: 'eth1h-firstcandle-10m-bb50-pp100-b60-s90',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.ETHEREUM_HOURLY,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    breakoutBuffer: 50,
-    pullbackBuffer: 100,
-    targetBuyPrice: 0.60,
-    targetSellPrice: 0.90,
-    targetSize: 5,
-    cutoffMinute: 50,
-    ...commonProps,
-  }),
-  new FirstCandle({
-    name: 'eth1h-firstcandle-10m-bb25-pp50-b60-s90',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.ETHEREUM_HOURLY,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    breakoutBuffer: 25,
-    pullbackBuffer: 50,
-    targetBuyPrice: 0.60,
-    targetSellPrice: 0.90,
-    targetSize: 5,
-    cutoffMinute: 50,
-    ...commonProps,
-  }),
-  new FirstCandle({
-    name: 'eth1h-firstcandle-10m-bb10-pp20-b60-s90',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.ETHEREUM_HOURLY,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    breakoutBuffer: 10,
-    pullbackBuffer: 20,
-    targetBuyPrice: 0.60,
-    targetSellPrice: 0.90,
-    targetSize: 5,
-    cutoffMinute: 50,
-    ...commonProps,
-  }),
-  new FirstCandleV2({
-    name: 'eth1h-gen-firstcandleV2-1',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.ETHEREUM_HOURLY,
-    hourlyDollarLimit: 5,
-    targetSize: 5,
-    candleMinutes: 6,
-    breakoutBuffer: 182,
-    pullbackBuffer: 322,
-    buyPriceBuffer: .02,
-    sellPriceBuffer: .34,
-    minProfitMargin: .57,
-    cutoffMinute: 35,
-    ...commonProps,
-  }),
-  ////// Solana Hourly
-  new Contrarian({
-    name: 'sol1h-contrarian-5h-b50-s80',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.SOLANA_HOURLY,
-    lookbackHours: 5,
-    hourlyDollarLimit: 2.5,
-    targetBuyPrice: .50,
-    targetSellPrice: .80,
-    targetSize: 5,
-    cutoffMinute: 10,
-    ...commonProps,
-  }),
-  new FirstCandle({
-    name: 'sol1h-firstcandle-10m-bb50-pp100-b60-s90',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.SOLANA_HOURLY,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    breakoutBuffer: 50,
-    pullbackBuffer: 100,
-    targetBuyPrice: 0.60,
-    targetSellPrice: 0.90,
-    targetSize: 5,
-    cutoffMinute: 50,
-    ...commonProps,
-  }),
-  new FirstCandle({
-    name: 'sol1h-firstcandle-10m-bb25-pp50-b60-s90',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.SOLANA_HOURLY,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    breakoutBuffer: 25,
-    pullbackBuffer: 50,
-    targetBuyPrice: 0.60,
-    targetSellPrice: 0.90,
-    targetSize: 5,
-    cutoffMinute: 50,
-    ...commonProps,
-  }),
-  new FirstCandle({
-    name: 'sol1h-firstcandle-10m-bb10-pp20-b60-s90',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.SOLANA_HOURLY,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    breakoutBuffer: 10,
-    pullbackBuffer: 20,
-    targetBuyPrice: 0.60,
-    targetSellPrice: 0.90,
-    targetSize: 5,
-    cutoffMinute: 50,
-    ...commonProps,
-  }),
-  new FirstCandleV2({
-    name: 'sol1h-gen-firstcandleV2-1',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.SOLANA_HOURLY,
-    hourlyDollarLimit: 5,
-    targetSize: 5,
-    candleMinutes: 6,
-    breakoutBuffer: 182,
-    pullbackBuffer: 322,
-    buyPriceBuffer: .02,
-    sellPriceBuffer: .34,
-    minProfitMargin: .57,
-    cutoffMinute: 35,
-    ...commonProps,
-  }),
-  ////// XRP Hourly
-  new Contrarian({
-    name: 'xrp1h-contrarian-5h-b50-s80',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.XRP_HOURLY,
-    lookbackHours: 5,
-    hourlyDollarLimit: 2.5,
-    targetBuyPrice: .50,
-    targetSellPrice: .80,
-    targetSize: 5,
-    cutoffMinute: 10,
-    ...commonProps,
-  }),
-  new FirstCandle({
-    name: 'xrp1h-firstcandle-10m-bb50-pp100-b60-s90',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.XRP_HOURLY,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    breakoutBuffer: 50,
-    pullbackBuffer: 100,
-    targetBuyPrice: 0.60,
-    targetSellPrice: 0.90,
-    targetSize: 5,
-    cutoffMinute: 50,
-    ...commonProps,
-  }),
-  new FirstCandle({
-    name: 'xrp1h-firstcandle-10m-bb25-pp50-b60-s90',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.XRP_HOURLY,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    breakoutBuffer: 25,
-    pullbackBuffer: 50,
-    targetBuyPrice: 0.60,
-    targetSellPrice: 0.90,
-    targetSize: 5,
-    cutoffMinute: 50,
-    ...commonProps,
-  }),
-  new FirstCandle({
-    name: 'xrp1h-firstcandle-10m-bb10-pp20-b60-s90',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.XRP_HOURLY,
-    hourlyDollarLimit: 5,
-    candleMinutes: 10,
-    breakoutBuffer: 10,
-    pullbackBuffer: 20,
-    targetBuyPrice: 0.60,
-    targetSellPrice: 0.90,
-    targetSize: 5,
-    cutoffMinute: 50,
-    ...commonProps,
-  }),
-  new FirstCandleV2({
-    name: 'xrp1h-gen-firstcandleV2-1',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.XRP_HOURLY,
-    hourlyDollarLimit: 5,
-    targetSize: 5,
-    candleMinutes: 6,
-    breakoutBuffer: 182,
-    pullbackBuffer: 322,
-    buyPriceBuffer: .02,
-    sellPriceBuffer: .34,
-    minProfitMargin: .57,
-    cutoffMinute: 35,
-    ...commonProps,
-  }),
-  ///   Minutely
-  new Contrarian({
-    name: 'btc15-contarian-1p',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_QUARTERLY,
-    lookbackHours: 1,
-    hourlyDollarLimit: 2.5,
-    targetBuyPrice: .50,
-    targetSellPrice: .80,
-    targetSize: 5,
-    cutoffMinute: 10,
-    ...commonProps,
-  }),
-  new Contrarian({
-    name: 'eth15-contarian-1p',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.ETHEREUM_QUARTERLY,
-    lookbackHours: 1,
-    hourlyDollarLimit: 2.5,
-    targetBuyPrice: .50,
-    targetSellPrice: .80,
-    targetSize: 5,
-    cutoffMinute: 10,
-    ...commonProps,
-  }),
-  new Contrarian({
-    name: 'sol15-contarian-1p',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.SOLANA_QUARTERLY,
-    lookbackHours: 1,
-    hourlyDollarLimit: 2.5,
-    targetBuyPrice: .50,
-    targetSellPrice: .80,
-    targetSize: 5,
-    cutoffMinute: 10,
-    ...commonProps,
-  }),
-  new Contrarian({
-    name: 'xrp15-contarian-1p',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.XRP_QUARTERLY,
-    lookbackHours: 1,
-    hourlyDollarLimit: 2.5,
-    targetBuyPrice: .50,
-    targetSellPrice: .80,
-    targetSize: 5,
-    cutoffMinute: 10,
-    ...commonProps,
-  }),
-  new NCandle({
-    name: 'btc-ncandle-1',
-    PROD_MODE: false,
-    targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-    candleMinutes: 10,
-    breakoutBuffer: 50,
-    pullbackBuffer: 100,
-    buyPriceBuffer:  .02,
-    sellPriceBuffer: .10,
-    minProfitMargin: .10,
-    stopLossMultiplier: 1.5,
-    targetSize: 10,
-    cutoffMinute: 50,
-    maxTradesPerHour: 10,
-    hourlyDollarLimit: 10,
-    ...commonProps,
-  })
 ]
-// implement and adjust mstar
-/**
- * Bots to write
- * Esoteric normalization bot, makes a spread of what  prices 'should'  be based off of time and relative price to start. arbs the diff
- * bard.fx bearish/bullish candle
- * Fair value gap
- * Bot that counts the amount of price points in N lookback hours, detects the median value in a range(range such as 35-65), buys at start, and then tries to sell at that point.
- * Candle V3 that uses stoploss  orders 
- * 
- * Short Term:
- * batch orders
- * v3: include late sellofs for shitty trades
- * Remove some logs from busy trades
- * Clone to test mode and have it run on different  ports, so we can edit while letting prod run.
- * Write sell orders for partially filled BUY orders
- * For prod, only have it start running on the hour
- * 
- * Long term:
- * Devops for putting this onto  hetzner vps
- * Set up ngninx server ig , use auth_request module to access webpage data
- * expand to other markets, eth, 15m,  daily  markets, etc.
- * 
- * Automatically redeem trades?
- * https://docs.polymarket.com/developers/builders/relayer-client#redeem-positions
- */
+
+checkIfBotsHaveMatchingNames([...testBots, ...prodBots]);
 
 console.log('running...')
 
@@ -878,38 +253,14 @@ const logCleaner = new LogCleaner({
 });
 logCleaner.run();
 
-/**
- * Calculates milliseconds until the next hour boundary.
- * @returns Milliseconds until the start of the next hour.
- */
-function getMsUntilNextHour(): number {
-  const now = new Date();
-  const nextHour = new Date(now);
-  nextHour.setHours(now.getHours() + 1, 0, 0, 0);
-  return nextHour.getTime() - now.getTime();
-}
-
-/**
- * Formats milliseconds as a human-readable duration string.
- */
-function formatDuration(ms: number): string {
-  const minutes = Math.floor(ms / 60000);
-  const seconds = Math.floor((ms % 60000) / 1000);
-  return `${minutes}m ${seconds}s`;
-}
-
-// Start prod bots at the beginning of the next hour
+// Start prod bots at the beginning of the next hour with restart on failure
 const msUntilNextHour = getMsUntilNextHour() + 5 * 1000;
 console.log(`[PROD] Scheduling ${prodBots.length} prod bots to start in ${formatDuration(msUntilNextHour)} (at the next hour)`);
 
 setTimeout(() => {
   console.log('[PROD] Starting prod bots at hour boundary');
-  prodBots.forEach((bot) => {
-    bot.run();
-  });
+  runBotsWithRestartOnFailure(prodBots, 'PROD');
 }, msUntilNextHour);
 
-// Start test bots immediately
-testBots.forEach((bot) => {
-  bot.run();
-})
+// Start test bots immediately with restart on failure
+runBotsWithRestartOnFailure(testBots, 'TEST');
