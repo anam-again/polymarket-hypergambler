@@ -1,7 +1,6 @@
 import { Side } from "@polymarket/clob-client";
 
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
-import { CDMarketData } from "../nonBots/CDMarketData.js";
 import { MarketSchedule } from "../types/interfaces.js";
 
 // ============================================================================
@@ -53,7 +52,7 @@ export class ContrarianV2 extends QuantBot implements QuantBotRun {
     // --- Main Run Loop ---
 
     public async run(): Promise<void> {
-        this.setupHourlyReset();
+        this.setupPeriodReset();
         this.startTradingLoop();
     }
 
@@ -61,15 +60,15 @@ export class ContrarianV2 extends QuantBot implements QuantBotRun {
     // Setup
     // -------------------------------------------------------------------------
 
-    private setupHourlyReset(): void {
-        this.on('hourly', async () => {
+    private setupPeriodReset(): void {
+        this.registerResetHandler(async () => {
             await this.updateOrders();
             await this.auditAndReset();
-            this.resetState();
+            this.resetTradeState();
         });
     }
 
-    private resetState(): void {
+    protected override resetTradeState(): void {
         this.buyOrder = undefined;
         this.sellOrder = undefined;
         this.isTie = false;
@@ -82,27 +81,35 @@ export class ContrarianV2 extends QuantBot implements QuantBotRun {
 
     private startTradingLoop(): void {
         this.tickWrapper(1000 * 5, 1000 * 2, async () => {
-            await this.updateOrders();
-
-            if (this.isPastCutoff) {
-                return;
-            }
-
-            if (this.shouldCreateSellOrder()) {
-                await this.createSellOrder();
-            }
-
-            if (this.isAfterCutoff()) {
-                await this.handleCutoff();
-                return;
-            }
-
-            if (this.buyOrder || this.isTie) {
-                return;
-            }
-
-            await this.attemptBuyOrder();
+            await this.executeTradingLogic();
         });
+    }
+
+    private async executeTradingLogic(): Promise<void> {
+        await this.updateOrders();
+
+        if (this.isPastCutoff) {
+            return;
+        }
+
+        if (this.shouldCreateSellOrder()) {
+            await this.createSellOrder();
+        }
+
+        if (this.isAfterCutoff()) {
+            await this.handleCutoff();
+            return;
+        }
+
+        if (this.buyOrder || this.isTie) {
+            return;
+        }
+
+        await this.attemptBuyOrder();
+    }
+
+    public override async onSimulationTick(): Promise<void> {
+        await this.executeTradingLogic();
     }
 
     // -------------------------------------------------------------------------
@@ -176,7 +183,7 @@ export class ContrarianV2 extends QuantBot implements QuantBotRun {
     // -------------------------------------------------------------------------
 
     private doesTotalChangeAgree(betDirection: 'UP' | 'DOWN'): boolean {
-        const cdMarketData = CDMarketData.getInstance();
+        const cdMarketData = this.getCdMarketData();
         const averages = cdMarketData.getAverages(this.cdLookbackHours, this.targetedMarket);
 
         if (!averages) {
@@ -207,6 +214,10 @@ export class ContrarianV2 extends QuantBot implements QuantBotRun {
                 this.targetedMarket,
             );
             const market = await this.marketInfo.getMarketInfo(hourUrl);
+            if (market.error) {
+                this.writeError(market.error);
+                return null;
+            }
 
             const upPrice = parseFloat(market.outcomePrices[0]);
             const downPrice = parseFloat(market.outcomePrices[1]);

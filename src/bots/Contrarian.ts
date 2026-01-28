@@ -62,6 +62,10 @@ export class Contrarian extends QuantBot implements QuantBotRun {
                 this.targetedMarket,
             );
             const market = await this.marketInfo.getMarketInfo(periodUrl);
+            if(market.error) {
+                this.writeError(market.error);
+                return null;
+            }
 
             const upPrice = parseFloat(market.outcomePrices[0]);
             const downPrice = parseFloat(market.outcomePrices[1]);
@@ -120,14 +124,14 @@ export class Contrarian extends QuantBot implements QuantBotRun {
     }
 
     public async run() {
-        this.on('reset', async () => {
+        this.registerResetHandler(async () => {
             await this.updateOrders();
             await this.auditAndReset()
             this.buyOrder = undefined;
             this.sellOrder = undefined;
             this.isTie = false;
             this.doNothing = false;
-        })
+        });
 
         this.tickWrapper(1000 * 5, 1000 * 2, async () => {
 

@@ -1,7 +1,6 @@
 import { Side } from "@polymarket/clob-client";
 
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
-import { CDMarketData } from "../nonBots/CDMarketData.js";
 import { MarketSchedule } from "../types/interfaces.js";
 
 // ============================================================================
@@ -96,7 +95,7 @@ export class NCandle extends QuantBot implements QuantBotRun {
     // --- Main Run Loop ---
 
     public async run(): Promise<void> {
-        this.setupHourlyReset();
+        this.setupPeriodReset();
         this.startTradingLoop();
     }
 
@@ -104,15 +103,15 @@ export class NCandle extends QuantBot implements QuantBotRun {
     // Setup
     // -------------------------------------------------------------------------
 
-    private setupHourlyReset(): void {
-        this.on('reset', async () => {
+    private setupPeriodReset(): void {
+        this.registerResetHandler(async () => {
             await this.updateOrders();
             await this.auditAndReset();
-            this.resetHourlyState();
+            this.resetTradeState();
         });
     }
 
-    private resetHourlyState(): void {
+    protected override resetTradeState(): void {
         this.buyOrder = undefined;
         this.sellOrder = undefined;
         this.state = 'FORMING_CANDLE';
@@ -126,8 +125,8 @@ export class NCandle extends QuantBot implements QuantBotRun {
         this.entryTokenId = undefined;
     }
 
-    private resetTradeState(): void {
-        // Reset for a new trade opportunity within the same hour
+    private resetForNewTrade(): void {
+        // Reset for a new trade opportunity within the same period
         this.buyOrder = undefined;
         this.sellOrder = undefined;
         this.state = 'FORMING_CANDLE';
@@ -146,45 +145,53 @@ export class NCandle extends QuantBot implements QuantBotRun {
 
     private startTradingLoop(): void {
         this.tickWrapper(1000 * 3, 1000 * 2, async () => {
-            await this.updateOrders();
-
-            // Check for stop-loss
-            if (this.state === 'TRADE_ACTIVE' && this.buyOrder?.status === TradeStatus.MATCHED) {
-                const stopLossTriggered = await this.checkStopLoss();
-                if (stopLossTriggered) {
-                    return;
-                }
-            }
-
-            // Handle sell order creation if buy matched
-            if (this.shouldCreateSellOrder()) {
-                await this.createSellOrder();
-            }
-
-            // Check if trade completed (sell matched) - prepare for next trade
-            if (this.isTradeCompleted()) {
-                this.handleTradeCompletion();
-                return;
-            }
-
-            // Check cutoff
-            if (this.isAfterCutoff() && this.state !== 'TRADE_ACTIVE') {
-                await this.handleCutoff();
-                return;
-            }
-
-            if (this.state === 'PAST_CUTOFF') {
-                return;
-            }
-
-            // Check if we can still trade this hour
-            if (!this.canTradeThisHour(this.maxTradesPerHour)) {
-                return;
-            }
-
-            // Execute state machine
-            await this.executeStateMachine();
+            await this.executeTradingLogic();
         });
+    }
+
+    private async executeTradingLogic(): Promise<void> {
+        await this.updateOrders();
+
+        // Check for stop-loss
+        if (this.state === 'TRADE_ACTIVE' && this.buyOrder?.status === TradeStatus.MATCHED) {
+            const stopLossTriggered = await this.checkStopLoss();
+            if (stopLossTriggered) {
+                return;
+            }
+        }
+
+        // Handle sell order creation if buy matched
+        if (this.shouldCreateSellOrder()) {
+            await this.createSellOrder();
+        }
+
+        // Check if trade completed (sell matched) - prepare for next trade
+        if (this.isTradeCompleted()) {
+            this.handleTradeCompletion();
+            return;
+        }
+
+        // Check cutoff
+        if (this.isAfterCutoff() && this.state !== 'TRADE_ACTIVE') {
+            await this.handleCutoff();
+            return;
+        }
+
+        if (this.state === 'PAST_CUTOFF') {
+            return;
+        }
+
+        // Check if we can still trade this hour
+        if (!this.canTradeThisHour(this.maxTradesPerHour)) {
+            return;
+        }
+
+        // Execute state machine
+        await this.executeStateMachine();
+    }
+
+    public override async onSimulationTick(): Promise<void> {
+        await this.executeTradingLogic();
     }
 
     // -------------------------------------------------------------------------
@@ -396,10 +403,6 @@ export class NCandle extends QuantBot implements QuantBotRun {
         if (this.buyOrder) {
             this.state = 'TRADE_ACTIVE';
             this.recordTrade();
-
-            this.buyOrder?.once('tradeMatched', () => {
-                this.createSellOrder();
-            });
         }
     }
 
@@ -540,7 +543,7 @@ export class NCandle extends QuantBot implements QuantBotRun {
         // Check if we can trade again
         if (this.canTradeThisHour(this.maxTradesPerHour) && !this.isAfterCutoff()) {
             this.writeLog(`Resetting for potential new trade opportunity`);
-            this.resetTradeState();
+            this.resetForNewTrade();
         } else {
             this.state = 'PAST_CUTOFF';
         }
@@ -552,7 +555,7 @@ export class NCandle extends QuantBot implements QuantBotRun {
 
     private async getCurrentPrice(): Promise<number | null> {
         try {
-            const cdMarketData = CDMarketData.getInstance();
+            const cdMarketData = this.getCdMarketData();
             return await cdMarketData.getCurrentPriceByMarket(this.targetedMarket);
         } catch (error) {
             this.writeError(error);

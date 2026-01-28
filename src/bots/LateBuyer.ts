@@ -3,21 +3,19 @@ import { Side } from "@polymarket/clob-client";
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
 import { BtcDirection, MarketSchedule } from "../types/interfaces.js";
 
-interface EarlyBuyerV2Props extends QuantBotProps {
+interface LateBuyerProps extends QuantBotProps {
     targetBuyPrice: number;
     targetSize: number;
     cutoffMinute: number;
     targetSellPrice: number;
     btcDirection: BtcDirection;
-    minFlops: number;
-    flopsLookbackHours: number;
 }
 
 // ============================================================================
-// EarlyBuyerV2 Class
+// LateBuyer Class
 // ============================================================================
 
-export class EarlyBuyerV2 extends QuantBot implements QuantBotRun {
+export class LateBuyer extends QuantBot implements QuantBotRun {
 
     // --- Properties ---
 
@@ -26,8 +24,6 @@ export class EarlyBuyerV2 extends QuantBot implements QuantBotRun {
     private cutoffMinute: number;
     private targetSellPrice: number;
     private btcDirection: BtcDirection;
-    private minFlops: number;
-    private flopsLookbackHours: number;
 
     private buyOrder?: TradeOrder;
     private sellOrder?: TradeOrder;
@@ -35,7 +31,7 @@ export class EarlyBuyerV2 extends QuantBot implements QuantBotRun {
 
     // --- Constructor ---
 
-    constructor(props: EarlyBuyerV2Props) {
+    constructor(props: LateBuyerProps) {
         super(props);
 
         this.targetBuyPrice = props.targetBuyPrice;
@@ -43,8 +39,6 @@ export class EarlyBuyerV2 extends QuantBot implements QuantBotRun {
         this.targetSize = props.targetSize;
         this.cutoffMinute = props.cutoffMinute;
         this.btcDirection = props.btcDirection;
-        this.minFlops = props.minFlops;
-        this.flopsLookbackHours = props.flopsLookbackHours;
     }
 
     // --- Main Run Loop ---
@@ -62,11 +56,11 @@ export class EarlyBuyerV2 extends QuantBot implements QuantBotRun {
         this.registerResetHandler(async () => {
             await this.updateOrders();
             await this.auditAndReset();
-            this.resetTradeState();
+            this.resetState();
         });
     }
 
-    protected override resetTradeState(): void {
+    private resetState(): void {
         this.buyOrder = undefined;
         this.sellOrder = undefined;
         this.isPastCutoff = false;
@@ -78,33 +72,25 @@ export class EarlyBuyerV2 extends QuantBot implements QuantBotRun {
 
     private startTradingLoop(): void {
         this.tickWrapper(1000 * 5, 1000 * 2, async () => {
-            await this.executeTradingLogic();
+            await this.updateOrders();
+
+            if (this.isPastCutoff) {
+                return;
+            }
+
+            if (this.shouldCreateSellOrder()) {
+                await this.createSellOrder();
+            }
+
+            if (this.isAfterCutoff()) {
+                await this.handleCutoff();
+                return;
+            }
+
+            if (this.shouldCreateBuyOrder()) {
+                await this.createBuyOrder();
+            }
         });
-    }
-
-    private async executeTradingLogic(): Promise<void> {
-        await this.updateOrders();
-
-        if (this.isPastCutoff) {
-            return;
-        }
-
-        if (this.shouldCreateSellOrder()) {
-            await this.createSellOrder();
-        }
-
-        if (this.isAfterCutoff()) {
-            await this.handleCutoff();
-            return;
-        }
-
-        if (this.shouldCreateBuyOrder()) {
-            await this.createBuyOrder();
-        }
-    }
-
-    public override async onSimulationTick(): Promise<void> {
-        await this.executeTradingLogic();
     }
 
     // -------------------------------------------------------------------------
@@ -115,7 +101,6 @@ export class EarlyBuyerV2 extends QuantBot implements QuantBotRun {
         if (this.buyOrder) return false;
         if (!this.checkIfOrderIsValid(this.targetBuyPrice, this.targetSize)) return false;
         if (!this.canSpend(this.targetBuyPrice * this.targetSize)) return false;
-        if (!this.hasEnoughFlops()) return false;
         return true;
     }
 
@@ -128,6 +113,7 @@ export class EarlyBuyerV2 extends QuantBot implements QuantBotRun {
 
     private async createBuyOrder(): Promise<void> {
         const tokenId = await this.getTargetTokenId();
+
         this.buyOrder = await this.makeOrder(
             'init-buy',
             tokenId,
@@ -150,31 +136,6 @@ export class EarlyBuyerV2 extends QuantBot implements QuantBotRun {
             this.targetSize,
             Side.SELL
         );
-    }
-
-    // -------------------------------------------------------------------------
-    // Flops Check
-    // -------------------------------------------------------------------------
-
-    private hasEnoughFlops(): boolean {
-        const cdMarketData = this.getCdMarketData();
-        const averages = cdMarketData.getAverages(this.flopsLookbackHours, this.targetedMarket);
-
-        if (!averages) {
-            this.writeLog(`Insufficient flops data for ${this.flopsLookbackHours} hours lookback`);
-            this.isPastCutoff = true;
-            return false;
-        }
-
-        const avgFlops = (averages.openFlops + averages.averageFlops) / 2;
-
-        if (avgFlops < this.minFlops) {
-            this.writeLog(`Flops too low: avg=${avgFlops.toFixed(2)}, min=${this.minFlops}`);
-            this.isPastCutoff = true;
-            return false;
-        }
-
-        return true;
     }
 
     // -------------------------------------------------------------------------

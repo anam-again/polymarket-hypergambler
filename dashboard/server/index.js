@@ -947,7 +947,7 @@ function parseOrdersFromBotLogs() {
   }
 
   const orders = [];
-  const matchedOrderIds = new Set(); // Track orders that have been MATCHED via UPDATE logs
+  const matchedOrCancelledOrderIds = new Set(); // Track orders that have been MATCHED via UPDATE logs
 
   const logFiles = fs.readdirSync(botsLogsDir)
     .filter(f => f.endsWith('.log') && !f.includes('Errors'));
@@ -968,8 +968,8 @@ function parseOrdersFromBotLogs() {
           if (parts.length >= 3) {
             const orderId = parts[0];
             const statusChange = parts[2]; // e.g., "LIVE -> MATCHED"
-            if (statusChange && statusChange.includes('-> MATCHED')) {
-              matchedOrderIds.add(orderId);
+            if (statusChange && statusChange.includes('-> MATCHED') || statusChange.includes('-> CANCELED')) {
+              matchedOrCancelledOrderIds.add(orderId);
             }
           }
         }
@@ -1015,7 +1015,7 @@ function parseOrdersFromBotLogs() {
   });
 
   // Filter out orders that have been MATCHED according to UPDATE logs
-  return orders.filter(o => !matchedOrderIds.has(o.orderId) && !matchedOrderIds.has(o.orderIdAlt));
+  return orders.filter(o => !matchedOrCancelledOrderIds.has(o.orderId) && !matchedOrCancelledOrderIds.has(o.orderIdAlt));
 }
 
 // Get live trades (orders not yet in audit log as completed)

@@ -1,5 +1,7 @@
 node_modules/
 dist/
+csvs/
+logs/
 *.log
 .DS_Store
 .env

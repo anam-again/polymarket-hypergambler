@@ -1,7 +1,6 @@
 import { Side } from "@polymarket/clob-client";
 
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
-import { CDMarketData } from "../nonBots/CDMarketData.js";
 import { MarketSchedule } from "../types/interfaces.js";
 
 // ============================================================================
@@ -76,7 +75,7 @@ export class MeanReversion extends QuantBot implements QuantBotRun {
     // --- Main Run Loop ---
 
     public async run(): Promise<void> {
-        this.setupHourlyReset();
+        this.setupPeriodReset();
         this.startTradingLoop();
     }
 
@@ -84,15 +83,15 @@ export class MeanReversion extends QuantBot implements QuantBotRun {
     // Setup
     // -------------------------------------------------------------------------
 
-    private setupHourlyReset(): void {
-        this.on('hourly', async () => {
+    private setupPeriodReset(): void {
+        this.registerResetHandler(async () => {
             await this.updateOrders();
             await this.auditAndReset();
-            this.resetState();
+            this.resetTradeState();
         });
     }
 
-    private resetState(): void {
+    protected override resetTradeState(): void {
         this.buyOrder = undefined;
         this.sellOrder = undefined;
         this.state = 'WAITING_DATA';
@@ -106,26 +105,34 @@ export class MeanReversion extends QuantBot implements QuantBotRun {
 
     private startTradingLoop(): void {
         this.tickWrapper(1000 * 5, 1000 * 2, async () => {
-            await this.updateOrders();
-
-            // Handle sell order creation if buy matched
-            if (this.shouldCreateSellOrder()) {
-                await this.createSellOrder();
-            }
-
-            // Check cutoff
-            if (this.isAfterCutoff() && this.state !== 'POSITION_OPEN') {
-                await this.handleCutoff();
-                return;
-            }
-
-            if (this.state === 'PAST_CUTOFF') {
-                return;
-            }
-
-            // Execute state machine
-            await this.executeStateMachine();
+            await this.executeTradingLogic();
         });
+    }
+
+    private async executeTradingLogic(): Promise<void> {
+        await this.updateOrders();
+
+        // Handle sell order creation if buy matched
+        if (this.shouldCreateSellOrder()) {
+            await this.createSellOrder();
+        }
+
+        // Check cutoff
+        if (this.isAfterCutoff() && this.state !== 'POSITION_OPEN') {
+            await this.handleCutoff();
+            return;
+        }
+
+        if (this.state === 'PAST_CUTOFF') {
+            return;
+        }
+
+        // Execute state machine
+        await this.executeStateMachine();
+    }
+
+    public override async onSimulationTick(): Promise<void> {
+        await this.executeTradingLogic();
     }
 
     // -------------------------------------------------------------------------
@@ -197,8 +204,8 @@ export class MeanReversion extends QuantBot implements QuantBotRun {
     // -------------------------------------------------------------------------
 
     private calculateRollingStats(): RollingStats | null {
-        const cdMarketData = CDMarketData.getInstance();
-        const recentPrices = cdMarketData.getRecentPrices(this.targetedMarket, this.lookbackPeriods);
+        const cdMarketData = this.getCdMarketData();
+        const recentPrices = cdMarketData.getRecentPrices(this.lookbackPeriods, this.targetedMarket);
 
         if (recentPrices.length < this.lookbackPeriods) {
             return null;
@@ -284,9 +291,6 @@ export class MeanReversion extends QuantBot implements QuantBotRun {
         if (this.buyOrder) {
             this.state = 'POSITION_OPEN';
 
-            this.buyOrder?.once('tradeMatched', () => {
-                this.createSellOrder();
-            });
         }
     }
 

@@ -62,16 +62,18 @@ OrderBatcher.initialize(clobClient, 200);
 
 const prodBots: QuantBotRun[] = [
   ...([
-    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 50, pullbackBuffer: 100, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 50 },
-    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 25, pullbackBuffer: 50, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 50 },
-    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 10, pullbackBuffer: 20, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 50 },
-    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.ETHEREUM_HOURLY, candleMinutes: 10, breakoutBuffer: 50, pullbackBuffer: 100, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 50 },
-    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.ETHEREUM_HOURLY, candleMinutes: 10, breakoutBuffer: 25, pullbackBuffer: 50, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 50 },
+    // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 50, pullbackBuffer: 100, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 50 },
+    // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 25, pullbackBuffer: 50, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 50 },
+    // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 10, pullbackBuffer: 20, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 50 },
+    // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.ETHEREUM_HOURLY, candleMinutes: 10, breakoutBuffer: 50, pullbackBuffer: 100, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 50 },
+    // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.ETHEREUM_HOURLY, candleMinutes: 10, breakoutBuffer: 25, pullbackBuffer: 50, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 50 },
+    // fcandle-btc15-4m-bb4-pp5-b0.52-s0.9
     { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, candleMinutes: 4, breakoutBuffer: 50, pullbackBuffer: 20, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 10 },
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, candleMinutes: 4, breakoutBuffer: 4, pullbackBuffer: 5, targetBuyPrice: .52, targetSellPrice: .90, targetSize: 10, cutoffMinute: 12 },
   ]).map((v) => {
     return new FirstCandle({
       ...v,
-      name: `fcandle-${targetMarketToShortname(v.targetedMarket)}-${v.candleMinutes}m-bb${v.breakoutBuffer}-pp${100}-b${v.targetBuyPrice}-s${v.targetSellPrice}`,
+      name: `fcandle-${targetMarketToShortname(v.targetedMarket)}-${v.candleMinutes}m-bb${v.breakoutBuffer}-pp${v.pullbackBuffer}-b${v.targetBuyPrice}-s${v.targetSellPrice}-co${v.cutoffMinute}`,
       ...commonProdProps,
     })
   }),
@@ -86,6 +88,10 @@ const prodBots: QuantBotRun[] = [
   }),
   ...([
     { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .13, targetSellPrice: .80, targetSize: 10, cutoffMinute: 9 },
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, shortMaPeriod: 1, longMaPeriod: 5, adxPeriod: 12, adxThreshold: 1.25, atrPeriod: 1, atrStopMultiple: 3.7, targetBuyPrice: .05, targetSellPrice: .48, targetSize: 20, cutoffMinute: 5 },
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.ETHEREUM_QUARTERLY, shortMaPeriod: 8, longMaPeriod: 1, adxPeriod: 5, adxThreshold: 1, atrPeriod: 11, atrStopMultiple: 2.3, targetBuyPrice: .05, targetSellPrice: .51, targetSize: 20, cutoffMinute: 5 },
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.XRP_QUARTERLY, shortMaPeriod: 7, longMaPeriod: 1, adxPeriod: 9, adxThreshold: 1, atrPeriod: 9, atrStopMultiple: 2, targetBuyPrice: .05, targetSellPrice: .52, targetSize: 20, cutoffMinute: 5 },
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.SOLANA_QUARTERLY, shortMaPeriod: 1, longMaPeriod: 7, adxPeriod: 14, adxThreshold: 6.9, atrPeriod: 10, atrStopMultiple: 1.06, targetBuyPrice: .05, targetSellPrice: .48, targetSize: 20, cutoffMinute: 9 },
   ]).map((v) => {
     return new TrendFollowing({
       ...v,
@@ -186,7 +192,7 @@ const testBots: QuantBotRun[] = [
   ]).map((v) => {
     return new FirstCandle({
       ...v,
-      name: `fcandle-${targetMarketToShortname(v.targetedMarket)}-${v.candleMinutes}m-bb${v.candleMinutes}-pp${v.pullbackBuffer}-b${v.targetBuyPrice}-s${v.targetSellPrice}`,
+      name: `fcandle-${targetMarketToShortname(v.targetedMarket)}-${v.candleMinutes}m-bb${v.candleMinutes}-pp${v.pullbackBuffer}-b${v.targetBuyPrice}-s${v.targetSellPrice}-co${v.cutoffMinute}`,
       ...commonTestProps,
     })
   }),
@@ -231,6 +237,16 @@ const testBots: QuantBotRun[] = [
     { targetedMarket: TargetedMarket.BITCOIN_HOURLY, shortMaPeriod: 5, longMaPeriod: 22, adxPeriod: 22, adxThreshold: 18.5, atrPeriod: 14, atrStopMultiple: 1.0, targetBuyPrice: .16, targetSellPrice: .65, cutoffMinute: 40 },
     { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, shortMaPeriod: 2, longMaPeriod: 5, adxPeriod: 3, adxThreshold: 6, atrPeriod: 4, atrStopMultiple: 2.0, targetBuyPrice: .52, targetSellPrice: .95, cutoffMinute: 10 },
     { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, shortMaPeriod: 4, longMaPeriod: 10, adxPeriod: 6, adxThreshold: 12, atrPeriod: 8, atrStopMultiple: 2.0, targetBuyPrice: .52, targetSellPrice: .95, cutoffMinute: 10 },
+    // Jan23
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .10, targetSellPrice: .25, targetSize: 10, cutoffMinute: 8 },
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.ETHEREUM_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .10, targetSellPrice: .25, targetSize: 10, cutoffMinute: 8 },
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.SOLANA_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .10, targetSellPrice: .25, targetSize: 10, cutoffMinute: 8 },
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.XRP_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .10, targetSellPrice: .25, targetSize: 10, cutoffMinute: 8 },
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .08, targetSellPrice: .20, targetSize: 10, cutoffMinute: 8 },
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.ETHEREUM_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .08, targetSellPrice: .20, targetSize: 10, cutoffMinute: 8 },
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.SOLANA_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .08, targetSellPrice: .20, targetSize: 10, cutoffMinute: 8 },
+    { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.XRP_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .08, targetSellPrice: .20, targetSize: 10, cutoffMinute: 8 },
+
   ]).map((v) => {
     return new TrendFollowing({
       ...v,
@@ -244,23 +260,156 @@ checkIfBotsHaveMatchingNames([...testBots, ...prodBots]);
 
 console.log('running...')
 
-cdMarketData.run();
-marketInfo.run();
-
 const logCleaner = new LogCleaner({
   logsDirectory: './logs',
-  retentionDays: 60,
+  retentionDays: 30,
 });
-logCleaner.run();
 
-// Start prod bots at the beginning of the next hour with restart on failure
-const msUntilNextHour = getMsUntilNextHour() + 5 * 1000;
-console.log(`[PROD] Scheduling ${prodBots.length} prod bots to start in ${formatDuration(msUntilNextHour)} (at the next hour)`);
+// Track scheduled timeouts so we can cancel them on restart
+let prodBotsTimeout: ReturnType<typeof setTimeout> | null = null;
+let restartTimeout: ReturnType<typeof setTimeout> | null = null;
 
-setTimeout(() => {
-  console.log('[PROD] Starting prod bots at hour boundary');
-  runBotsWithRestartOnFailure(prodBots, 'PROD');
-}, msUntilNextHour);
+/**
+ * Stops all services and bots.
+ */
+function stopAllServices(): void {
+  console.log('[SYSTEM] Stopping all services...');
 
-// Start test bots immediately with restart on failure
-runBotsWithRestartOnFailure(testBots, 'TEST');
+  // Stop scheduled timeouts
+  if (prodBotsTimeout) {
+    clearTimeout(prodBotsTimeout);
+    prodBotsTimeout = null;
+  }
+  if (restartTimeout) {
+    clearTimeout(restartTimeout);
+    restartTimeout = null;
+  }
+
+  // Stop core services
+  try {
+    cdMarketData.stop();
+  } catch (e) {
+    console.error('[SYSTEM] Error stopping cdMarketData:', e);
+  }
+
+  try {
+    marketInfo.stopPriceLogging();
+  } catch (e) {
+    console.error('[SYSTEM] Error stopping marketInfo:', e);
+  }
+
+  try {
+    logCleaner.stop();
+  } catch (e) {
+    console.error('[SYSTEM] Error stopping logCleaner:', e);
+  }
+
+  // Stop all bots
+  [...prodBots, ...testBots].forEach((bot) => {
+    try {
+      bot.stop();
+    } catch (e) {
+      console.log(e);
+      // Ignore stop errors
+    }
+  });
+}
+
+/**
+ * Starts all core services and bots with error handling.
+ * If any service fails, schedules a restart at the next hour.
+ */
+function startAllServices(): void {
+  let hasScheduledRestart = false;
+
+  const scheduleSystemRestart = (reason: string) => {
+    if (hasScheduledRestart) return;
+    hasScheduledRestart = true;
+
+    console.error(`[SYSTEM] ${reason}. Scheduling full system restart at next hour boundary.`);
+
+    stopAllServices();
+
+    const msUntilRestart = getMsUntilNextHour() + 5 * 1000;
+    console.log(`[SYSTEM] Will restart in ${formatDuration(msUntilRestart)}`);
+
+    restartTimeout = setTimeout(() => {
+      hasScheduledRestart = false;
+      console.log('[SYSTEM] Restarting all services...');
+      startAllServices();
+    }, msUntilRestart);
+  };
+
+  // Start core services with error handling
+  try {
+    cdMarketData.run();
+  } catch (e) {
+    console.error('[SYSTEM] cdMarketData.run() failed:', e);
+    scheduleSystemRestart('cdMarketData failed to start');
+    return;
+  }
+
+  try {
+    marketInfo.run();
+  } catch (e) {
+    console.error('[SYSTEM] marketInfo.run() failed:', e);
+    scheduleSystemRestart('marketInfo failed to start');
+    return;
+  }
+
+  // Start logCleaner with its own restart logic (doesn't affect the rest of the system)
+  const startLogCleanerWithRestart = () => {
+    try {
+      logCleaner.run();
+    } catch (e) {
+      console.error('[SYSTEM] logCleaner.run() failed:', e);
+      const msUntilRestart = getMsUntilNextHour() + 5 * 1000;
+      console.log(`[SYSTEM] logCleaner will restart independently in ${formatDuration(msUntilRestart)}`);
+      setTimeout(startLogCleanerWithRestart, msUntilRestart);
+    }
+  };
+  startLogCleanerWithRestart();
+
+  // Set up global error handler for uncaught exceptions
+  const handleUncaughtError = (error: Error | unknown, origin: string) => {
+    console.error(`[SYSTEM] Uncaught error (${origin}):`, error);
+    scheduleSystemRestart(`Uncaught error: ${origin}`);
+  };
+
+  process.removeAllListeners('uncaughtException');
+  process.removeAllListeners('unhandledRejection');
+
+  process.on('uncaughtException', (error) => {
+    handleUncaughtError(error, 'uncaughtException');
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    handleUncaughtError(reason, 'unhandledRejection');
+  });
+
+  // Start prod bots at the beginning of the hour
+  // If we're within the first 5 minutes of the hour, start immediately
+  // Otherwise, wait until the next hour
+  const now = new Date();
+  const minuteOfHour = now.getMinutes();
+  const isNearHourStart = minuteOfHour < 5;
+
+  if (isNearHourStart) {
+    console.log(`[PROD] Starting ${prodBots.length} prod bots immediately (within first 5 minutes of hour)`);
+    runBotsWithRestartOnFailure(prodBots, 'PROD');
+  } else {
+    const msUntilNextHour = getMsUntilNextHour() + 5 * 1000;
+    console.log(`[PROD] Scheduling ${prodBots.length} prod bots to start in ${formatDuration(msUntilNextHour)} (at the next hour)`);
+
+    prodBotsTimeout = setTimeout(() => {
+      console.log('[PROD] Starting prod bots at hour boundary');
+      runBotsWithRestartOnFailure(prodBots, 'PROD');
+    }, msUntilNextHour);
+  }
+
+  // Start test bots immediately with restart on failure
+  runBotsWithRestartOnFailure(testBots, 'TEST');
+}
+
+// Start all services
+startAllServices();

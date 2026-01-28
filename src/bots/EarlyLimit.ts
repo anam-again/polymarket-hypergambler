@@ -39,13 +39,13 @@ export class EarlyLimit extends QuantBot implements QuantBotRun {
     }
 
     public async run() {
-        this.on('hourly', async () => {
+        this.registerResetHandler(async () => {
             await this.updateOrders();
             await this.auditAndReset()
             this.buyOrder = undefined;
             this.sellOrder = undefined;
             this.doNothing = false;
-        })
+        });
 
         this.tickWrapper(1000 * 4, 1000 * 2, async () => {
             if (this.doNothing) {

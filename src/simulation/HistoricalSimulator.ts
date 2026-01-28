@@ -2,7 +2,6 @@ import { Side } from '@polymarket/clob-client';
 import { SimulationClock } from './SimulationClock.js';
 import { MockCDMarketData } from './MockCDMarketData.js';
 import { MockMarketInfo } from './MockMarketInfo.js';
-import { analyzeWithRegression, LinearRegression, RegressionResult } from './LinearRegression.js';
 import { GeneticOptimizer, GeneticConfig, ParameterBounds, OptimizationResult, CoinType } from './GeneticOptimizer.js';
 import { SimulatorLogger } from './SimulatorLogger.js';
 import { TargetedMarket } from '../types/interfaces.js';
@@ -36,6 +35,8 @@ export interface BotParams {
     cdMarketData: MockCDMarketData;
     params: Record<string, unknown>;
     targetedMarket: TargetedMarket;
+    shouldWriteLogs?: boolean;   // Optional - defaults to false for simulation
+    logDirectory?: string;       // Optional - custom log directory for audit runs
 }
 
 export interface SimulatedBot {
@@ -80,6 +81,7 @@ export class HistoricalSimulator {
     private marketInfo!: MockMarketInfo;
     private cdMarketData!: MockCDMarketData;
     private logger: SimulatorLogger;
+    private lastAuditLogDir: string | null = null;
 
     constructor(config: SimulationConfig) {
         this.config = {
@@ -92,136 +94,12 @@ export class HistoricalSimulator {
         this.logger = new SimulatorLogger(`sim-${this.config.coinType}`);
     }
 
-    // -------------------------------------------------------------------------
-    // Main Entry Point
-    // -------------------------------------------------------------------------
-
     /**
-     * Runs the simulation with multiple bot configurations (parameter sweep).
+     * Gets the last audit log directory path, if audit mode was used.
+     * Returns null if no audit has been run yet.
      */
-    public async runParameterSweep(botConfigs: BotConfig[]): Promise<SimulationResult[]> {
-        const allResults: SimulationResult[] = [];
-
-        for (const botConfig of botConfigs) {
-            this.logger.log(`\n${'='.repeat(60)}`);
-            this.logger.log(`Running parameter sweep for: ${botConfig.name}`);
-            this.logger.log(`${'='.repeat(60)}`);
-
-            for (let i = 0; i < botConfig.parameterSets.length; i++) {
-                const params = botConfig.parameterSets[i];
-                this.logger.log(`\n[${i + 1}/${botConfig.parameterSets.length}] Testing parameters: ${JSON.stringify(params)}`);
-
-                const result = await this.runSingleSimulation(botConfig, params);
-                allResults.push(result);
-
-                this.printResult(result);
-            }
-        }
-
-        return allResults;
-    }
-
-    /**
-     * Runs a single simulation with specific parameters.
-     */
-    private async runSingleSimulation(
-        botConfig: BotConfig,
-        params: Record<string, unknown>
-    ): Promise<SimulationResult> {
-        // Initialize simulation components
-        this.initializeSimulation();
-
-        // Create the bot
-        const bot = botConfig.factory({
-            name: botConfig.name,
-            clock: this.clock,
-            marketInfo: this.marketInfo,
-            cdMarketData: this.cdMarketData,
-            params,
-            targetedMarket: this.config.targetedMarket!,
-        });
-
-        // Register period change handler based on market type
-        const isQuarterly = this.config.targetedMarket?.toString().includes('Quarterly');
-        if (isQuarterly) {
-            // For quarterly markets, reset every 15 minutes
-            this.clock.on('quarterly', async () => {
-                await bot.onHourChange();
-            });
-        } else {
-            // For hourly markets, reset every hour
-            this.clock.on('hourly', async () => {
-                await bot.onHourChange();
-            });
-        }
-
-        // Run the simulation
-        let tickCount = 0;
-        const startTime = Date.now();
-
-        while (!this.clock.isComplete()) {
-            await bot.onTick();
-            await this.clock.tick();  // Now properly awaits period change handlers
-            tickCount++;
-
-            // Progress update every 1000 ticks
-            if (tickCount % 1000 === 0) {
-                const progress = this.clock.getProgress().toFixed(1);
-                this.logger.progress(`  Progress: ${progress}%`);
-            }
-        }
-
-        const elapsedMs = Date.now() - startTime;
-        this.logger.clearProgress();
-        this.logger.log(`  Completed ${tickCount} ticks in ${(elapsedMs / 1000).toFixed(2)}s`);
-
-        // Calculate results
-        const trades = bot.getTrades();
-        const result = this.calculateResults(botConfig.name, params, trades);
-
-        // Write trade audits
-        this.logger.createAuditFile(botConfig.name);
-        this.logger.writeSimulatedTradeAudits(botConfig.name, trades);
-
-        // Write top trades and average stats if enabled
-        if (this.config.auditTradesCount && this.config.auditTradesCount > 0) {
-            this.logger.writeTopTradesWithParams(trades, params, this.config.auditTradesCount);
-            this.logger.writeAverageTradeStats(trades, params);
-        }
-
-        // Cleanup
-        this.clock.clearListeners();
-
-        return result;
-    }
-
-    // -------------------------------------------------------------------------
-    // Initialization
-    // -------------------------------------------------------------------------
-
-    private initializeSimulation(): void {
-        // Calculate time range
-        const endTime = Date.now();
-        const startTime = endTime - (this.config.lookbackDays * 24 * 60 * 60 * 1000);
-        const coinType = this.config.coinType!;
-
-        // Create components
-        this.clock = new SimulationClock(startTime, endTime, this.config.tickIntervalMs);
-        this.marketInfo = new MockMarketInfo(this.clock, coinType);
-        this.cdMarketData = new MockCDMarketData(this.clock, coinType);
-
-        // Validate data availability
-        const marketDataRange = this.marketInfo.getDataRange();
-        const btcDataRange = this.cdMarketData.getDataRange();
-
-        if (!marketDataRange || !btcDataRange) {
-            throw new Error(`No historical data available for ${coinType.toUpperCase()}. Please ensure log files exist.`);
-        }
-
-        const timeRange = this.clock.getTimeRange();
-        this.logger.log(`\n  Simulation period: ${timeRange.start.toISOString()} to ${timeRange.end.toISOString()}`);
-        this.logger.log(`  Coin type: ${coinType.toUpperCase()}`);
-        this.logger.log(`  Duration: ${timeRange.durationDays.toFixed(1)} days`);
+    public getLastAuditLogDir(): string | null {
+        return this.lastAuditLogDir;
     }
 
     // -------------------------------------------------------------------------
@@ -274,141 +152,6 @@ export class HistoricalSimulator {
     }
 
     // -------------------------------------------------------------------------
-    // Output
-    // -------------------------------------------------------------------------
-
-    private printResult(result: SimulationResult): void {
-        this.logger.log(`\n  Results:`);
-        this.logger.log(`    Total Trades:   ${result.totalTrades}`);
-        this.logger.log(`    Matched:        ${result.matchedTrades}`);
-        this.logger.log(`    Expired:        ${result.expiredTrades}`);
-        this.logger.log(`    Total PnL:      $${result.totalPnl.toFixed(2)}`);
-        this.logger.log(`    Win Rate:       ${result.winRate.toFixed(1)}%`);
-        this.logger.log(`    Avg PnL:        $${result.avgPnl.toFixed(2)}`);
-        this.logger.log(`    Max Drawdown:   $${result.maxDrawdown.toFixed(2)}`);
-        this.logger.log(`    Sharpe Ratio:   ${result.sharpeRatio.toFixed(3)}`);
-    }
-
-    public printSummary(results: SimulationResult[]): void {
-        this.logger.log(`\n${'='.repeat(60)}`);
-        this.logger.log('SIMULATION SUMMARY');
-        this.logger.log(`${'='.repeat(60)}`);
-
-        // Sort by total PnL
-        const sorted = [...results].sort((a, b) => b.totalPnl - a.totalPnl);
-
-        this.logger.log('\nTop Performers (by Total PnL):');
-        this.logger.log('-'.repeat(60));
-
-        for (let i = 0; i < Math.min(10, sorted.length); i++) {
-            const r = sorted[i];
-            this.logger.log(`${i + 1}. ${r.botName}`);
-            this.logger.log(`   Params: ${JSON.stringify(r.params)}`);
-            this.logger.log(`   PnL: $${r.totalPnl.toFixed(2)} | Win Rate: ${r.winRate.toFixed(1)}% | Sharpe: ${r.sharpeRatio.toFixed(3)}`);
-        }
-
-        // Best by different metrics
-        this.logger.log('\n' + '-'.repeat(60));
-        this.logger.log('Best by Metric:');
-
-        const bestWinRate = sorted.reduce((best, r) => r.winRate > best.winRate ? r : best);
-        this.logger.log(`  Highest Win Rate: ${bestWinRate.botName} (${bestWinRate.winRate.toFixed(1)}%)`);
-
-        const bestSharpe = sorted.reduce((best, r) => r.sharpeRatio > best.sharpeRatio ? r : best);
-        this.logger.log(`  Highest Sharpe:   ${bestSharpe.botName} (${bestSharpe.sharpeRatio.toFixed(3)})`);
-
-        const lowestDrawdown = sorted.reduce((best, r) => r.maxDrawdown > best.maxDrawdown ? r : best);
-        this.logger.log(`  Lowest Drawdown:  ${lowestDrawdown.botName} ($${lowestDrawdown.maxDrawdown.toFixed(2)})`);
-
-        // Run regression analysis per bot strategy
-        this.printRegressionAnalysis(results);
-    }
-
-    // -------------------------------------------------------------------------
-    // Regression Analysis
-    // -------------------------------------------------------------------------
-
-    private printRegressionAnalysis(results: SimulationResult[]): void {
-        this.logger.log(`\n${'='.repeat(60)}`);
-        this.logger.log('LINEAR REGRESSION ANALYSIS');
-        this.logger.log(`${'='.repeat(60)}`);
-
-        // Group results by bot name
-        const botGroups = new Map<string, SimulationResult[]>();
-        for (const result of results) {
-            const group = botGroups.get(result.botName) ?? [];
-            group.push(result);
-            botGroups.set(result.botName, group);
-        }
-
-        // Run regression for each bot
-        for (const [botName, botResults] of botGroups) {
-            this.logger.log(`\n${'-'.repeat(60)}`);
-            this.logger.log(`Strategy: ${botName}`);
-            this.logger.log(`${'-'.repeat(60)}`);
-
-            if (botResults.length < 3) {
-                this.logger.log('  Insufficient data points for regression (need at least 3)');
-                continue;
-            }
-
-            const regressionResult = analyzeWithRegression(botResults);
-
-            if (!regressionResult) {
-                this.logger.log('  Regression analysis failed');
-                continue;
-            }
-
-            this.printRegressionResult(regressionResult);
-        }
-
-        // Overall regression across all results
-        if (results.length >= 3) {
-            this.logger.log(`\n${'='.repeat(60)}`);
-            this.logger.log('OVERALL REGRESSION (All Strategies Combined)');
-            this.logger.log(`${'='.repeat(60)}`);
-
-            const overallRegression = analyzeWithRegression(results);
-            if (overallRegression) {
-                this.printRegressionResult(overallRegression);
-            }
-        }
-    }
-
-    private printRegressionResult(result: RegressionResult): void {
-        this.logger.log(`\n  Model Quality:`);
-        this.logger.log(`    R-squared: ${(result.rSquared * 100).toFixed(2)}% (variance explained)`);
-
-        this.logger.log(`\n  Parameter Coefficients (impact on PnL):`);
-        const coefficients = Array.from(result.coefficients.entries())
-            .filter(([key]) => key !== 'intercept')
-            .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
-
-        for (const [param, coef] of coefficients) {
-            const direction = coef >= 0 ? '+' : '';
-            const impact = Math.abs(coef) > 1 ? 'HIGH' : Math.abs(coef) > 0.1 ? 'MEDIUM' : 'LOW';
-            this.logger.log(`    ${param}: ${direction}${coef.toFixed(4)} [${impact}]`);
-        }
-
-        this.logger.log(`\n  Optimal Parameters (predicted by regression):`);
-        for (const [param, value] of Object.entries(result.optimalParams)) {
-            this.logger.log(`    ${param}: ${typeof value === 'number' ? value.toFixed(4) : value}`);
-        }
-        this.logger.log(`\n  Predicted Optimal PnL: $${result.predictedOptimalPnl.toFixed(2)}`);
-
-        // Interpretation guidance
-        this.logger.log(`\n  Interpretation:`);
-        const sortedCoefs = coefficients.slice(0, 3);
-        for (const [param, coef] of sortedCoefs) {
-            if (coef > 0) {
-                this.logger.log(`    - Increasing '${param}' tends to INCREASE PnL`);
-            } else {
-                this.logger.log(`    - Increasing '${param}' tends to DECREASE PnL`);
-            }
-        }
-    }
-
-    // -------------------------------------------------------------------------
     // Genetic Algorithm Optimization
     // -------------------------------------------------------------------------
 
@@ -429,6 +172,9 @@ export class HistoricalSimulator {
 
         const optimizer = new GeneticOptimizer(geneticConfig ?? {}, bounds, this.logger);
 
+        // Initialize status bar
+        this.logger.initStatusBar();
+
         // Initialize first generation
         let paramSets = optimizer.initializePopulation();
         this.logger.log(`\nInitialized population of ${paramSets.length} individuals`);
@@ -441,6 +187,10 @@ export class HistoricalSimulator {
         let bestTrades: SimulatedTrade[] = [];
         let bestFitness = -Infinity;
 
+        // Track top N performers for audit logging (stores {params, fitness})
+        const auditCount = this.config.auditTradesCount ?? 0;
+        const topPerformers: Array<{ params: Record<string, number>; fitness: number }> = [];
+
         // Evolution loop
         while (true) {
             const generation = optimizer.getGeneration();
@@ -450,21 +200,44 @@ export class HistoricalSimulator {
             const results: SimulationResult[] = [];
             const tradesPerIndividual: SimulatedTrade[][] = [];
 
+            // Track running totals for average calculation
+            let runningPnlSum = 0;
+
             for (let i = 0; i < paramSets.length; i++) {
                 const params = paramSets[i];
-                this.logger.progress(`  Evaluating individual ${i + 1}/${paramSets.length}...`);
+
+                // Update status bar
+                const currentAvg = i > 0 ? runningPnlSum / i : 0;
+                this.logger.updateSimulationStatus(
+                    generation,
+                    i + 1,
+                    paramSets.length,
+                    bestFitness === -Infinity ? 0 : bestFitness,
+                    currentAvg
+                );
 
                 const { result, trades } = await this.runSingleBotSimulationWithTrades(botName, botFactory, params);
                 results.push(result);
                 tradesPerIndividual.push(trades);
+
+                // Update running sum for average
+                runningPnlSum += result.totalPnl;
 
                 // Track best performer for audit
                 if (result.totalPnl > bestFitness) {
                     bestFitness = result.totalPnl;
                     bestTrades = trades;
                 }
+
+                // Track top N performers for re-run with logging
+                if (auditCount > 0) {
+                    topPerformers.push({ params: { ...params }, fitness: result.totalPnl });
+                    topPerformers.sort((a, b) => b.fitness - a.fitness);
+                    if (topPerformers.length > auditCount) {
+                        topPerformers.pop();
+                    }
+                }
             }
-            this.logger.clearProgress(50);
 
             // Update fitness scores
             optimizer.updateFitness(results);
@@ -489,25 +262,67 @@ export class HistoricalSimulator {
 
         // Write top trades and average stats if enabled
         const bestParams = optimizer.getResult().bestIndividual.params;
-        if (this.config.auditTradesCount && this.config.auditTradesCount > 0) {
-            this.logger.writeTopTradesWithParams(bestTrades, bestParams, this.config.auditTradesCount);
+        if (auditCount > 0) {
+            this.logger.writeTopTradesWithParams(bestTrades, bestParams, auditCount);
             this.logger.writeAverageTradeStats(bestTrades, bestParams);
+
+            // Re-run top N performers with logging enabled
+            this.logger.log(`\n${'='.repeat(60)}`);
+            this.logger.log(`Re-running top ${topPerformers.length} performers with logging...`);
+            this.logger.log(`${'='.repeat(60)}`);
+
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            const auditLogDir = `./logs/simulator/audit/${botName.toLowerCase()}-${timestamp}`;
+
+            for (let rank = 0; rank < topPerformers.length; rank++) {
+                const performer = topPerformers[rank];
+                const logDirectory = `${auditLogDir}/run${rank + 1}`;
+
+                this.logger.log(`\n[${rank + 1}/${topPerformers.length}] Re-running with PnL=$${performer.fitness.toFixed(2)}...`);
+                this.logger.log(`  Parameters:`);
+                for (const [key, value] of Object.entries(performer.params)) {
+                    this.logger.log(`    ${key}: ${value.toFixed(4)}`);
+                }
+                this.logger.log(`  Log directory: ${logDirectory}`);
+
+                const { result, trades } = await this.runSingleBotSimulationWithTrades(
+                    `run${rank + 1}-${botName}`,
+                    botFactory,
+                    performer.params,
+                    { shouldWriteLogs: true, logDirectory }
+                );
+
+                // Write trade audit in production format
+                this.logger.writeSimulatedTradeAudits(`run${rank + 1}-${botName}`, trades, logDirectory);
+
+                this.logger.log(`  Logs written for run ${rank + 1}`);
+            }
+
+            // Copy sim-... and strategy audit logs to the audit directory
+            this.logger.copyLogsToDirectory(auditLogDir);
+            this.lastAuditLogDir = auditLogDir;
+
+            this.logger.log(`\nAudit logs written to: ${auditLogDir}`);
         }
         this.logger.log(`\nTrade audit written to: ${auditPath}`);
+
+        // Clean up status bar
+        this.logger.clearStatusBar();
 
         return optimizer.getResult();
     }
 
     /**
-     * Runs a single bot simulation with specific parameters.
+     * Public method to run a single bot simulation with specified parameters.
+     * Used by YAML-based custom parameter simulation.
      */
-    private async runSingleBotSimulation(
+    public async runSingleSimulation(
         botName: string,
         botFactory: (params: BotParams) => SimulatedBot,
-        params: Record<string, number>
-    ): Promise<SimulationResult> {
-        const { result } = await this.runSingleBotSimulationWithTrades(botName, botFactory, params);
-        return result;
+        params: Record<string, number>,
+        options?: { shouldWriteLogs?: boolean; logDirectory?: string }
+    ): Promise<{ result: SimulationResult; trades: SimulatedTrade[] }> {
+        return this.runSingleBotSimulationWithTrades(botName, botFactory, params, options);
     }
 
     /**
@@ -516,7 +331,8 @@ export class HistoricalSimulator {
     private async runSingleBotSimulationWithTrades(
         botName: string,
         botFactory: (params: BotParams) => SimulatedBot,
-        params: Record<string, number>
+        params: Record<string, number>,
+        options?: { shouldWriteLogs?: boolean; logDirectory?: string }
     ): Promise<{ result: SimulationResult; trades: SimulatedTrade[] }> {
         // Initialize fresh simulation components
         this.initializeSimulationQuiet();
@@ -529,6 +345,8 @@ export class HistoricalSimulator {
             cdMarketData: this.cdMarketData,
             params,
             targetedMarket: this.config.targetedMarket!,
+            shouldWriteLogs: options?.shouldWriteLogs ?? false,
+            logDirectory: options?.logDirectory,
         });
 
         // Register period change handler based on market type
@@ -547,7 +365,18 @@ export class HistoricalSimulator {
 
         // Run the simulation
         while (!this.clock.isComplete()) {
-            await bot.onTick();
+            try {
+                await bot.onTick();
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                if (errorMessage.includes('No data available for current 15-minute period')) {
+                    // Log warning but continue - data gap at period boundary
+                    // This can happen at the start of a new 15-minute period before data is logged
+                    // Silently skip this tick to avoid spamming logs
+                } else {
+                    throw error; // Re-throw other errors
+                }
+            }
             await this.clock.tick();  // Now properly awaits period change handlers
         }
 

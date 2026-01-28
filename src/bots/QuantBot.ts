@@ -3,11 +3,13 @@ import { ClobClient, OpenOrder, OrderResponse, OrderType, Side } from "@polymark
 // SignedOrder type from the client's createOrder method
 type SignedOrder = Awaited<ReturnType<ClobClient['createOrder']>>;
 
-import { appendFileSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync } from "fs";
 
 import { MarketInfo } from "../nonBots/MarketInfo.js";
-import { IClock, IMarketInfo, MarketSchedule, TargetedMarket, TradeStatus, TradeOrderProps } from "../types/interfaces.js";
+import { CDMarketData } from "../nonBots/CDMarketData.js";
+import { IClock, IMarketData, IMarketInfo, MarketSchedule, TargetedMarket, TradeStatus, TradeOrderProps } from "../types/interfaces.js";
 import { RealClock } from "../utils/RealClock.js";
+import { error } from "console";
 
 // ============================================================================
 // Order Batcher Types
@@ -456,7 +458,10 @@ export interface QuantBotProps {
   marketInfo: MarketInfo | IMarketInfo;
   PROD_MODE: boolean;
   targetedMarket: TargetedMarket;
-  clock?: IClock;  // Optional - defaults to RealClock for production
+  clock?: IClock;           // Optional - defaults to RealClock for production
+  cdMarketData?: IMarketData;  // Optional - defaults to CDMarketData singleton for production
+  logDirectory?: string;       // Optional - defaults to './logs/bots' for production
+  shouldWriteLogs?: boolean;   // Optional - defaults to true. Set false to disable logging.
 }
 
 export interface QuantBotRun {
@@ -491,58 +496,62 @@ function formatDuration(ms: number): string {
 
 /**
  * Starts bots and sets up error handling for automatic restart on failure.
- * If any bot fails, all bots are stopped and a restart is scheduled
- * at the top of the next hour.
+ * If a bot fails, only that bot is stopped and scheduled for restart at
+ * the top of the next hour. Other bots continue running.
  *
  * @param bots - Array of bots to run
  * @param label - Label for logging (e.g., 'PROD' or 'TEST')
  */
 export function runBotsWithRestartOnFailure(bots: QuantBotRun[], label: string): void {
-  let isRestarting = false;
+  // Track which bots are currently scheduled for restart to prevent duplicate restarts
+  const botsScheduledForRestart = new Set<string>();
 
-  const scheduleRestart = (reason: string) => {
-    if (isRestarting) return;
-    isRestarting = true;
+  const restartBot = (bot: QuantBotRun, reason: string) => {
+    const botName = bot.name || 'unknown';
 
-    console.error(`[${label}] ${reason}. Scheduling restart at next hour boundary.`);
+    // Prevent duplicate restart scheduling for the same bot
+    if (botsScheduledForRestart.has(botName)) {
+      console.log(`[${label}] Bot ${botName} already scheduled for restart, ignoring`);
+      return;
+    }
+    botsScheduledForRestart.add(botName);
 
-    // Stop all bots
-    bots.forEach((bot) => {
-      try {
-        bot.stop();
-      } catch (e) {
-        // Ignore stop errors
-      }
-    });
+    console.error(`[${label}] Bot ${botName} failed: ${reason}. Scheduling individual restart.`);
+
+    // Stop only this bot
+    try {
+      bot.stop();
+    } catch (e) {
+      // Ignore stop errors
+    }
 
     const msUntilRestart = getMsUntilNextHour() + 5 * 1000;
-    console.log(`[${label}] Will restart in ${formatDuration(msUntilRestart)}`);
+    console.log(`[${label}] Bot ${botName} will restart in ${formatDuration(msUntilRestart)}`);
 
     setTimeout(() => {
-      isRestarting = false;
-      console.log(`[${label}] Restarting bots after failure...`);
-      startBots();
+      botsScheduledForRestart.delete(botName);
+      console.log(`[${label}] Restarting bot ${botName}...`);
+      startSingleBot(bot);
     }, msUntilRestart);
   };
 
-  const startBots = () => {
-    console.log(`[${label}] Starting ${bots.length} bots...`);
-
-    bots.forEach((bot) => {
-      try {
-        // Wrap in Promise.resolve to handle both sync and async run() methods
-        Promise.resolve(bot.run()).catch((error: unknown) => {
-          console.error(`[${label}] Bot ${bot.name || 'unknown'} failed:`, error);
-          scheduleRestart(`Bot ${bot.name || 'unknown'} threw an error`);
-        });
-      } catch (error) {
-        console.error(`[${label}] Failed to start bot ${bot.name || 'unknown'}:`, error);
-        scheduleRestart(`Bot ${bot.name || 'unknown'} failed to start`);
-      }
-    });
+  const startSingleBot = (bot: QuantBotRun) => {
+    const botName = bot.name || 'unknown';
+    try {
+      // Wrap in Promise.resolve to handle both sync and async run() methods
+      Promise.resolve(bot.run()).catch((error: unknown) => {
+        console.error(`[${label}] Bot ${botName} failed:`, error);
+        restartBot(bot, String(error));
+      });
+    } catch (error) {
+      console.error(`[${label}] Failed to start bot ${botName}:`, error);
+      restartBot(bot, String(error));
+    }
   };
 
-  startBots();
+  // Start all bots
+  console.log(`[${label}] Starting ${bots.length} bots...`);
+  bots.forEach(startSingleBot);
 }
 
 // ============================================================================
@@ -663,8 +672,16 @@ export class QuantBot {
   private tickStopFn: (() => void) | null = null;
   private isStopped: boolean = false;
 
+  // Track if reset handler has been registered to prevent duplicates
+  private resetListenerRegistered: boolean = false;
+
   public targetedMarket: TargetedMarket;
   public marketSchedule: MarketSchedule;
+
+  // Injectable dependencies for simulation support
+  protected cdMarketData?: IMarketData;
+  protected logDirectory: string;
+  protected shouldWriteLogs: boolean;
 
   // --- Constructor ---
 
@@ -679,6 +696,15 @@ export class QuantBot {
 
     // Use provided clock or create RealClock for production
     this.clock = props.clock ?? new RealClock();
+
+    // Use provided cdMarketData or fallback to singleton (set in getter)
+    this.cdMarketData = props.cdMarketData;
+
+    // Use provided logDirectory or default to production logs
+    this.logDirectory = props.logDirectory ?? './logs/bots';
+
+    // Whether to write logs (default: true)
+    this.shouldWriteLogs = props.shouldWriteLogs ?? true;
 
     console.log(`[${this.PROD_MODE ? "PROD" : "TEST"}] ${this.name} initialized...`);
     this.writeLog('Initialized...', LogLevel.INFO);
@@ -697,6 +723,19 @@ export class QuantBot {
         this.emit('reset');
       }
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Market Data Access
+  // -------------------------------------------------------------------------
+
+  /**
+   * Returns the injected cdMarketData instance or falls back to the singleton.
+   * This allows simulation to provide a mock implementation while production
+   * uses the real CDMarketData singleton.
+   */
+  protected getCdMarketData(): IMarketData {
+    return this.cdMarketData ?? CDMarketData.getInstance();
   }
 
   // -------------------------------------------------------------------------
@@ -747,6 +786,17 @@ export class QuantBot {
     this.on(event, wrapper);
   }
 
+  /**
+   * Registers a handler for the 'reset' event, ensuring it's only registered once.
+   * This prevents duplicate listeners when a bot's run() method is called multiple times
+   * (e.g., after restart).
+   */
+  protected registerResetHandler(handler: () => Promise<void>): void {
+    if (this.resetListenerRegistered) return;
+    this.resetListenerRegistered = true;
+    this.on('reset', handler);
+  }
+
   // -------------------------------------------------------------------------
   // Order Management
   // -------------------------------------------------------------------------
@@ -771,7 +821,7 @@ export class QuantBot {
     if (this.makeOrderPending) {
       await this.makeOrderPending;
     }
-
+    
     const orderPromise = (async (): Promise<TradeOrder | undefined> => {
       // Re-check after awaiting - period may have changed
       if (this.currentPeriodId !== orderPeriodId) {
@@ -910,6 +960,93 @@ export class QuantBot {
     return this.orderOperationPending;
   }
 
+  /**
+   * Called on each simulation tick. Bots should override this method to implement
+   * their per-tick trading logic for simulation mode. This method is called by the
+   * QuantBotSimulationAdapter instead of relying on tickWrapper (which uses real setTimeout).
+   *
+   * The default implementation just calls updateOrders(). Override this in subclasses
+   * to add your bot's state machine, signal detection, order placement logic, etc.
+   */
+  public async onSimulationTick(): Promise<void> {
+    throw Error("onSimulationTick should be overriden in child bot");
+  }
+
+  /**
+   * Called at the end of each simulation period (hourly or quarterly).
+   * Performs full reset logic similar to auditAndReset() but preserves trades for end-of-simulation results.
+   */
+  public async onSimulationPeriodEnd(): Promise<void> {
+    await this.updateOrders();
+
+    // Increment period ID and set resetting flag to block new orders
+    this.currentPeriodId++;
+    this.isResetting = true;
+
+    if (this.orderOperationPending) {
+      await this.orderOperationPending;
+    }
+
+    if (this.makeOrderPending) {
+      await this.makeOrderPending;
+    }
+
+    // Reset period counters
+    this.spentThisHour = 0;
+    this.tradesThisHour = 0;
+    this.writeLog(`Doing reset at time ${this.clock.getHours()}:${this.clock.getMinutes()}, periodId=${this.currentPeriodId}, usingUrl=${this.marketInfo.getUrl(this.marketInfo.getCurrentEstTimestamp(), this.targetedMarket)}`);
+
+    // Expire still living trades
+    this.trades.sort((a, b) => a.createdAt - b.createdAt);
+    for (const trade of this.trades) {
+      if (trade.status === TradeStatus.LIVE) {
+        this.updateTradeStatus(trade, TradeStatus.EXPIRED);
+      }
+    }
+
+    // Determine winning clob from two mins ago
+    const previousHourUrl = this.marketInfo.getUrl(
+      this.marketInfo.getCurrentEstTimestamp() - (60 * 2 * 1000),
+      this.targetedMarket,
+    );
+    const previousMarket = await this.marketInfo.getMarketInfo(previousHourUrl);
+    if (previousMarket.error) {
+      this.writeLog(`Warning: Unable to find winning previous market: ${previousMarket.error}`);
+    } else {
+      const winningIndex = previousMarket.outcomePrices.reduce(
+        (maxIdx, curr, idx, arr) => (parseFloat(curr) > parseFloat(arr[maxIdx]) ? idx : maxIdx),
+        0
+      );
+      const winningClob = previousMarket.clobTokenIds[winningIndex];
+
+      // Settle expired positions (handles remaining unmatched buy positions)
+      this.settleExpiredPositions(winningClob);
+    }
+
+    // Mark matched trades as audited (but don't write to file in simulation)
+    for (const trade of this.trades) {
+      if (trade.status === TradeStatus.MATCHED && !trade.isAudited) {
+        trade.isAudited = true;
+      }
+    }
+
+    // Clear trades since adapter has accumulated them before calling this method
+    this.trades = [];
+
+    this.isResetting = false;
+
+    // Call bot-specific reset logic (child classes override this)
+    this.resetTradeState();
+  }
+
+  /**
+   * Called at the end of each simulation period after base reset logic.
+   * Child classes should override this to reset their bot-specific state.
+   */
+  protected resetTradeState(): void {
+    throw Error('Child class must override resetTradeState')
+  }
+
   public checkIfOrderIsValid(price: number, amount: number): boolean {
     if (amount < 5) {
       this.writeLog(`Unable to make order, order size: ${amount} is too small.`);
@@ -959,6 +1096,10 @@ export class QuantBot {
         this.targetedMarket,
       );
       const previousMarket = await this.marketInfo.getMarketInfo(previousHourUrl);
+      if(previousMarket.error) {
+        // todo
+        throw Error(`Unable to find winning previous market: ${previousMarket.error}`)
+      }
       const winningIndex = previousMarket.outcomePrices.reduce(
         (maxIdx, curr, idx, arr) => (parseFloat(curr) > parseFloat(arr[maxIdx]) ? idx : maxIdx),
         0
@@ -1058,10 +1199,16 @@ export class QuantBot {
   // -------------------------------------------------------------------------
 
   public writeLog(message: string, logLevel = LogLevel.INFO): void {
+    if (!this.shouldWriteLogs) return;
+
     const timestamp = new Date(this.clock.now()).toISOString();
     const logLine = `[${logLevel}] ${timestamp}\t ${message}\n`;
     const prodTest = this.PROD_MODE ? 'prod' : 'test';
-    appendFileSync(`./logs/bots/${prodTest}-${this.name}.log`, logLine);
+    // Ensure log directory exists
+    if (!existsSync(this.logDirectory)) {
+      mkdirSync(this.logDirectory, { recursive: true });
+    }
+    appendFileSync(`${this.logDirectory}/${prodTest}-${this.name}.log`, logLine);
   }
 
   public writeError(e: unknown): void {
@@ -1091,7 +1238,12 @@ export class QuantBot {
       trade.side,
     ].join(', ') + "\n";
 
-    appendFileSync(`./logs/audits/tradeAudit.log`, message);
+    // Skip writing to main audit log if running in simulation mode
+    // (detected by logDirectory being in logs/simulator folder)
+    const isSimulationMode = this.logDirectory.includes('logs/simulator');
+    if (!isSimulationMode) {
+      appendFileSync(`./logs/audits/tradeAudit.log`, message);
+    }
     this.writeLog(message, LogLevel.COMPLETED);
   }
 
@@ -1127,6 +1279,9 @@ export class QuantBot {
     f: () => void | Promise<void>,
     retryOptions?: { maxRetries?: number; retryDelayMs?: number }
   ): () => void {
+    // Reset the stopped flag when starting a new tick loop (allows restart after stop())
+    this.isStopped = false;
+
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let stopped = false;
     const maxRetries = retryOptions?.maxRetries ?? 3;

@@ -44,7 +44,7 @@ export class EarlyBuyer extends QuantBot implements QuantBotRun {
     // --- Main Run Loop ---
 
     public async run(): Promise<void> {
-        this.setupHourlyReset();
+        this.setupPeriodReset();
         this.startTradingLoop();
     }
 
@@ -52,8 +52,8 @@ export class EarlyBuyer extends QuantBot implements QuantBotRun {
     // Setup
     // -------------------------------------------------------------------------
 
-    private setupHourlyReset(): void {
-        this.on('hourly', async () => {
+    private setupPeriodReset(): void {
+        this.registerResetHandler(async () => {
             await this.updateOrders();
             await this.auditAndReset();
             this.resetState();
@@ -122,9 +122,6 @@ export class EarlyBuyer extends QuantBot implements QuantBotRun {
             Side.BUY
         );
 
-        this.buyOrder?.once('tradeMatched', () => {
-            this.createSellOrder();
-        });
     }
 
     private async createSellOrder(): Promise<void> {

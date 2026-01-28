@@ -1,4 +1,5 @@
 import { Side } from "@polymarket/clob-client";
+import { MarketInfoSimple } from "../nonBots/MarketInfo.js";
 
 // ============================================================================
 // Enums
@@ -132,7 +133,7 @@ export interface IMarketData {
     getAveragePrice(n: number, symbol?: string): number | null;
 
     /** Gets recent price entries */
-    getRecentPrices(n: number, symbol?: string): RecentPriceEntry[];
+    getRecentPrices(n: number, market?: TargetedMarket): RecentPriceEntry[];
 }
 
 // ============================================================================
@@ -156,7 +157,7 @@ export interface IMarketInfo {
     getUrl(timestamp: number, market?: TargetedMarket): string;
 
     /** Gets market info for a specific URL (for lookback queries) */
-    getMarketInfo(url: string): Promise<{ clobTokenIds: string[]; outcomePrices: string[] }>;
+    getMarketInfo(url: string): Promise<MarketInfoSimple>;
 
     /** Gets the winner for a specific hour (simulation only) */
     getHourWinner?(timestamp: number): 'UP' | 'DOWN' | null;

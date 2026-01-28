@@ -248,8 +248,8 @@ export class CDMarketData implements QuantBotRun {
         return averages?.averagePrice ?? null;
     }
 
-    public getRecentPrices(market: TargetedMarket, n: number): RecentPriceEntry[] {
-        const symbol = this.marketToSymbol(market);
+    public getRecentPrices(n: number, market?: TargetedMarket): RecentPriceEntry[] {
+        const symbol = market ? this.marketToSymbol(market) : BinanceSymbol.BTCUSDT;
         return this.readMinuteLogFile(n, symbol);
     }
 

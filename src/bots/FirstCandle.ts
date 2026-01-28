@@ -1,7 +1,6 @@
 import { Side } from "@polymarket/clob-client";
 
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
-import { CDMarketData } from "../nonBots/CDMarketData.js";
 import { MarketSchedule } from "../types/interfaces.js";
 
 // ============================================================================
@@ -70,7 +69,7 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
     // --- Main Run Loop ---
 
     public async run(): Promise<void> {
-        this.setupHourlyReset();
+        this.setupPeriodReset();
         this.startTradingLoop();
     }
 
@@ -78,15 +77,15 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
     // Setup
     // -------------------------------------------------------------------------
 
-    private setupHourlyReset(): void {
-        this.on('reset', async () => {
+    private setupPeriodReset(): void {
+        this.registerResetHandler(async () => {
             await this.updateOrders();
             await this.auditAndReset();
-            this.resetState();
+            this.resetTradeState();
         });
     }
 
-    private resetState(): void {
+    protected override resetTradeState(): void {
         this.buyOrder = undefined;
         this.sellOrder = undefined;
         this.state = 'FORMING_CANDLE';
@@ -102,26 +101,42 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
 
     private startTradingLoop(): void {
         this.tickWrapper(1000 * 3, 1000 * 3, async () => {
-            await this.updateOrders();
-
-            // Handle sell order creation if buy matched
-            if (this.shouldCreateSellOrder()) {
-                await this.createSellOrder();
-            }
-
-            // Check cutoff
-            if (this.isAfterCutoff() && this.state !== 'TRADE_ENTERED') {
-                await this.handleCutoff();
-                return;
-            }
-
-            if (this.state === 'PAST_CUTOFF' || this.state === 'TRADE_ENTERED') {
-                return;
-            }
-
-            // Execute state machine
-            await this.executeStateMachine();
+            await this.executeTradingLogic();
         });
+    }
+
+    /**
+     * Core trading logic extracted for reuse by both production (tickWrapper)
+     * and simulation (onSimulationTick) modes.
+     */
+    private async executeTradingLogic(): Promise<void> {
+        await this.updateOrders();
+
+        // Handle sell order creation if buy matched
+        if (this.shouldCreateSellOrder()) {
+            await this.createSellOrder();
+        }
+
+        if (this.state === 'PAST_CUTOFF' || this.state === 'TRADE_ENTERED') {
+            return;
+        }
+
+        // Check cutoff
+        if (this.isAfterCutoff()) {
+            await this.handleCutoff();
+            return;
+        }
+
+        // Execute state machine
+        await this.executeStateMachine();
+    }
+
+    /**
+     * Called on each simulation tick. Executes the bot's trading logic
+     * without relying on real-time intervals.
+     */
+    public override async onSimulationTick(): Promise<void> {
+        await this.executeTradingLogic();
     }
 
     // -------------------------------------------------------------------------
@@ -246,10 +261,7 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
         );
 
         this.state = 'TRADE_ENTERED';
-
-        this.buyOrder?.once('tradeMatched', () => {
-            this.createSellOrder();
-        });
+        // Sell order creation is handled by shouldCreateSellOrder() on each tick
     }
 
     private async createSellOrder(): Promise<void> {
@@ -275,7 +287,7 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
 
     private async getCurrentBtcPrice(): Promise<number | null> {
         try {
-            const cdMarketData = CDMarketData.getInstance();
+            const cdMarketData = this.getCdMarketData();
             return await cdMarketData.getCurrentPriceByMarket(this.targetedMarket);
         } catch (error) {
             this.writeError(error);

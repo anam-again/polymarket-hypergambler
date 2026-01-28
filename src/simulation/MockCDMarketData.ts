@@ -57,6 +57,12 @@ export class MockCDMarketData implements IMarketData {
     private hourlyData: HourlyDataEntry[] = [];
     private minuteData: MinuteDataEntry[] = [];
 
+    // Cache for avoiding repeated binary searches
+    private lastHourlySearchTime: number = 0;
+    private lastHourlySearchIndex: number = 0;
+    private lastMinuteSearchTime: number = 0;
+    private lastMinuteSearchIndex: number = 0;
+
     constructor(clock: SimulationClock, coinType: CoinType = CoinType.BTC) {
         this.clock = clock;
         this.coinType = coinType;
@@ -159,25 +165,45 @@ export class MockCDMarketData implements IMarketData {
 
     /**
      * Gets averages of the last N hourly entries before the current simulated time.
+     * Optimized to use binary search and cached index instead of filtering.
      */
     public getAverages(n: number): HistoricalAverages | null {
         const now = this.clock.now();
-        const entries = this.hourlyData.filter(e => e.timestamp < now);
 
-        if (entries.length < n) {
+        // Find the index of the last entry before 'now' using cached search
+        const lastValidIndex = this.findLastIndexBefore(this.hourlyData, now, true);
+
+        if (lastValidIndex < 0 || lastValidIndex + 1 < n) {
             return null;
         }
 
-        const recentEntries = entries.slice(-n);
+        // Get the last N entries directly by index (no filtering/slicing needed)
+        const startIndex = lastValidIndex - n + 1;
+        const endIndex = lastValidIndex;
+
+        // Calculate averages inline to avoid creating intermediate arrays
+        let sumOpen = 0, sumAvg = 0, sumMin = 0, sumMax = 0;
+        let sumOpenFlops = 0, sumAvgFlops = 0, sumTotalChange = 0;
+
+        for (let i = startIndex; i <= endIndex; i++) {
+            const e = this.hourlyData[i];
+            sumOpen += e.hourlyOpen;
+            sumAvg += e.averagePrice;
+            sumMin += e.hourlyMin;
+            sumMax += e.hourlyMax;
+            sumOpenFlops += e.openFlops;
+            sumAvgFlops += e.averageFlops;
+            sumTotalChange += e.totalChange;
+        }
 
         return {
-            hourlyOpen: this.calculateAverage(recentEntries.map(e => e.hourlyOpen)),
-            averagePrice: this.calculateAverage(recentEntries.map(e => e.averagePrice)),
-            hourlyMin: this.calculateAverage(recentEntries.map(e => e.hourlyMin)),
-            hourlyMax: this.calculateAverage(recentEntries.map(e => e.hourlyMax)),
-            openFlops: this.calculateAverage(recentEntries.map(e => e.openFlops)),
-            averageFlops: this.calculateAverage(recentEntries.map(e => e.averageFlops)),
-            totalChange: this.calculateAverage(recentEntries.map(e => e.totalChange)),
+            hourlyOpen: sumOpen / n,
+            averagePrice: sumAvg / n,
+            hourlyMin: sumMin / n,
+            hourlyMax: sumMax / n,
+            openFlops: sumOpenFlops / n,
+            averageFlops: sumAvgFlops / n,
+            totalChange: sumTotalChange / n,
         };
     }
 
@@ -191,17 +217,31 @@ export class MockCDMarketData implements IMarketData {
 
     /**
      * Gets recent price entries before the current simulated time.
+     * Optimized to use binary search instead of filtering.
      */
-    public getRecentPrices(n: number): RecentPriceEntry[] {
+    public getRecentPrices(n: number, _market?: TargetedMarket): RecentPriceEntry[] {
         const now = this.clock.now();
-        const entries = this.minuteData
-            .filter(e => e.timestamp <= now)
-            .slice(-n);
 
-        return entries.map(e => ({
-            timestamp: new Date(e.timestamp),
-            price: e.price,
-        }));
+        // Find the index of the last entry at or before 'now'
+        const lastValidIndex = this.findLastIndexBeforeOrAt(this.minuteData, now);
+
+        if (lastValidIndex < 0) {
+            return [];
+        }
+
+        // Get the last N entries directly by index
+        const startIndex = Math.max(0, lastValidIndex - n + 1);
+        const result: RecentPriceEntry[] = [];
+
+        for (let i = startIndex; i <= lastValidIndex; i++) {
+            const e = this.minuteData[i];
+            result.push({
+                timestamp: new Date(e.timestamp),
+                price: e.price,
+            });
+        }
+
+        return result;
     }
 
     // -------------------------------------------------------------------------
@@ -250,6 +290,105 @@ export class MockCDMarketData implements IMarketData {
     private calculateAverage(values: number[]): number {
         if (values.length === 0) return 0;
         return values.reduce((sum, val) => sum + val, 0) / values.length;
+    }
+
+    /**
+     * Finds the index of the last entry strictly before the target time.
+     * Uses cached index for optimization when time advances monotonically.
+     */
+    private findLastIndexBefore<T extends { timestamp: number }>(
+        data: T[],
+        targetTime: number,
+        isHourly: boolean
+    ): number {
+        if (data.length === 0) return -1;
+
+        // Check cache - if time hasn't changed much, start from cached position
+        const lastTime = isHourly ? this.lastHourlySearchTime : this.lastMinuteSearchTime;
+        const lastIndex = isHourly ? this.lastHourlySearchIndex : this.lastMinuteSearchIndex;
+
+        // If target time is same or very close, return cached result
+        if (targetTime === lastTime && lastIndex >= 0) {
+            return lastIndex;
+        }
+
+        // If time advanced, we can start search from cached index
+        let startIndex = 0;
+        if (targetTime > lastTime && lastIndex >= 0 && lastIndex < data.length) {
+            startIndex = lastIndex;
+        }
+
+        // Linear scan from start position for small advances (common case)
+        if (targetTime > lastTime && startIndex < data.length - 1) {
+            let i = startIndex;
+            while (i < data.length && data[i].timestamp < targetTime) {
+                i++;
+            }
+            const result = i > 0 ? i - 1 : -1;
+
+            // Update cache
+            if (isHourly) {
+                this.lastHourlySearchTime = targetTime;
+                this.lastHourlySearchIndex = result;
+            } else {
+                this.lastMinuteSearchTime = targetTime;
+                this.lastMinuteSearchIndex = result;
+            }
+            return result;
+        }
+
+        // Fallback to binary search for non-monotonic access
+        let left = 0;
+        let right = data.length - 1;
+        let result = -1;
+
+        while (left <= right) {
+            const mid = Math.floor((left + right) / 2);
+            if (data[mid].timestamp < targetTime) {
+                result = mid;
+                left = mid + 1;
+            } else {
+                right = mid - 1;
+            }
+        }
+
+        // Update cache
+        if (isHourly) {
+            this.lastHourlySearchTime = targetTime;
+            this.lastHourlySearchIndex = result;
+        } else {
+            this.lastMinuteSearchTime = targetTime;
+            this.lastMinuteSearchIndex = result;
+        }
+
+        return result;
+    }
+
+    /**
+     * Finds the index of the last entry at or before the target time.
+     */
+    private findLastIndexBeforeOrAt<T extends { timestamp: number }>(
+        data: T[],
+        targetTime: number
+    ): number {
+        if (data.length === 0) return -1;
+
+        // Binary search for the last entry at or before targetTime
+        let left = 0;
+        let right = data.length - 1;
+        let result = -1;
+
+        while (left <= right) {
+            const mid = Math.floor((left + right) / 2);
+            if (data[mid].timestamp <= targetTime) {
+                result = mid;
+                left = mid + 1;
+            } else {
+                right = mid - 1;
+            }
+        }
+
+        return result;
     }
 
     /**

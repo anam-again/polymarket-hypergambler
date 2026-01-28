@@ -7,7 +7,13 @@
       "Bash(npx tsc:*)",
       "Bash(npm run build:*)",
       "Bash(grep:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(xargs -I {} bash -c 'head -50 {}')",
+      "Bash(ls:*)",
+      "Bash(dir:*)",
+      "Bash(findstr:*)",
+      "Bash(npm run histSim:*)",
+      "Bash(npm install:*)"
     ]
   }
 }

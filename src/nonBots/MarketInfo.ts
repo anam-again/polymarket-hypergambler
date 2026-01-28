@@ -26,9 +26,10 @@ interface BtcOrderBooks {
     BtcDown: OrderBookSummary,
 }
 
-interface MarketInfoSimple {
+export interface MarketInfoSimple {
     clobTokenIds: string[],
     outcomePrices: string[],
+    error?: boolean,
 }
 
 const LOG_DIRECTORY = './logs/pmarket-price';
@@ -47,7 +48,7 @@ enum LOG_DIR {
 export class MarketInfo {
 
     private static readonly UPDATE_DATA_INTERVAL = 4 * 1000; // 4s
-    private static readonly PRICE_LOG_INTERVAL = 15 * 1000; // 15s
+    private static readonly PRICE_LOG_INTERVAL = 5 * 1000; // 5s (reduced from 15s to ensure data at period boundaries)
     private static readonly MARKET_INFO_CACHE_TTL = 2 * 1000; // 2s
     private static readonly MARKET_INFO_CACHE_CLEANUP = 5 * 60 * 60 * 1000; // 5 hours
 
@@ -243,7 +244,18 @@ export class MarketInfo {
 
                 return result;
             } catch (e) {
-                console.log('getMarketInfo failed: ', url, e);
+                // console.log('getMarketInfo failed: ', url, e);
+                const fetchTime = Date.now();
+                const result: MarketInfoSimple = {
+                    clobTokenIds: [],
+                    outcomePrices: [],
+                    error: true,
+                }
+                this.marketInfoCache.set(url, {
+                    data: result,
+                    fetchedAt: fetchTime,
+                    lastAccessedAt: fetchTime,
+                })
                 throw e;
             } finally {
                 this.marketInfoPending.delete(url);
@@ -417,8 +429,7 @@ export class MarketInfo {
     }
 
     /**
-     * Starts logging UP/DOWN market prices every 30 seconds.
-     * Prices are written to pmarket-price/BTCHourlyUPDown.log
+     * Starts logging UP/DOWN market prices.
      */
     public startPriceLogging(): void {
         if (this.priceLogIntervals.size > 0) {

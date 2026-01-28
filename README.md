@@ -38,22 +38,18 @@ npm run dev
 #
 Run historical simulator
 ```bash
-# Regular Param Sweep
-npm run histSim -- --days 14
-
 # Genetic optimization (all strategies) (Preferred)
-npm run histSim -- --genetic --days 7
-npm run histSim -- -g -s FirstCandle -p 200 -m 100 -c sol
+npm run histSim -- --days 7
+npm run histSim -- -s FirstCandle -p 200 -m 100 -c sol
 
 # Quarterly market strategies
-npm run histSim -- -g -s QuarterlyFirstCandle -p 200 -m 100 -d 10 -a 10 -c btc
-npm run histSim -- -g -s QuarterlyFirstCandle -M eth-quarterly -c eth -p 75  -m 20 -d 20
+npm run histSim -- -s QuarterlyFirstCandle -p 200 -m 100 -d 10 -a 10 -c btc
+npm run histSim -- -s QuarterlyFirstCandle -M eth-quarterly -c eth -p 75  -m 20 -d 20
 ```
 
 ### CLI Options
 | Flag               | Description                    | Default |
 |--------------------|--------------------------------|---------|
-| `-g, --genetic`    | Enable genetic optimization    | off     |
 | `-d, --days`       | Lookback days                  | 7       |
 | `-m, --max-gen`    | Max generations                | 50      |
 | `-t, --threshold`  | Convergence threshold ($)      | 1.0     |

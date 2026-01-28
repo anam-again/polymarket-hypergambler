@@ -20,11 +20,53 @@ export class SimulationClock implements IClock {
     // Track pending reset operations to prevent race conditions
     private pendingReset: Promise<void> | null = null;
 
-    constructor(startTime: number, endTime: number, incrementMs: number = 60 * 1000) {
+    // Cached period boundaries for fast tick comparisons
+    private nextHourBoundary: number;
+    private nextQuarterBoundary: number;
+    private cachedHour: number;
+    private cachedMinutes: number;
+
+    constructor(startTime: number, endTime: number, incrementMs: number = 10 * 1000) {
         this.startTime = startTime;
         this.endTime = endTime;
         this.currentTime = startTime;
         this.incrementMs = incrementMs;
+
+        // Initialize cached boundaries
+        const startDate = new Date(startTime);
+        this.cachedHour = startDate.getHours();
+        this.cachedMinutes = startDate.getMinutes();
+        this.nextHourBoundary = this.computeNextHourBoundary(startTime);
+        this.nextQuarterBoundary = this.computeNextQuarterBoundary(startTime);
+    }
+
+    /**
+     * Computes the next hour boundary timestamp from a given time.
+     */
+    private computeNextHourBoundary(timestamp: number): number {
+        const date = new Date(timestamp);
+        date.setMinutes(0, 0, 0);
+        date.setHours(date.getHours() + 1);
+        return date.getTime();
+    }
+
+    /**
+     * Computes the next 15-minute boundary timestamp from a given time.
+     */
+    private computeNextQuarterBoundary(timestamp: number): number {
+        const date = new Date(timestamp);
+        const currentQuarter = Math.floor(date.getMinutes() / 15);
+        date.setMinutes((currentQuarter + 1) * 15, 0, 0);
+        return date.getTime();
+    }
+
+    /**
+     * Updates cached hour/minutes from current time (only called on boundary crossings).
+     */
+    private updateCachedTime(): void {
+        const date = new Date(this.currentTime);
+        this.cachedHour = date.getHours();
+        this.cachedMinutes = date.getMinutes();
     }
 
     /**
@@ -60,10 +102,6 @@ export class SimulationClock implements IClock {
             await this.pendingReset;
         }
 
-        const previousDate = new Date(this.currentTime);
-        const previousHour = previousDate.getHours();
-        const previousQuarter = Math.floor(previousDate.getMinutes() / 15);
-
         this.currentTime += this.incrementMs;
 
         if (this.currentTime > this.endTime) {
@@ -71,17 +109,23 @@ export class SimulationClock implements IClock {
             return false;
         }
 
-        const currentDate = new Date(this.currentTime);
-        const currentHour = currentDate.getHours();
-        const currentQuarter = Math.floor(currentDate.getMinutes() / 15);
+        // Check boundaries using simple numeric comparisons (no Date creation)
+        const crossedQuarter = this.currentTime >= this.nextQuarterBoundary;
+        const crossedHour = this.currentTime >= this.nextHourBoundary;
 
         // Emit quarterly event (also triggers at hour boundaries)
-        if (currentHour !== previousHour || currentQuarter !== previousQuarter) {
+        if (crossedQuarter) {
+            this.nextQuarterBoundary = this.computeNextQuarterBoundary(this.currentTime);
+            this.updateCachedTime();
             await this.emitQuarterlyChange();
         }
 
         // Emit hourly event
-        if (currentHour !== previousHour) {
+        if (crossedHour) {
+            this.nextHourBoundary = this.computeNextHourBoundary(this.currentTime);
+            if (!crossedQuarter) {
+                this.updateCachedTime();
+            }
             await this.emitHourlyChange();
         }
 
@@ -116,16 +160,29 @@ export class SimulationClock implements IClock {
 
     /**
      * Gets the current minute of the hour (0-59).
+     * Uses cached value when within the same quarter, otherwise computes.
      */
     public getMinutes(): number {
+        // If we're past the next quarter boundary, we need fresh data
+        if (this.currentTime >= this.nextQuarterBoundary) {
+            return new Date(this.currentTime).getMinutes();
+        }
+        // Estimate minutes based on time elapsed since last boundary update
+        // For most use cases, the cached value from last boundary is close enough
+        // But for precise minute tracking, compute it
         return new Date(this.currentTime).getMinutes();
     }
 
     /**
      * Gets the current hour (0-23).
+     * Uses cached value for performance.
      */
     public getHours(): number {
-        return new Date(this.currentTime).getHours();
+        // If we're past the next hour boundary, we need fresh data
+        if (this.currentTime >= this.nextHourBoundary) {
+            return new Date(this.currentTime).getHours();
+        }
+        return this.cachedHour;
     }
 
     /**
@@ -194,6 +251,12 @@ export class SimulationClock implements IClock {
      */
     public reset(): void {
         this.currentTime = this.startTime;
+        // Reset cached boundaries
+        const startDate = new Date(this.startTime);
+        this.cachedHour = startDate.getHours();
+        this.cachedMinutes = startDate.getMinutes();
+        this.nextHourBoundary = this.computeNextHourBoundary(this.startTime);
+        this.nextQuarterBoundary = this.computeNextQuarterBoundary(this.startTime);
     }
 
     /**

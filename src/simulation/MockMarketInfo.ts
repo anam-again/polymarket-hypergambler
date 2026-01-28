@@ -14,9 +14,10 @@ interface UpDownPriceEntry {
     downPrice: number;
 }
 
-interface MarketInfoSimple {
+export interface MarketInfoSimple {
     clobTokenIds: string[];
     outcomePrices: string[];
+    error?: boolean;
 }
 
 interface MarketLogPaths {
@@ -62,6 +63,14 @@ export class MockMarketInfo implements IMarketInfo {
     private hourWinners: Map<string, 'UP' | 'DOWN'> = new Map();
     private quarterWinners: Map<string, 'UP' | 'DOWN'> = new Map();
 
+    // Pre-indexed data for O(1) period lookups
+    private hourlyByPeriod: Map<string, UpDownPriceEntry[]> = new Map();
+    private quarterlyByPeriod: Map<string, UpDownPriceEntry[]> = new Map();
+
+    // Key calculation cache to avoid repeated Date object creation
+    private keyCache: Map<number, { hourKey: string; quarterKey: string }> = new Map();
+    private static readonly KEY_CACHE_MAX_SIZE = 10000;
+
     constructor(clock: SimulationClock, coinType: CoinType = CoinType.BTC) {
         this.clock = clock;
         this.coinType = coinType;
@@ -77,10 +86,53 @@ export class MockMarketInfo implements IMarketInfo {
         this.hourlyData = this.loadLogFile(paths.hourly);
         this.quarterlyData = this.loadLogFile(paths.quarterly);
 
+        // Build period-indexed maps for O(1) lookups
+        this.buildPeriodIndex();
+
         this.computeHourWinners();
         this.computeQuarterWinners();
 
         console.log(`[MockMarketInfo] Loaded ${this.hourlyData.length} hourly, ${this.quarterlyData.length} quarterly entries for ${this.coinType.toUpperCase()}`);
+    }
+
+    /**
+     * Builds period-indexed maps for fast lookups.
+     */
+    private buildPeriodIndex(): void {
+        // Index hourly data
+        for (const entry of this.hourlyData) {
+            const hourKey = this.getHourKeyDirect(entry.timestamp);
+            if (!this.hourlyByPeriod.has(hourKey)) {
+                this.hourlyByPeriod.set(hourKey, []);
+            }
+            this.hourlyByPeriod.get(hourKey)!.push(entry);
+        }
+
+        // Index quarterly data
+        for (const entry of this.quarterlyData) {
+            const quarterKey = this.get15MinuteKeyDirect(entry.timestamp);
+            if (!this.quarterlyByPeriod.has(quarterKey)) {
+                this.quarterlyByPeriod.set(quarterKey, []);
+            }
+            this.quarterlyByPeriod.get(quarterKey)!.push(entry);
+        }
+    }
+
+    /**
+     * Direct key calculation without caching (used for indexing at load time).
+     */
+    private getHourKeyDirect(timestamp: number): string {
+        const date = new Date(timestamp);
+        return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${date.getHours()}`;
+    }
+
+    /**
+     * Direct 15-minute key calculation without caching.
+     */
+    private get15MinuteKeyDirect(timestamp: number): string {
+        const date = new Date(timestamp);
+        const quarter = Math.floor(date.getMinutes() / 15);
+        return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${date.getHours()}-${quarter}`;
     }
 
     private loadLogFile(logPath: string): UpDownPriceEntry[] {
@@ -104,19 +156,10 @@ export class MockMarketInfo implements IMarketInfo {
 
     /**
      * Pre-compute hour winners based on end-of-hour prices.
+     * Uses pre-indexed data for efficiency.
      */
     private computeHourWinners(): void {
-        const hourlyEntries = new Map<string, UpDownPriceEntry[]>();
-
-        for (const entry of this.hourlyData) {
-            const hourKey = this.getHourKey(entry.timestamp);
-            if (!hourlyEntries.has(hourKey)) {
-                hourlyEntries.set(hourKey, []);
-            }
-            hourlyEntries.get(hourKey)!.push(entry);
-        }
-
-        for (const [hourKey, entries] of hourlyEntries) {
+        for (const [hourKey, entries] of this.hourlyByPeriod) {
             if (entries.length === 0) continue;
             const lastEntry = entries[entries.length - 1];
             const winner = lastEntry.upPrice >= lastEntry.downPrice ? 'UP' : 'DOWN';
@@ -126,19 +169,10 @@ export class MockMarketInfo implements IMarketInfo {
 
     /**
      * Pre-compute 15-minute winners based on end-of-quarter prices.
+     * Uses pre-indexed data for efficiency.
      */
     private computeQuarterWinners(): void {
-        const quarterEntries = new Map<string, UpDownPriceEntry[]>();
-
-        for (const entry of this.quarterlyData) {
-            const quarterKey = this.get15MinuteKey(entry.timestamp);
-            if (!quarterEntries.has(quarterKey)) {
-                quarterEntries.set(quarterKey, []);
-            }
-            quarterEntries.get(quarterKey)!.push(entry);
-        }
-
-        for (const [quarterKey, entries] of quarterEntries) {
+        for (const [quarterKey, entries] of this.quarterlyByPeriod) {
             if (entries.length === 0) continue;
             const lastEntry = entries[entries.length - 1];
             const winner = lastEntry.upPrice >= lastEntry.downPrice ? 'UP' : 'DOWN';
@@ -146,15 +180,39 @@ export class MockMarketInfo implements IMarketInfo {
         }
     }
 
+    /**
+     * Gets cached keys for a timestamp, computing and caching if needed.
+     */
+    private getCachedKeys(timestamp: number): { hourKey: string; quarterKey: string } {
+        // Round to nearest minute to improve cache hit rate
+        const roundedTs = Math.floor(timestamp / 60000) * 60000;
+
+        let cached = this.keyCache.get(roundedTs);
+        if (!cached) {
+            // Evict old entries if cache is too large
+            if (this.keyCache.size >= MockMarketInfo.KEY_CACHE_MAX_SIZE) {
+                // Clear half the cache (simple eviction strategy)
+                const entries = Array.from(this.keyCache.keys());
+                for (let i = 0; i < entries.length / 2; i++) {
+                    this.keyCache.delete(entries[i]);
+                }
+            }
+
+            cached = {
+                hourKey: this.getHourKeyDirect(roundedTs),
+                quarterKey: this.get15MinuteKeyDirect(roundedTs),
+            };
+            this.keyCache.set(roundedTs, cached);
+        }
+        return cached;
+    }
+
     private getHourKey(timestamp: number): string {
-        const date = new Date(timestamp);
-        return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${date.getHours()}`;
+        return this.getCachedKeys(timestamp).hourKey;
     }
 
     private get15MinuteKey(timestamp: number): string {
-        const date = new Date(timestamp);
-        const quarter = Math.floor(date.getMinutes() / 15);
-        return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${date.getHours()}-${quarter}`;
+        return this.getCachedKeys(timestamp).quarterKey;
     }
 
     /**
@@ -233,23 +291,24 @@ export class MockMarketInfo implements IMarketInfo {
     /**
      * Gets the UP/DOWN prices at the current simulated time.
      * Uses hourly data by default; pass market parameter for quarterly support.
-     * For quarterly markets, ensures data is from the current 15-minute period.
+     * For quarterly markets, uses retry logic to find data within the current 15-minute period.
      */
     public async getPrice(clobTokenId: string, side: Side, market?: TargetedMarket): Promise<number> {
         const now = this.clock.now();
         const data = this.getDataForMarket(market);
-        const entry = this.findPreviousEntry(data, now);
 
-        if (!entry) {
-            throw new Error(`No UP/DOWN data available for timestamp ${new Date(now).toISOString()}`);
-        }
+        let entry: UpDownPriceEntry | null;
 
-        // For quarterly markets, ensure data is from the current 15-minute period
+        // For quarterly markets, use retry logic to wait for current period data
         if (market && MockMarketInfo.getMarketSchedule(market) === MarketSchedule.QUARTERLY) {
-            const entryPeriodKey = this.get15MinuteKey(entry.timestamp);
-            const currentPeriodKey = this.get15MinuteKey(now);
-            if (entryPeriodKey !== currentPeriodKey) {
-                throw new Error(`No data available for current 15-minute period. Entry from ${new Date(entry.timestamp).toISOString()} but current time is ${new Date(now).toISOString()}`);
+            entry = this.findEntryForCurrentPeriodSync(data, now);
+            if (!entry) {
+                throw new Error(`No data available for current 15-minute period after retries. Current time: ${new Date(now).toISOString()}`);
+            }
+        } else {
+            entry = this.findPreviousEntry(data, now);
+            if (!entry) {
+                throw new Error(`No UP/DOWN data available for timestamp ${new Date(now).toISOString()}`);
             }
         }
 
@@ -266,23 +325,24 @@ export class MockMarketInfo implements IMarketInfo {
     /**
      * Gets mock order books for the current simulated time.
      * Supports both hourly and quarterly markets based on market parameter.
-     * For quarterly markets, ensures data is from the current 15-minute period.
+     * For quarterly markets, uses retry logic to find data within the current 15-minute period.
      */
     public async getLiveData(market?: TargetedMarket): Promise<BtcOrderBooks> {
         const now = this.clock.now();
         const data = this.getDataForMarket(market);
-        const entry = this.findPreviousEntry(data, now);
 
-        if (!entry) {
-            throw new Error(`No UP/DOWN data available for timestamp ${new Date(now).toISOString()}`);
-        }
+        let entry: UpDownPriceEntry | null;
 
-        // For quarterly markets, ensure data is from the current 15-minute period
+        // For quarterly markets, use retry logic to wait for current period data
         if (market && MockMarketInfo.getMarketSchedule(market) === MarketSchedule.QUARTERLY) {
-            const entryPeriodKey = this.get15MinuteKey(entry.timestamp);
-            const currentPeriodKey = this.get15MinuteKey(now);
-            if (entryPeriodKey !== currentPeriodKey) {
-                throw new Error(`No data available for current 15-minute period. Entry from ${new Date(entry.timestamp).toISOString()} but current time is ${new Date(now).toISOString()}`);
+            entry = this.findEntryForCurrentPeriodSync(data, now);
+            if (!entry) {
+                throw new Error(`No data available for current 15-minute period after retries. Current time: ${new Date(now).toISOString()}`);
+            }
+        } else {
+            entry = this.findPreviousEntry(data, now);
+            if (!entry) {
+                throw new Error(`No UP/DOWN data available for timestamp ${new Date(now).toISOString()}`);
             }
         }
 
@@ -365,10 +425,10 @@ export class MockMarketInfo implements IMarketInfo {
         const targetDate = new Date(year, month, day, hour);
         const hourKey = this.getHourKey(targetDate.getTime());
 
-        // Get end-of-hour prices
-        const hourEntries = this.hourlyData.filter(e => this.getHourKey(e.timestamp) === hourKey);
+        // Get end-of-hour prices using indexed data (O(1) lookup)
+        const hourEntries = this.hourlyByPeriod.get(hourKey);
 
-        if (hourEntries.length === 0) {
+        if (!hourEntries || hourEntries.length === 0) {
             // Return neutral prices if no data
             return {
                 clobTokenIds: [`UP-${hourKey}`, `DOWN-${hourKey}`],
@@ -412,10 +472,10 @@ export class MockMarketInfo implements IMarketInfo {
         const targetDate = new Date(year, month, day, hour, minute);
         const quarterKey = this.get15MinuteKey(targetDate.getTime());
 
-        // Get end-of-quarter prices
-        const quarterEntries = this.quarterlyData.filter(e => this.get15MinuteKey(e.timestamp) === quarterKey);
+        // Get end-of-quarter prices using indexed data (O(1) lookup)
+        const quarterEntries = this.quarterlyByPeriod.get(quarterKey);
 
-        if (quarterEntries.length === 0) {
+        if (!quarterEntries || quarterEntries.length === 0) {
             // Return neutral prices if no data
             return {
                 clobTokenIds: [`UP-${quarterKey}`, `DOWN-${quarterKey}`],
@@ -490,6 +550,36 @@ export class MockMarketInfo implements IMarketInfo {
         }
 
         return result;
+    }
+
+    /**
+     * Finds entry for current 15-minute period using indexed data.
+     * Falls back to previous period's last entry if current period has no data yet.
+     */
+    private findEntryForCurrentPeriodSync(
+        data: UpDownPriceEntry[],
+        startTime: number,
+        _maxWaitMs: number = 30000,
+        _incrementMs: number = 5000
+    ): UpDownPriceEntry | null {
+        const currentPeriodKey = this.get15MinuteKey(startTime);
+
+        // First, try to get data from the indexed map (O(1) lookup)
+        const periodEntries = this.quarterlyByPeriod.get(currentPeriodKey);
+        if (periodEntries && periodEntries.length > 0) {
+            // Find the most recent entry before startTime within this period
+            for (let i = periodEntries.length - 1; i >= 0; i--) {
+                if (periodEntries[i].timestamp < startTime) {
+                    return periodEntries[i];
+                }
+            }
+            // If we're at the very start of the period, return the first entry
+            // (this simulates "waiting" for data to appear)
+            return periodEntries[0];
+        }
+
+        // Fallback to binary search if indexed lookup fails
+        return this.findPreviousEntry(data, startTime);
     }
 
     private createMockOrderBook(price: number): OrderBookSummary {

@@ -1,7 +1,6 @@
 import { Side } from "@polymarket/clob-client";
 
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
-import { CDMarketData } from "../nonBots/CDMarketData.js";
 import { MarketSchedule } from "../types/interfaces.js";
 
 // ============================================================================
@@ -80,7 +79,7 @@ export class EveningStar extends QuantBot implements QuantBotRun {
     // --- Main Run Loop ---
 
     public async run(): Promise<void> {
-        this.setupHourlyReset();
+        this.setupPeriodReset();
         this.startTradingLoop();
     }
 
@@ -88,15 +87,15 @@ export class EveningStar extends QuantBot implements QuantBotRun {
     // Setup
     // -------------------------------------------------------------------------
 
-    private setupHourlyReset(): void {
-        this.on('hourly', async () => {
+    private setupPeriodReset(): void {
+        this.registerResetHandler(async () => {
             await this.updateOrders();
             await this.auditAndReset();
-            this.resetState();
+            this.resetTradeState();
         });
     }
 
-    private resetState(): void {
+    protected override resetTradeState(): void {
         this.buyOrder = undefined;
         this.sellOrder = undefined;
         this.state = 'FORMING_CANDLE_1';
@@ -112,26 +111,34 @@ export class EveningStar extends QuantBot implements QuantBotRun {
 
     private startTradingLoop(): void {
         this.tickWrapper(1000 * 3, 1000 * 3, async () => {
-            await this.updateOrders();
-
-            // Handle sell order creation if buy matched
-            if (this.shouldCreateSellOrder()) {
-                await this.createSellOrder();
-            }
-
-            // Check cutoff
-            if (this.isAfterCutoff() && this.state !== 'TRADE_ENTERED') {
-                await this.handleCutoff();
-                return;
-            }
-
-            if (this.state === 'PAST_CUTOFF' || this.state === 'TRADE_ENTERED') {
-                return;
-            }
-
-            // Execute state machine
-            await this.executeStateMachine();
+            await this.executeTradingLogic();
         });
+    }
+
+    private async executeTradingLogic(): Promise<void> {
+        await this.updateOrders();
+
+        // Handle sell order creation if buy matched
+        if (this.shouldCreateSellOrder()) {
+            await this.createSellOrder();
+        }
+
+        // Check cutoff
+        if (this.isAfterCutoff() && this.state !== 'TRADE_ENTERED') {
+            await this.handleCutoff();
+            return;
+        }
+
+        if (this.state === 'PAST_CUTOFF' || this.state === 'TRADE_ENTERED') {
+            return;
+        }
+
+        // Execute state machine
+        await this.executeStateMachine();
+    }
+
+    public override async onSimulationTick(): Promise<void> {
+        await this.executeTradingLogic();
     }
 
     // -------------------------------------------------------------------------
@@ -308,9 +315,6 @@ export class EveningStar extends QuantBot implements QuantBotRun {
 
         this.state = 'TRADE_ENTERED';
 
-        this.buyOrder?.once('tradeMatched', () => {
-            this.createSellOrder();
-        });
     }
 
     private async createSellOrder(): Promise<void> {
@@ -334,7 +338,7 @@ export class EveningStar extends QuantBot implements QuantBotRun {
 
     private async getCurrentBtcPrice(): Promise<number | null> {
         try {
-            const cdMarketData = CDMarketData.getInstance();
+            const cdMarketData = this.getCdMarketData();
             return await cdMarketData.getCurrentPriceByMarket(this.targetedMarket);
         } catch (error) {
             this.writeError(error);

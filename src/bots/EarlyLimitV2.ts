@@ -1,7 +1,6 @@
 import { Side } from "@polymarket/clob-client";
 
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
-import { CDMarketData } from "../nonBots/CDMarketData.js";
 import { MarketSchedule } from "../types/interfaces.js";
 
 // ============================================================================
@@ -58,7 +57,7 @@ export class EarlyLimitV2 extends QuantBot implements QuantBotRun {
     // --- Main Run Loop ---
 
     public async run(): Promise<void> {
-        this.setupHourlyReset();
+        this.setupPeriodReset();
         this.startTradingLoop();
     }
 
@@ -66,8 +65,8 @@ export class EarlyLimitV2 extends QuantBot implements QuantBotRun {
     // Setup
     // -------------------------------------------------------------------------
 
-    private setupHourlyReset(): void {
-        this.on('hourly', async () => {
+    private setupPeriodReset(): void {
+        this.registerResetHandler(async () => {
             await this.updateOrders();
             await this.auditAndReset();
             this.resetState();
@@ -159,9 +158,6 @@ export class EarlyLimitV2 extends QuantBot implements QuantBotRun {
             Side.BUY
         );
 
-        this.buyOrder?.once('tradeMatched', () => {
-            this.createSellOrder();
-        });
     }
 
     private async createSellOrder(): Promise<void> {
@@ -186,7 +182,7 @@ export class EarlyLimitV2 extends QuantBot implements QuantBotRun {
     // -------------------------------------------------------------------------
 
     private getWeightedDirection(): BetDirection | null {
-        const cdMarketData = CDMarketData.getInstance();
+        const cdMarketData = this.getCdMarketData();
         const averages = cdMarketData.getAverages(this.flopsLookbackHours, this.targetedMarket);
 
         if (!averages) {
@@ -205,7 +201,7 @@ export class EarlyLimitV2 extends QuantBot implements QuantBotRun {
     }
 
     private hasEnoughFlops(): boolean {
-        const cdMarketData = CDMarketData.getInstance();
+        const cdMarketData = this.getCdMarketData();
         const averages = cdMarketData.getAverages(this.flopsLookbackHours, this.targetedMarket);
 
         if (!averages) {

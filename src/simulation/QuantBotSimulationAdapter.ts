@@ -19,6 +19,7 @@ export class QuantBotSimulationAdapter implements SimulatedBot {
     private bot: QuantBot;
     private clock: SimulationClock;
     private marketInfo: MockMarketInfo;
+    private accumulatedTrades: SimulatedTrade[] = [];
 
     constructor(
         bot: QuantBot,
@@ -33,24 +34,31 @@ export class QuantBotSimulationAdapter implements SimulatedBot {
 
     /**
      * Called each simulation tick.
-     * Triggers the bot's internal tick processing by checking orders.
+     * Triggers the bot's per-tick trading logic including order updates,
+     * state machine execution, signal detection, and order placement.
      */
     public async onTick(): Promise<void> {
         try {
-            // Update order statuses based on current market prices
-            await this.bot.updateOrders();
+            // Call the bot's simulation tick handler which includes trading logic
+            await this.bot.onSimulationTick();
         } catch (error) {
             console.warn(`[${this.name}] Error in onTick: ${error}`);
         }
     }
 
     /**
-     * Called when the simulated hour changes.
-     * Triggers the bot's reset/audit cycle.
+     * Called when the simulated period ends (hourly or quarterly).
+     * Triggers the bot's period-end logic including audit, reset, and state cleanup.
      */
     public async onHourChange(): Promise<void> {
         try {
-            await this.bot.auditAndReset();
+            // Snapshot trades BEFORE reset clears them
+            const currentTrades = this.bot.trades.map(trade =>
+                this.convertToSimulatedTrade(trade)
+            );
+            this.accumulatedTrades.push(...currentTrades);
+
+            await this.bot.onSimulationPeriodEnd();
         } catch (error) {
             console.warn(`[${this.name}] Error in onHourChange: ${error}`);
         }
@@ -58,9 +66,14 @@ export class QuantBotSimulationAdapter implements SimulatedBot {
 
     /**
      * Gets all trades from the bot in SimulatedTrade format.
+     * Returns accumulated trades from previous periods plus any current trades.
      */
     public getTrades(): SimulatedTrade[] {
-        return this.bot.trades.map(trade => this.convertToSimulatedTrade(trade));
+        // Include any trades from current (final) period that haven't been accumulated yet
+        const currentTrades = this.bot.trades.map(trade =>
+            this.convertToSimulatedTrade(trade)
+        );
+        return [...this.accumulatedTrades, ...currentTrades];
     }
 
     /**
@@ -69,6 +82,7 @@ export class QuantBotSimulationAdapter implements SimulatedBot {
     public reset(): void {
         // Clear all trades
         this.bot.trades = [];
+        this.accumulatedTrades = [];
     }
 
     /**
