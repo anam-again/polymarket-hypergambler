@@ -133,7 +133,7 @@ export interface IMarketData {
     getAveragePrice(n: number, symbol?: string): number | null;
 
     /** Gets recent price entries */
-    getRecentPrices(n: number, market?: TargetedMarket): RecentPriceEntry[];
+    getRecentPrices(n: number, market: TargetedMarket): RecentPriceEntry[];
 }
 
 // ============================================================================
@@ -145,22 +145,22 @@ export interface IMarketInfo {
     getCurrentEstTimestamp(): number;
 
     /** Gets the order books for a targeted market */
-    getLiveData(market?: TargetedMarket): Promise<BtcOrderBooks>;
+    getLiveData(market: TargetedMarket): Promise<BtcOrderBooks>;
 
     /** Gets the current price for a token */
-    getPrice(clobTokenId: string, side: Side): Promise<number>;
+    getPrice(clobTokenId: string, side: Side, market: TargetedMarket): Promise<number>;
 
     /** Gets the CLOB token IDs for a targeted market */
-    getCurrentClobTokenIds(market?: TargetedMarket): Promise<string[]>;
+    getCurrentClobTokenIds(market: TargetedMarket): Promise<string[]>;
 
     /** Gets the URL for a specific market at a timestamp */
-    getUrl(timestamp: number, market?: TargetedMarket): string;
+    getUrl(timestamp: number, market: TargetedMarket): string;
 
     /** Gets market info for a specific URL (for lookback queries) */
     getMarketInfo(url: string): Promise<MarketInfoSimple>;
 
     /** Gets the winner for a specific hour (simulation only) */
-    getHourWinner?(timestamp: number): 'UP' | 'DOWN' | null;
+    getHourWinner?(timestamp: number, market: TargetedMarket): 'UP' | 'DOWN' | null;
 }
 
 // ============================================================================

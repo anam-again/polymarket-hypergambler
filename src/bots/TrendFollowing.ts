@@ -56,7 +56,7 @@ export class TrendFollowing extends QuantBot implements QuantBotRun {
     private adxPeriod: number;
     private adxThreshold: number;
     private atrPeriod: number;
-    private atrStopMultiple: number;
+    private _atrStopMultiple: number;
     private targetBuyPrice: number;
     private targetSellPrice: number;
     private targetSize: number;
@@ -69,7 +69,7 @@ export class TrendFollowing extends QuantBot implements QuantBotRun {
     private tradeDirection?: TradeDirection;
     private previousShortMa?: number;
     private previousLongMa?: number;
-    private entryPrice?: number;
+    private _entryPrice?: number;
 
     // --- Constructor ---
 
@@ -81,7 +81,7 @@ export class TrendFollowing extends QuantBot implements QuantBotRun {
         this.adxPeriod = props.adxPeriod;
         this.adxThreshold = props.adxThreshold;
         this.atrPeriod = props.atrPeriod;
-        this.atrStopMultiple = props.atrStopMultiple;
+        this._atrStopMultiple = props.atrStopMultiple;
         this.targetBuyPrice = props.targetBuyPrice;
         this.targetSellPrice = props.targetSellPrice;
         this.targetSize = props.targetSize;
@@ -114,7 +114,7 @@ export class TrendFollowing extends QuantBot implements QuantBotRun {
         this.tradeDirection = undefined;
         this.previousShortMa = undefined;
         this.previousLongMa = undefined;
-        this.entryPrice = undefined;
+        this._entryPrice = undefined;
     }
 
     // -------------------------------------------------------------------------
@@ -197,14 +197,14 @@ export class TrendFollowing extends QuantBot implements QuantBotRun {
         if (signal === 'GOLDEN_CROSS' && trendStrong) {
             // Golden Cross with strong trend - bet UP
             this.tradeDirection = 'UP';
-            this.entryPrice = indicators.currentPrice;
+            this._entryPrice = indicators.currentPrice;
             this.logIndicators(indicators, '');
             this.writeLog(`ENTRY: Golden Cross with ADX ${indicators.adx.toFixed(1)} >= ${this.adxThreshold}`);
             await this.createBuyOrder();
         } else if (signal === 'DEATH_CROSS' && trendStrong) {
             // Death Cross with strong trend - bet DOWN
             this.tradeDirection = 'DOWN';
-            this.entryPrice = indicators.currentPrice;
+            this._entryPrice = indicators.currentPrice;
             this.logIndicators(indicators, '');
             this.writeLog(`ENTRY: Death Cross with ADX ${indicators.adx.toFixed(1)} >= ${this.adxThreshold}`);
             await this.createBuyOrder();
@@ -214,13 +214,13 @@ export class TrendFollowing extends QuantBot implements QuantBotRun {
         if (!this.tradeDirection && trendStrong) {
             if (indicators.currentPrice >= indicators.donchianHigh && indicators.shortMa > indicators.longMa) {
                 this.tradeDirection = 'UP';
-                this.entryPrice = indicators.currentPrice;
+                this._entryPrice = indicators.currentPrice;
                 this.logIndicators(indicators, '');
                 this.writeLog(`ENTRY: Donchian breakout HIGH with uptrend`);
                 await this.createBuyOrder();
             } else if (indicators.currentPrice <= indicators.donchianLow && indicators.shortMa < indicators.longMa) {
                 this.tradeDirection = 'DOWN';
-                this.entryPrice = indicators.currentPrice;
+                this._entryPrice = indicators.currentPrice;
                 this.logIndicators(indicators, '');
                 this.writeLog(`ENTRY: Donchian breakout LOW with downtrend`);
                 await this.createBuyOrder();
@@ -514,7 +514,7 @@ export class TrendFollowing extends QuantBot implements QuantBotRun {
     // Logging
     // -------------------------------------------------------------------------
 
-    private logIndicators(indicators: TrendIndicators, message: string): void {
+    private logIndicators(_indicators: TrendIndicators, _message: string): void {
         // this.writeLog(
         //     `${message} | ` +
         //     `Price=${indicators.currentPrice.toFixed(2)}, ` +

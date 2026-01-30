@@ -462,6 +462,7 @@ export interface QuantBotProps {
   cdMarketData?: IMarketData;  // Optional - defaults to CDMarketData singleton for production
   logDirectory?: string;       // Optional - defaults to './logs/bots' for production
   shouldWriteLogs?: boolean;   // Optional - defaults to true. Set false to disable logging.
+  simulationOrderDelayMs?: number;  // Optional - delay before orders can match in simulation (default: 10000ms)
 }
 
 export interface QuantBotRun {
@@ -683,6 +684,10 @@ export class QuantBot {
   protected logDirectory: string;
   protected shouldWriteLogs: boolean;
 
+  // Simulation order delay - orders cannot match until this delay has passed
+  private static readonly DEFAULT_SIMULATION_ORDER_DELAY_MS = 10 * 1000;  // 10 seconds
+  protected simulationOrderDelayMs: number;
+
   // --- Constructor ---
 
   constructor(props: QuantBotProps) {
@@ -705,6 +710,9 @@ export class QuantBot {
 
     // Whether to write logs (default: true)
     this.shouldWriteLogs = props.shouldWriteLogs ?? true;
+
+    // Simulation order delay (default: 10 seconds)
+    this.simulationOrderDelayMs = props.simulationOrderDelayMs ?? QuantBot.DEFAULT_SIMULATION_ORDER_DELAY_MS;
 
     console.log(`[${this.PROD_MODE ? "PROD" : "TEST"}] ${this.name} initialized...`);
     this.writeLog('Initialized...', LogLevel.INFO);
@@ -877,7 +885,7 @@ export class QuantBot {
 
         this.writeLog(JSON.stringify(result));
 
-        const trade = new TradeOrder({
+        const  trade = new TradeOrder({
           amount,
           name: name,
           clobTokenId,
@@ -903,7 +911,8 @@ export class QuantBot {
 
         return trade;
       } catch (e) {
-        this.writeError(JSON.stringify(e));
+        this.writeError(e instanceof Error ? e.message : JSON.stringify(e));
+        this.writeError(`Errored amount: ${amount}`)
         return undefined;
       }
     })();
@@ -1143,7 +1152,7 @@ export class QuantBot {
       return false;
     }
     this.spentThisHour += amount;
-    // this.writeLog(`Spent $${amount}, total this hour: $${this.spentThisHour}/${this.hourlyDollarLimit}`);
+    this.writeLog(`Spent $${amount}, total this hour: $${this.spentThisHour}/${this.hourlyDollarLimit}`);
     return true;
   }
 
@@ -1351,27 +1360,42 @@ export class QuantBot {
     if (trade.status !== TradeStatus.LIVE) return;
 
     const liveResult: OpenOrder | undefined = await OrderBatcher.getOrder(trade.orderId);
-    if (!liveResult || liveResult.status !== 'MATCHED') return;
+    if (!liveResult) return;
 
-    this.writeLog(`LiveResult: ${JSON.stringify(liveResult)}`);
-
-    if (parseFloat(liveResult.size_matched) < trade.amount) {
+    // Handle PARTIAL status - keep trade in partial state
+    if (liveResult.status === 'PARTIAL') {
+      this.writeLog(`LiveResult (PARTIAL): ${JSON.stringify(liveResult)}`);
       this.updateTradeStatus(trade, TradeStatus.PARTIAL);
       return;
     }
 
+    // Only process MATCHED orders beyond this point
+    if (liveResult.status !== 'MATCHED') return;
+
+    this.writeLog(`LiveResult: ${JSON.stringify(liveResult)}`);
+
     this.updateTradeStatus(trade, TradeStatus.MATCHED);
 
+    // Use size_matched from API response (actual filled amount)
+    const matchedAmount = parseFloat(liveResult.size_matched);
     const livePrice = parseFloat(liveResult.price);
+
+    // Update trade amount to reflect actual matched size
+    if (matchedAmount && matchedAmount !== trade.amount) {
+      this.writeLog(`Trade ${trade.orderId} matched amount differs: requested ${trade.amount}, matched ${matchedAmount}`);
+      trade.amount = matchedAmount;
+      trade.totalCost = matchedAmount * livePrice;
+    }
+
     if (trade.side === Side.BUY) {
       if (trade.targetBuyPrice && livePrice) {
-        trade.finalValue = -(trade.amount * livePrice);
+        trade.finalValue = -(matchedAmount * livePrice);
       } else {
         this.writeError(`trade: ${trade.orderId} does not have targetBuyPrice/livePrice but is BUY order, livePrice: ${livePrice}`);
       }
     } else {
       if (trade.targetSellPrice && livePrice) {
-        trade.finalValue = trade.amount * livePrice;
+        trade.finalValue = matchedAmount * livePrice;
       } else {
         this.writeError(`trade: ${trade.orderId} does not have targetSellPrice/livePrice but is SELL order, livePrice: ${livePrice}`);
       }
@@ -1387,12 +1411,19 @@ export class QuantBot {
   private async updateTestOrder(trade: TradeOrder): Promise<void> {
     if (trade.status !== TradeStatus.LIVE) return;
 
+    // Check if order has passed the simulation delay period
+    const orderAge = this.clock.now() - trade.createdAt;
+    if (orderAge < this.simulationOrderDelayMs) {
+      // Order is still in delay period, cannot match yet
+      return;
+    }
+
     if (trade.side === Side.BUY) {
       if (!trade.targetBuyPrice) {
         this.writeError(`trade: ${trade.orderId} does not have targetBuyPrice but is BUY order`);
         return;
       }
-      const liveSellPrice = await this.marketInfo.getPrice(trade.clobTokenId, trade.side);
+      const liveSellPrice = await this.marketInfo.getPrice(trade.clobTokenId, trade.side, this.targetedMarket);
       if (liveSellPrice <= trade.targetBuyPrice) {
         this.updateTradeStatus(trade, TradeStatus.MATCHED);
         trade.finalValue = -(trade.amount * trade.targetBuyPrice);
@@ -1407,7 +1438,7 @@ export class QuantBot {
         this.writeError(`trade: ${trade.orderId} does not have targetSellPrice but is SELL order`);
         return;
       }
-      const liveBuyPrice = await this.marketInfo.getPrice(trade.clobTokenId, trade.side);
+      const liveBuyPrice = await this.marketInfo.getPrice(trade.clobTokenId, trade.side, this.targetedMarket);
       if (liveBuyPrice >= trade.targetSellPrice) {
         this.updateTradeStatus(trade, TradeStatus.MATCHED);
         trade.finalValue = trade.amount * trade.targetSellPrice;

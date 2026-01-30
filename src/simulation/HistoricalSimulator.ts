@@ -17,9 +17,9 @@ export { TargetedMarket } from '../types/interfaces.js';
 export interface SimulationConfig {
     lookbackDays: number;
     tickIntervalMs?: number;  // Virtual time increment (default: 60000 = 1 minute)
-    coinType?: CoinType;      // Coin type to simulate (default: BTC)
+    coinType: CoinType;       // Coin type to simulate
     auditTradesCount?: number; // Number of top trades to write to audit (0 = disabled)
-    targetedMarket?: TargetedMarket; // Market to simulate (default: BITCOIN_HOURLY)
+    targetedMarket: TargetedMarket; // Market to simulate
 }
 
 export interface BotConfig {

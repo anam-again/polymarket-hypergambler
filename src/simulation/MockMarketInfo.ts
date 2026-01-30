@@ -71,7 +71,7 @@ export class MockMarketInfo implements IMarketInfo {
     private keyCache: Map<number, { hourKey: string; quarterKey: string }> = new Map();
     private static readonly KEY_CACHE_MAX_SIZE = 10000;
 
-    constructor(clock: SimulationClock, coinType: CoinType = CoinType.BTC) {
+    constructor(clock: SimulationClock, coinType: CoinType) {
         this.clock = clock;
         this.coinType = coinType;
         this.loadData();
@@ -293,7 +293,7 @@ export class MockMarketInfo implements IMarketInfo {
      * Uses hourly data by default; pass market parameter for quarterly support.
      * For quarterly markets, uses retry logic to find data within the current 15-minute period.
      */
-    public async getPrice(clobTokenId: string, side: Side, market?: TargetedMarket): Promise<number> {
+    public async getPrice(clobTokenId: string, side: Side, market: TargetedMarket): Promise<number> {
         const now = this.clock.now();
         const data = this.getDataForMarket(market);
 
@@ -327,7 +327,7 @@ export class MockMarketInfo implements IMarketInfo {
      * Supports both hourly and quarterly markets based on market parameter.
      * For quarterly markets, uses retry logic to find data within the current 15-minute period.
      */
-    public async getLiveData(market?: TargetedMarket): Promise<BtcOrderBooks> {
+    public async getLiveData(market: TargetedMarket): Promise<BtcOrderBooks> {
         const now = this.clock.now();
         const data = this.getDataForMarket(market);
 
@@ -360,7 +360,7 @@ export class MockMarketInfo implements IMarketInfo {
      * Gets mock CLOB token IDs for the current period.
      * Uses hourly intervals for hourly markets, 15-minute intervals for quarterly markets.
      */
-    public async getCurrentClobTokenIds(market?: TargetedMarket): Promise<string[]> {
+    public async getCurrentClobTokenIds(market: TargetedMarket): Promise<string[]> {
         const periodKey = this.getPeriodKey(this.clock.now(), market);
         return [`UP-${periodKey}`, `DOWN-${periodKey}`];
     }
@@ -495,7 +495,7 @@ export class MockMarketInfo implements IMarketInfo {
      * Gets the winner for a specific period.
      * For hourly markets, returns hourly winner; for quarterly, returns 15-minute winner.
      */
-    public getHourWinner(timestamp: number, market?: TargetedMarket): 'UP' | 'DOWN' | null {
+    public getHourWinner(timestamp: number, market: TargetedMarket): 'UP' | 'DOWN' | null {
         if (market && MockMarketInfo.getMarketSchedule(market) === MarketSchedule.QUARTERLY) {
             const quarterKey = this.get15MinuteKey(timestamp);
             return this.quarterWinners.get(quarterKey) ?? null;
@@ -595,7 +595,7 @@ export class MockMarketInfo implements IMarketInfo {
     /**
      * Gets the URL for a specific market at a timestamp (for IMarketInfo compatibility).
      */
-    public getUrl(timestamp: number, market?: TargetedMarket): string {
+    public getUrl(timestamp: number, market: TargetedMarket): string {
         if (market && MockMarketInfo.getMarketSchedule(market) === MarketSchedule.QUARTERLY) {
             return this.getQuarterlyUrl(timestamp);
         }
@@ -628,7 +628,7 @@ export class MockMarketInfo implements IMarketInfo {
      * Gets the available data time range.
      * Returns the combined range of both hourly and quarterly data.
      */
-    public getDataRange(market?: TargetedMarket): { start: Date; end: Date } | null {
+    public getDataRange(market: TargetedMarket): { start: Date; end: Date } | null {
         const data = this.getDataForMarket(market);
         if (data.length === 0) return null;
 

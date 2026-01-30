@@ -94,7 +94,8 @@ export class EarlyLimit extends QuantBot implements QuantBotRun {
 
                 const currentPrice = await this.marketInfo.getPrice(
                     tokenId,
-                    Side.BUY
+                    Side.BUY,
+                    this.targetedMarket
                 );
                 if (currentPrice >= this.triggerPrice) {
                     const totalCost = this.targetBuyPrice * this.targetAmount;

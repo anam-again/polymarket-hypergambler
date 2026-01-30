@@ -63,7 +63,7 @@ export class MockCDMarketData implements IMarketData {
     private lastMinuteSearchTime: number = 0;
     private lastMinuteSearchIndex: number = 0;
 
-    constructor(clock: SimulationClock, coinType: CoinType = CoinType.BTC) {
+    constructor(clock: SimulationClock, coinType: CoinType) {
         this.clock = clock;
         this.coinType = coinType;
         this.loadData();
@@ -133,7 +133,7 @@ export class MockCDMarketData implements IMarketData {
      * Returns the most recent price entry before or at the current time.
      * Note: In simulation, all symbols return BTC data (mock limitation).
      */
-    public async getCurrentPrice(symbol: string = 'BTCUSDT'): Promise<number> {
+    public async getCurrentPrice(): Promise<number> {
         const now = this.clock.now();
         const entry = this.findPreviousEntry(this.minuteData, now);
 
@@ -147,15 +147,15 @@ export class MockCDMarketData implements IMarketData {
     /**
      * Gets Binance price (same as getCurrentPrice for simulation).
      */
-    public async getBinancePrice(symbol: string = 'BTCUSDT'): Promise<number> {
-        return this.getCurrentPrice(symbol);
+    public async getBinancePrice(): Promise<number> {
+        return this.getCurrentPrice();
     }
 
     /**
      * Gets the current price by targeted market (IMarketData interface).
      * In simulation, all markets return the same price data for the loaded coin type.
      */
-    public async getCurrentPriceByMarket(market: TargetedMarket): Promise<number> {
+    public async getCurrentPriceByMarket(): Promise<number> {
         return this.getCurrentPrice();
     }
 
@@ -219,7 +219,7 @@ export class MockCDMarketData implements IMarketData {
      * Gets recent price entries before the current simulated time.
      * Optimized to use binary search instead of filtering.
      */
-    public getRecentPrices(n: number, _market?: TargetedMarket): RecentPriceEntry[] {
+    public getRecentPrices(n: number): RecentPriceEntry[] {
         const now = this.clock.now();
 
         // Find the index of the last entry at or before 'now'

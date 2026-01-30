@@ -7,24 +7,42 @@ import { SimulationClock } from './SimulationClock.js';
 // ============================================================================
 
 /**
+ * Extended order result that includes creation timestamp for delay tracking.
+ */
+interface SimulatedOrder extends OrderResult {
+    createdAt: number;  // Simulation clock timestamp when order was created
+}
+
+/**
  * Simulated order executor that tracks orders and determines fills
  * based on market prices during simulation.
  */
 export class SimulatedOrderExecutor implements IOrderExecutor {
-    private orders: Map<string, OrderResult> = new Map();
+    private orders: Map<string, SimulatedOrder> = new Map();
     private orderIdCounter: number = 0;
     private clock: SimulationClock;
     private marketInfo: IMarketInfo;
     private targetedMarket: TargetedMarket;
 
-    constructor(clock: SimulationClock, marketInfo: IMarketInfo, targetedMarket: TargetedMarket) {
+    // Order delay configuration (simulates production API latency)
+    private orderDelayMs: number;
+    private static readonly DEFAULT_ORDER_DELAY_MS = 10 * 1000;  // 10 seconds
+
+    constructor(
+        clock: SimulationClock,
+        marketInfo: IMarketInfo,
+        targetedMarket: TargetedMarket,
+        orderDelayMs?: number
+    ) {
         this.clock = clock;
         this.marketInfo = marketInfo;
         this.targetedMarket = targetedMarket;
+        this.orderDelayMs = orderDelayMs ?? SimulatedOrderExecutor.DEFAULT_ORDER_DELAY_MS;
     }
 
     /**
      * Creates and tracks a simulated order.
+     * Orders cannot fill until the delay period has passed.
      */
     public async createOrder(
         tokenId: string,
@@ -32,9 +50,9 @@ export class SimulatedOrderExecutor implements IOrderExecutor {
         amount: number,
         side: Side
     ): Promise<OrderResult> {
-        const orderId = `sim-${this.orderIdCounter++}-${Date.now()}`;
+        const orderId = `sim-${this.orderIdCounter++}-${this.clock.now()}`;
 
-        const order: OrderResult = {
+        const order: SimulatedOrder = {
             orderId,
             status: OrderStatus.LIVE,
             tokenId,
@@ -42,12 +60,13 @@ export class SimulatedOrderExecutor implements IOrderExecutor {
             amount,
             side,
             filledAmount: 0,
+            createdAt: this.clock.now(),
         };
 
         this.orders.set(orderId, order);
 
-        // Immediately check if the order can be filled
-        await this.checkOrderFill(order);
+        // Don't immediately check for fill - must wait for delay period
+        // The order will be checked on subsequent ticks via checkAllOrderFills()
 
         return order;
     }
@@ -98,11 +117,19 @@ export class SimulatedOrderExecutor implements IOrderExecutor {
 
     /**
      * Checks if a single order should be filled based on current market prices.
+     * Orders must have passed the delay period before they can fill.
      */
-    private async checkOrderFill(order: OrderResult): Promise<void> {
+    private async checkOrderFill(order: SimulatedOrder): Promise<void> {
         try {
+            // Check if order has passed the delay period
+            const orderAge = this.clock.now() - order.createdAt;
+            if (orderAge < this.orderDelayMs) {
+                // Order is still in delay period, cannot fill yet
+                return;
+            }
+
             // Get the current market price for this token
-            const currentPrice = await this.marketInfo.getPrice(order.tokenId, order.side);
+            const currentPrice = await this.marketInfo.getPrice(order.tokenId, order.side, this.targetedMarket);
 
             if (order.side === Side.BUY) {
                 // Buy order fills when market ask price <= our bid price

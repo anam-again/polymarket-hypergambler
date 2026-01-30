@@ -26,6 +26,9 @@ function App() {
   const [lastUpdate, setLastUpdate] = useState(null);
   const [wsConnected, setWsConnected] = useState(false);
 
+  // Running state - controls data fetching
+  const [isRunning, setIsRunning] = useState(false);
+
   // View state - 'live' or 'simulator'
   const [activeView, setActiveView] = useState('live');
 
@@ -41,6 +44,7 @@ function App() {
   const startTimeRef = useRef(startTime);
   const endTimeRef = useRef(endTime);
   const modeRef = useRef(mode);
+  const isRunningRef = useRef(isRunning);
 
   // Keep refs in sync
   useEffect(() => {
@@ -51,6 +55,10 @@ function App() {
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
+
+  useEffect(() => {
+    isRunningRef.current = isRunning;
+  }, [isRunning]);
 
   const buildUrl = useCallback((endpoint) => {
     const params = new URLSearchParams();
@@ -101,10 +109,12 @@ function App() {
     }
   }, []);
 
-  // Initial data fetch and refetch on time range change
+  // Data fetch when isRunning transitions to true or time range/mode changes while running
   useEffect(() => {
-    fetchData();
-  }, [buildUrl, fetchData]);
+    if (isRunning) {
+      fetchData();
+    }
+  }, [isRunning, buildUrl, fetchData]);
 
   // WebSocket connection for real-time trade updates
   useEffect(() => {
@@ -121,7 +131,7 @@ function App() {
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
-            if (data.type === 'trade-update') {
+            if (data.type === 'trade-update' && isRunningRef.current) {
               console.log('Trade update received, refreshing data...');
               fetchData(true);
             }
@@ -170,7 +180,7 @@ function App() {
     fetchData(true);
   };
 
-  if (loading) {
+  if (loading && isRunning) {
     return <div className="loading">Loading dashboard...</div>;
   }
 
@@ -224,12 +234,20 @@ function App() {
                 </span>
               )}
               <button
-                className={`refresh-btn ${refreshing ? 'refreshing' : ''}`}
-                onClick={handleRefresh}
-                disabled={refreshing}
+                className={`refresh-btn ${isRunning ? 'running' : 'stopped'}`}
+                onClick={() => setIsRunning(!isRunning)}
               >
-                {refreshing ? 'Refreshing...' : 'Refresh'}
+                {isRunning ? 'Stop' : 'Start'}
               </button>
+              {isRunning && (
+                <button
+                  className={`refresh-btn ${refreshing ? 'refreshing' : ''}`}
+                  onClick={handleRefresh}
+                  disabled={refreshing}
+                >
+                  {refreshing ? 'Refreshing...' : 'Refresh'}
+                </button>
+              )}
             </>
           )}
         </div>
@@ -245,47 +263,55 @@ function App() {
             onRangeChange={handleTimeRangeChange}
           />
 
-          {stats && <StatsCards stats={stats} />}
-
-          <LiveTrades mode={mode} />
-
-          <LiveLogs mode={mode} />
-
-          <div className="charts-grid">
-            <div className="chart-card full-width">
-              <h2>Cumulative PnL Over Time</h2>
-              <CumulativePnLChart data={cumulativePnl} startTime={startTime} endTime={endTime} />
+          {!isRunning && !stats ? (
+            <div className="dashboard-stopped">
+              <p>Dashboard is stopped. Click "Start" to load data.</p>
             </div>
+          ) : (
+            <>
+              {stats && <StatsCards stats={stats} />}
 
-            <div className="chart-card">
-              <h2>PnL by Strategy</h2>
-              <StrategyPnLChart data={strategyPnl} />
-            </div>
+              <LiveTrades mode={mode} />
 
-            <div className="chart-card">
-              <h2>Strategy Win Rates</h2>
-              <StrategyWinRateChart data={strategyPnl} />
-            </div>
+              <LiveLogs mode={mode} />
 
-            <div className="chart-card">
-              <h2>Trades by Side</h2>
-              <SideDistributionChart data={sideData} />
-            </div>
-          </div>
+              <div className="charts-grid">
+                <div className="chart-card full-width">
+                  <h2>Cumulative PnL Over Time</h2>
+                  <CumulativePnLChart data={cumulativePnl} startTime={startTime} endTime={endTime} />
+                </div>
 
-          <div className="strategy-section">
-            <StrategySelector
-              strategies={strategies}
-              selected={selectedStrategy}
-              onSelect={setSelectedStrategy}
-            />
-            <StrategyDetail
-              strategy={selectedStrategy}
-              startTime={startTime}
-              endTime={endTime}
-              mode={mode}
-            />
-          </div>
+                <div className="chart-card">
+                  <h2>PnL by Strategy</h2>
+                  <StrategyPnLChart data={strategyPnl} />
+                </div>
+
+                <div className="chart-card">
+                  <h2>Strategy Win Rates</h2>
+                  <StrategyWinRateChart data={strategyPnl} />
+                </div>
+
+                <div className="chart-card">
+                  <h2>Trades by Side</h2>
+                  <SideDistributionChart data={sideData} />
+                </div>
+              </div>
+
+              <div className="strategy-section">
+                <StrategySelector
+                  strategies={strategies}
+                  selected={selectedStrategy}
+                  onSelect={setSelectedStrategy}
+                />
+                <StrategyDetail
+                  strategy={selectedStrategy}
+                  startTime={startTime}
+                  endTime={endTime}
+                  mode={mode}
+                />
+              </div>
+            </>
+          )}
         </>
       )}
     </div>

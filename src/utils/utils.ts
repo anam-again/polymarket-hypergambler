@@ -39,6 +39,8 @@ export function targetMarketToShortname(targetMarket: TargetedMarket): string {
             return 'xrp';
         case TargetedMarket.XRP_QUARTERLY:
             return 'xrp15';
+        default: 
+            throw Error('Unknown targetMarket supplied to targetMarketToShortname.')
     }
 }
 

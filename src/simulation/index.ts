@@ -23,6 +23,7 @@ import { MeanReversion } from '../bots/MeanReversion.js';
 import { NCandle } from '../bots/NCandle.js';
 import { EarlyBuyerV2 } from '../bots/EarlyBuyerV2.js';
 import { EsotericNormalization } from '../bots/EsotericNormalization.js';
+import { MarketMaker } from '../bots/MarketMaker.js';
 
 // Re-export adapter utilities for external use
 export { createSimulatedBot, createMockClobClient, QuantBotSimulationAdapter } from './QuantBotSimulationAdapter.js';
@@ -215,6 +216,34 @@ const quarterlyEsotericNormalizationBounds: ParameterBounds = {
     targetSize: { min: 5, max: 25, step: 1 },
     cutoffMinute: { min: 5, max: 12, step: 1 },     // Within 15-min period
     maxTradesPerPeriod: { min: 1, max: 2, step: 1 },
+};
+
+const marketMakerBounds: ParameterBounds = {
+    spreadSize: { min: 2, max: 10, step: 1 },
+    profitMargin: { min: 0.02, max: 0.20 },         // 2-20 cents
+    minPrice: { min: 0.20, max: 0.45 },
+    maxPrice: { min: 0.55, max: 0.80 },
+    stopLossAmount: { min: 0.05, max: 0.20 },       // 5-20 cents
+    buyExpirySeconds: { min: 30, max: 300, step: 10 },  // 30s to 5min
+    totalActiveTrades: { min: 3, max: 15, step: 1 },
+    requiredVolatility: { min: 0.5, max: 3.0 },
+    volatilityLookbackPeriods: { min: 5, max: 30, step: 1 },
+    targetSize: { min: 5, max: 20, step: 1 },
+    cutoffMinute: { min: 30, max: 55, step: 5 },
+};
+
+const quarterlyMarketMakerBounds: ParameterBounds = {
+    spreadSize: { min: 2, max: 8, step: 1 },
+    profitMargin: { min: 0.02, max: 0.15 },
+    minPrice: { min: 0.20, max: 0.45 },
+    maxPrice: { min: 0.55, max: 0.80 },
+    stopLossAmount: { min: 0.03, max: 0.15 },
+    buyExpirySeconds: { min: 15, max: 120, step: 5 },  // 15s to 2min for faster markets
+    totalActiveTrades: { min: 2, max: 10, step: 1 },
+    requiredVolatility: { min: 0.3, max: 2.0 },
+    volatilityLookbackPeriods: { min: 3, max: 15, step: 1 },
+    targetSize: { min: 5, max: 15, step: 1 },
+    cutoffMinute: { min: 8, max: 12, step: 1 },
 };
 
 // ============================================================================
@@ -667,6 +696,66 @@ function createQuarterlyEsotericNormalizationBot(botParams: BotParams): Simulate
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
 }
 
+function createMarketMakerBot(botParams: BotParams): SimulatedBot {
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory } = botParams;
+
+    const bot = new MarketMaker({
+        name,
+        hourlyDollarLimit: 10000,
+        client: createMockClobClient(),
+        marketInfo,
+        cdMarketData,
+        PROD_MODE: false,
+        targetedMarket,
+        clock,
+        logDirectory: logDirectory ?? SIM_LOG_DIR,
+        shouldWriteLogs: shouldWriteLogs ?? false,
+        spreadSize: params.spreadSize as number ?? 5,
+        profitMargin: params.profitMargin as number ?? 0.10,
+        minPrice: params.minPrice as number ?? 0.40,
+        maxPrice: params.maxPrice as number ?? 0.60,
+        stopLossAmount: params.stopLossAmount as number ?? 0.10,
+        buyExpirySeconds: params.buyExpirySeconds as number ?? 120,
+        totalActiveTrades: params.totalActiveTrades as number ?? 10,
+        requiredVolatility: params.requiredVolatility as number ?? 1.0,
+        volatilityLookbackPeriods: params.volatilityLookbackPeriods as number ?? 15,
+        targetSize: params.targetSize as number ?? 10,
+        cutoffMinute: params.cutoffMinute as number ?? 45,
+    });
+
+    return new QuantBotSimulationAdapter(bot, clock, marketInfo);
+}
+
+function createQuarterlyMarketMakerBot(botParams: BotParams): SimulatedBot {
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory } = botParams;
+
+    const bot = new MarketMaker({
+        name,
+        hourlyDollarLimit: 10000,
+        client: createMockClobClient(),
+        marketInfo,
+        cdMarketData,
+        PROD_MODE: false,
+        targetedMarket,
+        clock,
+        logDirectory: logDirectory ?? SIM_LOG_DIR,
+        shouldWriteLogs: shouldWriteLogs ?? false,
+        spreadSize: params.spreadSize as number ?? 4,
+        profitMargin: params.profitMargin as number ?? 0.08,
+        minPrice: params.minPrice as number ?? 0.35,
+        maxPrice: params.maxPrice as number ?? 0.65,
+        stopLossAmount: params.stopLossAmount as number ?? 0.08,
+        buyExpirySeconds: params.buyExpirySeconds as number ?? 60,
+        totalActiveTrades: params.totalActiveTrades as number ?? 6,
+        requiredVolatility: params.requiredVolatility as number ?? 0.8,
+        volatilityLookbackPeriods: params.volatilityLookbackPeriods as number ?? 8,
+        targetSize: params.targetSize as number ?? 10,
+        cutoffMinute: params.cutoffMinute as number ?? 10,
+    });
+
+    return new QuantBotSimulationAdapter(bot, clock, marketInfo);
+}
+
 const geneticStrategies = [
     { name: 'Contrarian', factory: createContrarianBot, bounds: contrarianBounds },
     { name: 'TrendFollowing', factory: createTrendFollowingBot, bounds: trendFollowingBounds },
@@ -687,6 +776,9 @@ const geneticStrategies = [
     { name: 'EarlyBuyerV2', factory: createEarlyBuyerV2Bot, bounds: earlyBuyerV2Bounds },
     // Normal Distribution Strategies
     { name: 'EsotericNormalization', factory: createEsotericNormalizationBot, bounds: esotericNormalizationBounds },
+    // Market Maker Strategies
+    { name: 'MarketMaker', factory: createMarketMakerBot, bounds: marketMakerBounds },
+    { name: 'QuarterlyMarketMaker', factory: createQuarterlyMarketMakerBot, bounds: quarterlyMarketMakerBounds },
 ];
 
 // ============================================================================
@@ -1044,9 +1136,11 @@ Available Strategies:
   Hourly Markets (60-min periods):
     Contrarian, TrendFollowing, FirstCandle, FirstCandleV2,
     EveningStar, MorningStar, MeanReversion, EarlyBuyerV2,
+    EsotericNormalization, MarketMaker
 
   Quarterly Markets (15-min periods):
-    QuarterlyFirstCandle, QuarterlyMeanReversion, QuarterlyTrendFollowing, QuarterlyEarlyBuyerV2
+    QuarterlyFirstCandle, QuarterlyMeanReversion, QuarterlyTrendFollowing,
+    QuarterlyEarlyBuyerV2, QuarterlyEsotericNormalization, QuarterlyMarketMaker
 
 YAML File Format:
   strategy: QuarterlyTrendFollowing

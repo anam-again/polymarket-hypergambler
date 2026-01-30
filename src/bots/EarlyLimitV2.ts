@@ -139,7 +139,7 @@ export class EarlyLimitV2 extends QuantBot implements QuantBotRun {
             ? orderBooks.BtcUpTokenId
             : orderBooks.BtcDownTokenId;
 
-        const currentPrice = await this.marketInfo.getPrice(tokenId, Side.BUY);
+        const currentPrice = await this.marketInfo.getPrice(tokenId, Side.BUY, this.targetedMarket);
 
         if (currentPrice < this.triggerPrice) {
             return;

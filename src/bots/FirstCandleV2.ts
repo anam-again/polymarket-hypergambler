@@ -247,7 +247,7 @@ export class FirstCandleV2 extends QuantBot implements QuantBotRun {
             : orderBooks.BtcDownTokenId;
 
         // Get current best ask price (sell side price for buyers)
-        const currentAskPrice = await this.marketInfo.getPrice(tokenId, Side.BUY);
+        const currentAskPrice = await this.marketInfo.getPrice(tokenId, Side.BUY, this.targetedMarket);
 
         // Calculate dynamic buy price: current ask + buffer (rounded to 2 decimals)
         const dynamicBuyPrice = Math.round((currentAskPrice + this.buyPriceBuffer) * 100) / 100;
@@ -285,7 +285,7 @@ export class FirstCandleV2 extends QuantBot implements QuantBotRun {
             : orderBooks.BtcDownTokenId;
 
         // Get current best bid price (buy side price for sellers)
-        const currentBidPrice = await this.marketInfo.getPrice(tokenId, Side.SELL);
+        const currentBidPrice = await this.marketInfo.getPrice(tokenId, Side.SELL, this.targetedMarket);
 
         // Calculate dynamic sell price: current bid - buffer (rounded to 2 decimals)
         const marketSellPrice = Math.round((currentBidPrice - this.sellPriceBuffer) * 100) / 100;

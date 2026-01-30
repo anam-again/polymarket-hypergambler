@@ -358,7 +358,7 @@ export class NCandle extends QuantBot implements QuantBotRun {
             : orderBooks.BtcDownTokenId;
 
         // Get current best ask price
-        const currentAskPrice = await this.marketInfo.getPrice(tokenId, Side.BUY);
+        const currentAskPrice = await this.marketInfo.getPrice(tokenId, Side.BUY, this.targetedMarket);
 
         // Calculate dynamic buy price
         const dynamicBuyPrice = Math.round((currentAskPrice + this.buyPriceBuffer) * 100) / 100;
@@ -415,7 +415,7 @@ export class NCandle extends QuantBot implements QuantBotRun {
             : orderBooks.BtcDownTokenId;
 
         // Get current best bid price
-        const currentBidPrice = await this.marketInfo.getPrice(tokenId, Side.SELL);
+        const currentBidPrice = await this.marketInfo.getPrice(tokenId, Side.SELL, this.targetedMarket);
 
         // Calculate dynamic sell price
         const marketSellPrice = Math.round((currentBidPrice - this.sellPriceBuffer) * 100) / 100;
@@ -455,7 +455,7 @@ export class NCandle extends QuantBot implements QuantBotRun {
 
         try {
             // Get current market price for our position
-            const currentBidPrice = await this.marketInfo.getPrice(this.entryTokenId, Side.SELL);
+            const currentBidPrice = await this.marketInfo.getPrice(this.entryTokenId, Side.SELL, this.targetedMarket);
 
             if (currentBidPrice <= this.stopLossPrice) {
                 this.writeLog(
