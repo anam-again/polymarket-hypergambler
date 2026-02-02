@@ -10,6 +10,7 @@ import { MarketSchedule } from "../types/interfaces.js";
 interface MarketMakerProps extends QuantBotProps {
     // Spread configuration
     spreadSize: number;           // Number of price levels to buy (e.g., 5 = buy at 49, 48, 47, 46, 45 when market is 50)
+    minSpreadDistance: number;    // Distance from market price to start spread (e.g., 0.03 = first order 3 cents below market)
     profitMargin: number;         // Cents above buy price to sell (e.g., 0.10 = sell at buyPrice + 0.10)
 
     // Price bounds
@@ -59,6 +60,7 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
 
     // --- Properties ---
     private spreadSize: number;
+    private minSpreadDistance: number;
     private profitMargin: number;
     private minPrice: number;
     private maxPrice: number;
@@ -83,6 +85,7 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
         super(props);
 
         this.spreadSize = props.spreadSize;
+        this.minSpreadDistance = props.minSpreadDistance;
         this.profitMargin = props.profitMargin;
         this.minPrice = props.minPrice;
         this.maxPrice = props.maxPrice;
@@ -329,8 +332,8 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
         // Get current ask price to place at current market
         const currentAskPrice = await this.marketInfo.getPrice(tokenId, Side.BUY, this.targetedMarket);
 
-        // Calculate buy price: current price - (offset * step)
-        const buyPrice = Math.round((currentAskPrice - (position.spreadOffset * this.SPREAD_STEP)) * 100) / 100;
+        // Calculate buy price: current price - minSpreadDistance - ((offset - 1) * step)
+        const buyPrice = Math.round((currentAskPrice - this.minSpreadDistance - ((position.spreadOffset - 1) * this.SPREAD_STEP)) * 100) / 100;
 
         // Check price bounds
         if (buyPrice < this.minPrice) {
@@ -752,8 +755,8 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
         // Get current ask price
         const currentAskPrice = await this.marketInfo.getPrice(tokenId, Side.BUY, this.targetedMarket);
 
-        // Calculate buy price: current price - (offset * step)
-        const buyPrice = Math.round((currentAskPrice - (spreadOffset * this.SPREAD_STEP)) * 100) / 100;
+        // Calculate buy price: current price - minSpreadDistance - ((offset - 1) * step)
+        const buyPrice = Math.round((currentAskPrice - this.minSpreadDistance - ((spreadOffset - 1) * this.SPREAD_STEP)) * 100) / 100;
 
         // Check price bounds
         if (buyPrice < this.minPrice) {

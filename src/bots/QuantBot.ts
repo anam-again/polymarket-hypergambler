@@ -766,6 +766,7 @@ export class QuantBot {
 
   /**
    * Stops the bot's tick wrapper and marks it as stopped.
+   * Cancels all active (LIVE) trades before stopping.
    */
   public stop(): void {
     this.isStopped = true;
@@ -773,6 +774,25 @@ export class QuantBot {
       this.tickStopFn();
       this.tickStopFn = null;
     }
+
+    // Cancel all live trades
+    const liveTrades = this.trades.filter(t => t.status === TradeStatus.LIVE);
+    if (liveTrades.length > 0) {
+      this.writeLog(`Canceling ${liveTrades.length} live trades on stop...`, LogLevel.INFO);
+
+      // Fire and forget - we don't await since stop() is synchronous
+      // but we still want to attempt cancellation
+      Promise.all(
+        liveTrades.map(trade =>
+          this.cancelTrade(trade).catch(e => {
+            this.writeLog(`Failed to cancel trade ${trade.orderId}: ${e}`, LogLevel.ERROR);
+          })
+        )
+      ).then(() => {
+        this.writeLog('All live trades canceled', LogLevel.INFO);
+      });
+    }
+
     this.writeLog('Bot stopped', LogLevel.INFO);
   }
 
@@ -928,6 +948,23 @@ export class QuantBot {
     try {
       if (this.PROD_MODE) {
         await OrderBatcher.cancelOrder(trade.orderId);
+
+        // Verify the order's actual status after cancel attempt
+        const liveResult = await OrderBatcher.getOrder(trade.orderId);
+
+        if (liveResult && liveResult.status === 'MATCHED') {
+          // Order matched before cancel arrived - backfill it
+          this.writeLog(`Order ${trade.orderId} matched before cancel completed - backfilling`);
+          await this.handleUnexpectedMatch(trade, liveResult);
+          return false;  // Cancel failed - order matched
+        }
+
+        if (liveResult && liveResult.status === 'PARTIAL') {
+          // Order partially matched before cancel
+          this.writeLog(`Order ${trade.orderId} partially matched before cancel - backfilling`);
+          await this.handleUnexpectedMatch(trade, liveResult);
+          return false;  // Cancel failed - order partially matched
+        }
       }
 
       this.updateTradeStatus(trade, TradeStatus.CANCELED);
@@ -942,6 +979,43 @@ export class QuantBot {
     } catch (e) {
       this.writeError(e);
       return false;
+    }
+  }
+
+  /**
+   * Handles an order that matched unexpectedly (e.g., while we were trying to cancel it)
+   */
+  private async handleUnexpectedMatch(trade: TradeOrder, liveResult: OpenOrder): Promise<void> {
+    this.writeLog(`Handling unexpected match for order ${trade.orderId}`);
+
+    // Use size_matched from API response, rounded down to .01
+    const matchedAmount = Math.floor(parseFloat(liveResult.size_matched) * 100) / 100;
+    const livePrice = parseFloat(liveResult.price);
+
+    if (!isNaN(matchedAmount) && matchedAmount > 0) {
+      if (matchedAmount !== trade.amount) {
+        this.writeLog(`Trade ${trade.orderId} matched amount differs: requested ${trade.amount}, matched ${matchedAmount}`);
+      }
+      trade.amount = matchedAmount;
+      trade.totalCost = matchedAmount * livePrice;
+    } else {
+      this.writeLog(`Warning: Trade ${trade.orderId} has invalid size_matched: ${liveResult.size_matched}`);
+    }
+
+    // Update status to MATCHED
+    this.updateTradeStatus(trade, TradeStatus.MATCHED);
+
+    // Calculate finalValue based on side
+    if (trade.side === Side.BUY) {
+      trade.finalValue = -(trade.amount * livePrice);
+    } else {
+      trade.finalValue = trade.amount * livePrice;
+    }
+
+    // Write to audit log
+    if (!trade.isAudited) {
+      this.writeCompletedTrade(trade);
+      trade.isAudited = true;
     }
   }
 
@@ -1357,10 +1431,25 @@ export class QuantBot {
   }
 
   private async updateProdOrder(trade: TradeOrder): Promise<void> {
-    if (trade.status !== TradeStatus.LIVE) return;
+    // Skip already completed statuses
+    if (trade.status === TradeStatus.MATCHED || trade.status === TradeStatus.EXPIRED) return;
+
+    // For CANCELED trades, still check if they actually matched
+    const shouldVerifyCanceled = trade.status === TradeStatus.CANCELED && this.PROD_MODE;
+    if (trade.status !== TradeStatus.LIVE && !shouldVerifyCanceled) return;
 
     const liveResult: OpenOrder | undefined = await OrderBatcher.getOrder(trade.orderId);
     if (!liveResult) return;
+
+    // Handle case where we marked it CANCELED but it actually matched
+    if (trade.status === TradeStatus.CANCELED && liveResult.status === 'MATCHED') {
+      this.writeLog(`Order ${trade.orderId} was marked CANCELED but actually MATCHED - recovering`);
+      await this.handleUnexpectedMatch(trade, liveResult);
+      return;
+    }
+
+    // Only LIVE orders proceed from here
+    if (trade.status !== TradeStatus.LIVE) return;
 
     // Handle PARTIAL status - keep trade in partial state
     if (liveResult.status === 'PARTIAL') {
@@ -1376,15 +1465,19 @@ export class QuantBot {
 
     this.updateTradeStatus(trade, TradeStatus.MATCHED);
 
-    // Use size_matched from API response (actual filled amount)
-    const matchedAmount = parseFloat(liveResult.size_matched);
+    // Use size_matched from API response (actual filled amount), rounded down to .01
+    const matchedAmount = Math.floor(parseFloat(liveResult.size_matched) * 100) / 100;
     const livePrice = parseFloat(liveResult.price);
 
-    // Update trade amount to reflect actual matched size
-    if (matchedAmount && matchedAmount !== trade.amount) {
-      this.writeLog(`Trade ${trade.orderId} matched amount differs: requested ${trade.amount}, matched ${matchedAmount}`);
+    // Always use size_matched when available and valid
+    if (!isNaN(matchedAmount) && matchedAmount > 0) {
+      if (matchedAmount !== trade.amount) {
+        this.writeLog(`Trade ${trade.orderId} matched amount differs: requested ${trade.amount}, matched ${matchedAmount}`);
+      }
       trade.amount = matchedAmount;
       trade.totalCost = matchedAmount * livePrice;
+    } else {
+      this.writeLog(`Warning: Trade ${trade.orderId} has invalid size_matched: ${liveResult.size_matched}, using original amount: ${trade.amount}`);
     }
 
     if (trade.side === Side.BUY) {
@@ -1424,7 +1517,7 @@ export class QuantBot {
         return;
       }
       const liveSellPrice = await this.marketInfo.getPrice(trade.clobTokenId, trade.side, this.targetedMarket);
-      if (liveSellPrice <= trade.targetBuyPrice) {
+      if (liveSellPrice < trade.targetBuyPrice) { // < (over <=) causes the price to have to be .01c over the price, this could cause issues in edge price cases.
         this.updateTradeStatus(trade, TradeStatus.MATCHED);
         trade.finalValue = -(trade.amount * trade.targetBuyPrice);
         // Write the trade immediately when matched
@@ -1439,7 +1532,7 @@ export class QuantBot {
         return;
       }
       const liveBuyPrice = await this.marketInfo.getPrice(trade.clobTokenId, trade.side, this.targetedMarket);
-      if (liveBuyPrice >= trade.targetSellPrice) {
+      if (liveBuyPrice > trade.targetSellPrice) { // > (over >=) causes the price to have to be .01c over the price, this could cause issues in edge price cases.
         this.updateTradeStatus(trade, TradeStatus.MATCHED);
         trade.finalValue = trade.amount * trade.targetSellPrice;
         // Write the trade immediately when matched

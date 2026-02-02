@@ -86,8 +86,32 @@ export class MarketInfo {
      * @returns The current EST timestamp in milliseconds since epoch.
      */
     public getCurrentEstTimestamp(): number {
-        const estString = new Date().toLocaleString("en-US", { timeZone: "America/New_York" });
-        return new Date(estString).getTime();
+        // Get current time adjusted for EST/EDT offset
+        const now = new Date();
+
+        // Get the offset for America/New_York at the current time
+        const estFormatter = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/New_York',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false
+        });
+
+        const parts = estFormatter.formatToParts(now);
+        const estDate = new Date(
+            parseInt(parts.find(p => p.type === 'year')!.value),
+            parseInt(parts.find(p => p.type === 'month')!.value) - 1,
+            parseInt(parts.find(p => p.type === 'day')!.value),
+            parseInt(parts.find(p => p.type === 'hour')!.value),
+            parseInt(parts.find(p => p.type === 'minute')!.value),
+            parseInt(parts.find(p => p.type === 'second')!.value)
+        );
+
+        return estDate.getTime();
     }
 
     /**
@@ -361,7 +385,8 @@ export class MarketInfo {
 
     /**
      * Gets the current order books for Bitcoin up/down markets.
-     * Results are cached and expire every UPDATE_DATA_INTERVAL seconds.
+     * Results are cached and expire on period boundaries (15-min for quarterly, hourly for hourly)
+     * or after UPDATE_DATA_INTERVAL seconds, whichever comes first.
      * Uses a mutex lock to prevent concurrent fetches.
      * @returns A promise resolving to the BtcOrderBooks containing buy/sell order books.
      */
@@ -373,7 +398,24 @@ export class MarketInfo {
 
         const now = Date.now();
         const fetchedAt = this.orderBooksFetchedAt.get(targetedMarket) ?? 0;
-        const isExpired = fetchedAt === 0 || now - fetchedAt >= MarketInfo.UPDATE_DATA_INTERVAL;
+        const schedule = QuantBot.getMarketSchedule(targetedMarket);
+
+        let isExpired: boolean;
+        if (schedule === MarketSchedule.QUARTERLY) {
+            // Expire on 15-minute boundaries OR time-based expiry
+            const currentInterval = MarketInfo.getFifteenMinuteTimestamp(now);
+            const cachedInterval = MarketInfo.getFifteenMinuteTimestamp(fetchedAt);
+            isExpired = fetchedAt === 0 ||
+                        currentInterval !== cachedInterval ||
+                        now - fetchedAt >= MarketInfo.UPDATE_DATA_INTERVAL;
+        } else {
+            // Hourly markets: expire on hour boundaries OR time-based expiry
+            const currentHour = new Date(now).getHours();
+            const cachedHour = new Date(fetchedAt).getHours();
+            isExpired = fetchedAt === 0 ||
+                        currentHour !== cachedHour ||
+                        now - fetchedAt >= MarketInfo.UPDATE_DATA_INTERVAL;
+        }
 
         const cached = this.cachedOrderBooks.get(targetedMarket);
         if (!cached || isExpired) {
@@ -386,11 +428,20 @@ export class MarketInfo {
                         { token_id: clobTokenIds[1], side: Side.BUY },
                         { token_id: clobTokenIds[1], side: Side.SELL },
                     ]);
+                    const tokenUpOrderBook = orderBooks.find((book) => {
+                        return book.asset_id === clobTokenIds[0];
+                    });
+                    const tokenDownOrderBook = orderBooks.find((book) => {
+                        return book.asset_id === clobTokenIds[1];
+                    });
+                    if(!tokenUpOrderBook || !tokenDownOrderBook) {
+                        throw Error("Failed to parse order book");
+                    }
                     const result: BtcOrderBooks = {
                         BtcUpTokenId: clobTokenIds[0],
-                        BtcUp: orderBooks[0],
+                        BtcUp: tokenUpOrderBook,
                         BtcDownTokenId: clobTokenIds[1],
-                        BtcDown: orderBooks[1],
+                        BtcDown: tokenDownOrderBook,
                     };
                     this.cachedOrderBooks.set(targetedMarket, result);
                     this.orderBooksFetchedAt.set(targetedMarket, Date.now());
@@ -469,16 +520,26 @@ export class MarketInfo {
      */
     private async logCurrentPrices(targetedMarket: TargetedMarket): Promise<void> {
         try {
-            const clobTokenIds = await this.getCurrentClobTokenIds(targetedMarket);
-            const [upTokenId, downTokenId] = clobTokenIds;
+            const liveData = await this.getLiveData(targetedMarket);
 
-            const [upPrice, downPrice] = await Promise.all([
-                this.getPrice(upTokenId, Side.BUY),
-                this.getPrice(downTokenId, Side.BUY),
-            ]);
+            // Highest bid (BUY) and lowest ask (SELL) for UP token
+            const upBid = liveData.BtcUp.bids.length > 0
+                ? parseFloat(liveData.BtcUp.bids[liveData.BtcUp.bids.length - 1].price)
+                : 0;
+            const upAsk = liveData.BtcUp.asks.length > 0
+                ? parseFloat(liveData.BtcUp.asks[liveData.BtcUp.asks.length - 1].price)
+                : 1;
+
+            // Highest bid (BUY) and lowest ask (SELL) for DOWN token
+            const downBid = liveData.BtcDown.bids.length > 0
+                ? parseFloat(liveData.BtcDown.bids[liveData.BtcDown.bids.length - 1].price)
+                : 0;
+            const downAsk = liveData.BtcDown.asks.length > 0
+                ? parseFloat(liveData.BtcDown.asks[liveData.BtcDown.asks.length - 1].price)
+                : 1;
 
             const timestamp = new Date().toISOString();
-            const logLine = `${timestamp},${upPrice},${downPrice}\n`;
+            const logLine = `${timestamp},${upBid},${upAsk},${downBid},${downAsk}\n`;
             const logFile = this.getLogFromMarket(targetedMarket);
             appendFileSync(logFile, logLine);
         } catch (error) {

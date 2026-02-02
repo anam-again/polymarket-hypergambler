@@ -1,0 +1,60 @@
+# Genetic Optimized Writer Configuration
+# This file configures which bot/market combinations to optimize
+
+settings:
+  lookbackDays: 1          # Days of historical data to use
+  maxGenerations: 20       # Maximum optimization generations
+  populationSize: 50       # Population size per generation
+  intervalHours: 1         # Hours between optimization runs
+  concurrentSimulations: 4 # Number of simulations to run in parallel
+
+# List of bot/market combinations to optimize
+# Each target will be optimized sequentially
+targets:
+  - botStyle: QuarterlyTrendFollowing
+    market: btc-quarterly
+  - botStyle: QuarterlyTrendFollowing
+    market: eth-quarterly
+  - botStyle: QuarterlyTrendFollowing
+    market: sol-quarterly
+  - botStyle: QuarterlyTrendFollowing
+    market: xrp-quarterly
+
+  - botStyle: QuarterlyEarlyBuyerV2
+    market: btc-quarterly
+  - botStyle: QuarterlyEarlyBuyerV2
+    market: eth-quarterly
+  - botStyle: QuarterlyEarlyBuyerV2
+    market: sol-quarterly
+  - botStyle: QuarterlyEarlyBuyerV2
+    market: xrp-quarterly
+
+  - botStyle: QuarterlyFirstCandle
+    market: btc-quarterly
+  - botStyle: QuarterlyFirstCandle
+    market: eth-quarterly
+  - botStyle: QuarterlyFirstCandle
+    market: sol-quarterly
+  - botStyle: QuarterlyFirstCandle
+    market: xrp-quarterly
+
+  - botStyle: QuarterlyMeanReversion
+    market: btc-quarterly
+  - botStyle: QuarterlyMeanReversion
+    market: eth-quarterly
+  - botStyle: QuarterlyMeanReversion
+    market: sol-quarterly
+  - botStyle: QuarterlyMeanReversion
+    market: xrp-quarterly
+
+
+# Available botStyles:
+#   Hourly: Contrarian, TrendFollowing, FirstCandle, FirstCandleV2, EveningStar,
+#           MorningStar, MeanReversion, NCandle, EarlyBuyerV2, EsotericNormalization, MarketMaker
+#
+#   Quarterly: QuarterlyFirstCandle, QuarterlyMeanReversion, QuarterlyTrendFollowing,
+#              QuarterlyNCandle, QuarterlyEarlyBuyerV2, QuarterlyEsotericNormalization, QuarterlyMarketMaker
+#
+# Available markets:
+#   btc-hourly, btc-quarterly, eth-hourly, eth-quarterly,
+#   sol-hourly, sol-quarterly, xrp-hourly, xrp-quarterly

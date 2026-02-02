@@ -34,9 +34,9 @@ export { createSimulatedBot, createMockClobClient, QuantBotSimulationAdapter } f
 
 const contrarianBounds: ParameterBounds = {
     targetSize: { min: 5, max: 20, step: 1 },
-    targetBuyPrice: { min: 0.40, max: 0.55 },
-    targetSellPrice: { min: 0.55, max: 0.70 },
-    lookbackHours: { min: 1, max: 6, step: 1 },
+    targetBuyPrice: { min: 0.02, max: 0.98 },
+    targetSellPrice: { min: 0.02, max: 0.98 },
+    lookbackHours: { min: 1, max: 12, step: 1 },
     cutoffMinute: { min: 15, max: 45, step: 5 },
 };
 
@@ -48,8 +48,8 @@ const trendFollowingBounds: ParameterBounds = {
     adxThreshold: { min: 7, max: 80 },
     atrPeriod: { min: 5, max: 30, step: 1 },
     atrStopMultiple: { min: 1.0, max: 4.0 },
-    targetBuyPrice: { min: 0.05, max: 0.95 },
-    targetSellPrice: { min: 0.05, max: 0.95 },
+    targetBuyPrice: { min: 0.02, max: 0.98 },
+    targetSellPrice: { min: 0.02, max: 0.98 },
     cutoffMinute: { min: 10, max: 50, step: 5 },
 };
 
@@ -58,8 +58,8 @@ const firstCandleBounds: ParameterBounds = {
     candleMinutes: { min: 5, max: 30, step: 2 },
     breakoutBuffer: { min: 0, max: 1000 },
     pullbackBuffer: { min: 0, max: 1000 },
-    targetBuyPrice: { min: 0.05, max: 0.95 },
-    targetSellPrice: { min: 0.05, max: 0.95 },
+    targetBuyPrice: { min: 0.02, max: 0.98 },
+    targetSellPrice: { min: 0.02, max: 0.98 },
     cutoffMinute: { min: 5, max: 55, step: 5 },
 };
 
@@ -71,7 +71,7 @@ const firstCandleV2Bounds: ParameterBounds = {
     buyPriceBuffer: { min: 0.01, max: 0.90 },
     sellPriceBuffer: { min: 0.01, max: 0.90 },
     minProfitMargin: { min: 0.01, max: 0.90 },
-    maxSellPrice: { min: 0.60, max: 0.95 },  // MAX_SELL_PRICE capped at 0.95
+    maxSellPrice: { min: 0.30, max: 0.98 },
     cutoffMinute: { min: 5, max: 55, step: 5 },
 };
 
@@ -81,8 +81,8 @@ const eveningStarBounds: ParameterBounds = {
     minBullishMove: { min: 20, max: 150 },
     maxIndecisionRange: { min: 10, max: 75 },
     minBearishMove: { min: 20, max: 150 },
-    targetBuyPrice: { min: 0.1, max: 0.9 },
-    targetSellPrice: { min: 0.1, max: 0.9 },
+    targetBuyPrice: { min: 0.02, max: 0.9 },
+    targetSellPrice: { min: 0.1, max: 0.98 },
     cutoffMinute: { min: 30, max: 55, step: 5 },
 };
 
@@ -92,8 +92,8 @@ const morningStarBounds: ParameterBounds = {
     minBearishMove: { min: 20, max: 150 },
     maxIndecisionRange: { min: 10, max: 75 },
     minBullishMove: { min: 20, max: 150 },
-    targetBuyPrice: { min: 0.10, max: 0.95 },
-    targetSellPrice: { min: 0.10, max: 0.95 },
+    targetBuyPrice: { min: 0.02, max: 0.98 },
+    targetSellPrice: { min: 0.02, max: 0.98 },
     cutoffMinute: { min: 30, max: 55, step: 5 },
 };
 
@@ -101,8 +101,8 @@ const meanReversionBounds: ParameterBounds = {
     targetSize: { min: 5, max: 20, step: 1 },
     lookbackPeriods: { min: 5, max: 50, step: 1 },
     entryThreshold: { min: 1.0, max: 4.0 },
-    targetBuyPrice: { min: 0.05, max: 0.95 },
-    targetSellPrice: { min: 0.05, max: 0.95 },
+    targetBuyPrice: { min: 0.02, max: 0.95 },
+    targetSellPrice: { min: 0.05, max: 0.98 },
     cutoffMinute: { min: 30, max: 55, step: 5 },
 };
 
@@ -128,8 +128,8 @@ const quarterlyFirstCandleBounds: ParameterBounds = {
     candleMinutes: { min: 1, max: 12, step: 1 },  // Smaller for 15-min period
     breakoutBuffer: { min: 0, max: 500 },
     pullbackBuffer: { min: 0, max: 500 },
-    targetBuyPrice: { min: 0.05, max: 0.95 },
-    targetSellPrice: { min: 0.05, max: 0.95 },
+    targetBuyPrice: { min: 0.02, max: 0.95 },
+    targetSellPrice: { min: 0.05, max: 0.98 },
     cutoffMinute: { min: 5, max: 13, step: 1 },  // Within 15-min period
 };
 
@@ -137,8 +137,8 @@ const quarterlyMeanReversionBounds: ParameterBounds = {
     targetSize: { min: 5, max: 20, step: 1 },
     lookbackPeriods: { min: 3, max: 25, step: 1 },
     entryThreshold: { min: 0.5, max: 3.0 },  // Tighter for faster markets
-    targetBuyPrice: { min: 0.05, max: 0.95 },
-    targetSellPrice: { min: 0.05, max: 0.95 },
+    targetBuyPrice: { min: 0.02, max: 0.95 },
+    targetSellPrice: { min: 0.05, max: 0.98 },
     cutoffMinute: { min: 5, max: 13, step: 1 },
 };
 
@@ -150,8 +150,8 @@ const quarterlyTrendFollowingBounds: ParameterBounds = {
     adxThreshold: { min: 1, max: 50 },
     atrPeriod: { min: 1, max: 15, step: 1 },
     atrStopMultiple: { min: 1.0, max: 4.0 },
-    targetBuyPrice: { min: 0.05, max: 0.95 },
-    targetSellPrice: { min: 0.05, max: 0.95 },
+    targetBuyPrice: { min: 0.02, max: 0.95 },
+    targetSellPrice: { min: 0.05, max: 0.98 },
     cutoffMinute: { min: 5, max: 13, step: 1 },
 };
 
@@ -169,8 +169,8 @@ const quarterlyNCandleBounds: ParameterBounds = {
 };
 
 const earlyBuyerV2Bounds: ParameterBounds = {
-    targetBuyPrice: { min: 0.40, max: 0.55 },    // Target buying below fair value
-    targetSellPrice: { min: 0.55, max: 0.75 },   // Target selling above fair value
+    targetBuyPrice: { min: 0.02, max: 0.90 },    // Target buying below fair value
+    targetSellPrice: { min: 0.1, max: 0.98 },   // Target selling above fair value
     targetSize: { min: 5, max: 25, step: 1 },
     cutoffMinute: { min: 15, max: 45, step: 1 }, // For hourly markets, how late to enter
     minFlops: { min: 1, max: 6 },                // Minimum market volatility to trade
@@ -179,8 +179,8 @@ const earlyBuyerV2Bounds: ParameterBounds = {
 };
 
 const quarterlyEarlyBuyerV2Bounds: ParameterBounds = {
-    targetBuyPrice: { min: 0.05, max: 0.95 },    // Target buying below fair value
-    targetSellPrice: { min: 0.05, max: 0.95 },   // Target selling above fair value
+    targetBuyPrice: { min: 0.02, max: 0.95 },    // Target buying below fair value
+    targetSellPrice: { min: 0.05, max: 0.98 },   // Target selling above fair value
     targetSize: { min: 5, max: 25, step: 1 },
     cutoffMinute: { min: 4, max: 12, step: 1 },  // Within 15-min period
     minFlops: { min: 1, max: 10 },                // Minimum market volatility to trade
@@ -220,30 +220,32 @@ const quarterlyEsotericNormalizationBounds: ParameterBounds = {
 
 const marketMakerBounds: ParameterBounds = {
     spreadSize: { min: 2, max: 10, step: 1 },
-    profitMargin: { min: 0.02, max: 0.20 },         // 2-20 cents
-    minPrice: { min: 0.20, max: 0.45 },
-    maxPrice: { min: 0.55, max: 0.80 },
-    stopLossAmount: { min: 0.05, max: 0.20 },       // 5-20 cents
+    minSpreadDistance: { min: 0, max: 0.10, step: 0.01 },  // Distance from market to start spread
+    profitMargin: { min: 0.01, max: 0.50 },         // 2-20 cents
+    minPrice: { min: 0.05, max: 0.90 },
+    maxPrice: { min: 0.1, max: 0.98 },
+    stopLossAmount: { min: 0.01, max: 0.30 },       // 5-20 cents
     buyExpirySeconds: { min: 30, max: 300, step: 10 },  // 30s to 5min
     totalActiveTrades: { min: 3, max: 15, step: 1 },
-    requiredVolatility: { min: 0.5, max: 3.0 },
-    volatilityLookbackPeriods: { min: 5, max: 30, step: 1 },
+    requiredVolatility: { min: 0.5, max: 8.0 },
+    volatilityLookbackPeriods: { min: 1, max: 30, step: 1 },
     targetSize: { min: 5, max: 20, step: 1 },
-    cutoffMinute: { min: 30, max: 55, step: 5 },
+    cutoffMinute: { min: 10, max: 55, step: 5 },
 };
 
 const quarterlyMarketMakerBounds: ParameterBounds = {
-    spreadSize: { min: 2, max: 8, step: 1 },
-    profitMargin: { min: 0.02, max: 0.15 },
-    minPrice: { min: 0.20, max: 0.45 },
-    maxPrice: { min: 0.55, max: 0.80 },
-    stopLossAmount: { min: 0.03, max: 0.15 },
+    spreadSize: { min: 2, max: 10, step: 1 },
+    minSpreadDistance: { min: 0, max: 0.10, step: 0.01 },  // Distance from market to start spread
+    profitMargin: { min: 0.02, max: 0.50 },
+    minPrice: { min: 0.02, max: 0.90 },
+    maxPrice: { min: 0.1, max: 0.98 },
+    stopLossAmount: { min: 0.01, max: 0.30 },
     buyExpirySeconds: { min: 15, max: 120, step: 5 },  // 15s to 2min for faster markets
     totalActiveTrades: { min: 2, max: 10, step: 1 },
-    requiredVolatility: { min: 0.3, max: 2.0 },
-    volatilityLookbackPeriods: { min: 3, max: 15, step: 1 },
+    requiredVolatility: { min: 0.1, max: 5.0 },
+    volatilityLookbackPeriods: { min: 1, max: 30, step: 1 },
     targetSize: { min: 5, max: 15, step: 1 },
-    cutoffMinute: { min: 8, max: 12, step: 1 },
+    cutoffMinute: { min: 2, max: 14, step: 1 },
 };
 
 // ============================================================================
@@ -711,6 +713,7 @@ function createMarketMakerBot(botParams: BotParams): SimulatedBot {
         logDirectory: logDirectory ?? SIM_LOG_DIR,
         shouldWriteLogs: shouldWriteLogs ?? false,
         spreadSize: params.spreadSize as number ?? 5,
+        minSpreadDistance: params.minSpreadDistance as number ?? 0,
         profitMargin: params.profitMargin as number ?? 0.10,
         minPrice: params.minPrice as number ?? 0.40,
         maxPrice: params.maxPrice as number ?? 0.60,
@@ -741,6 +744,7 @@ function createQuarterlyMarketMakerBot(botParams: BotParams): SimulatedBot {
         logDirectory: logDirectory ?? SIM_LOG_DIR,
         shouldWriteLogs: shouldWriteLogs ?? false,
         spreadSize: params.spreadSize as number ?? 4,
+        minSpreadDistance: params.minSpreadDistance as number ?? 0,
         profitMargin: params.profitMargin as number ?? 0.08,
         minPrice: params.minPrice as number ?? 0.35,
         maxPrice: params.maxPrice as number ?? 0.65,
@@ -756,7 +760,7 @@ function createQuarterlyMarketMakerBot(botParams: BotParams): SimulatedBot {
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
 }
 
-const geneticStrategies = [
+export const geneticStrategies = [
     { name: 'Contrarian', factory: createContrarianBot, bounds: contrarianBounds },
     { name: 'TrendFollowing', factory: createTrendFollowingBot, bounds: trendFollowingBounds },
     { name: 'FirstCandle', factory: createFirstCandleBot, bounds: firstCandleBounds },
@@ -1163,4 +1167,9 @@ Examples:
 `);
 }
 
-main();
+// Only run main when this file is the entry point (not when imported as a module)
+const currentFile = import.meta.url;
+const entryPoint = `file:///${process.argv[1].replace(/\\/g, '/')}`;
+if (currentFile === entryPoint) {
+    main();
+}

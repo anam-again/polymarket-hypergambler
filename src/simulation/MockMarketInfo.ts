@@ -10,8 +10,10 @@ import { IMarketInfo, BtcOrderBooks, OrderBookSummary, TargetedMarket, MarketSch
 
 interface UpDownPriceEntry {
     timestamp: number;
-    upPrice: number;
-    downPrice: number;
+    upBid: number;
+    upAsk: number;
+    downBid: number;
+    downAsk: number;
 }
 
 export interface MarketInfoSimple {
@@ -146,12 +148,58 @@ export class MockMarketInfo implements IMarketInfo {
 
         return lines.map(line => {
             const parts = line.split(',').map(p => p.trim());
-            return {
-                timestamp: new Date(parts[0]).getTime(),
-                upPrice: parseFloat(parts[1]),
-                downPrice: parseFloat(parts[2]),
-            };
+
+            // Support both old (3-column) and new (5-column) formats
+            if (parts.length >= 5) {
+                // New format: timestamp,upBid,upAsk,downBid,downAsk
+                return {
+                    timestamp: new Date(parts[0]).getTime(),
+                    upBid: parseFloat(parts[1]),
+                    upAsk: parseFloat(parts[2]),
+                    downBid: parseFloat(parts[3]),
+                    downAsk: parseFloat(parts[4]),
+                };
+            } else {
+                // TODO delete EOM Feb
+                // Old format: timestamp,upPrice,downPrice - simulate bid/ask with ±0.01 spread
+                const upPrice = parseFloat(parts[1]);
+                const downPrice = parseFloat(parts[2]);
+                return {
+                    timestamp: new Date(parts[0]).getTime(),
+                    upBid: Math.max(0.01, upPrice - 0.01),
+                    upAsk: Math.min(0.99, upPrice + 0.01),
+                    downBid: Math.max(0.01, downPrice - 0.01),
+                    downAsk: Math.min(0.99, downPrice + 0.01),
+                };
+            }
         }).sort((a, b) => a.timestamp - b.timestamp);
+    }
+
+    /**
+     * Finds the most recent valid price entry in an array.
+     * Valid means: both prices are numbers (not NaN) and sum to > 0.5
+     */
+    private findValidPriceEntry(entries: UpDownPriceEntry[]): UpDownPriceEntry | null {
+        // Start from the end and work backwards
+        for (let i = entries.length - 1; i >= 0; i--) {
+            const entry = entries[i];
+
+            // Check all prices are valid numbers
+            if (isNaN(entry.upBid) || isNaN(entry.upAsk) ||
+                isNaN(entry.downBid) || isNaN(entry.downAsk)) {
+                continue;
+            }
+
+            // Use midpoints for sanity check
+            const upMid = (entry.upBid + entry.upAsk) / 2;
+            const downMid = (entry.downBid + entry.downAsk) / 2;
+            if (upMid + downMid <= 0.5) {
+                continue;
+            }
+
+            return entry;
+        }
+        return null;
     }
 
     /**
@@ -161,8 +209,14 @@ export class MockMarketInfo implements IMarketInfo {
     private computeHourWinners(): void {
         for (const [hourKey, entries] of this.hourlyByPeriod) {
             if (entries.length === 0) continue;
-            const lastEntry = entries[entries.length - 1];
-            const winner = lastEntry.upPrice >= lastEntry.downPrice ? 'UP' : 'DOWN';
+            const validEntry = this.findValidPriceEntry(entries);
+            if (!validEntry) {
+                console.warn(`[MockMarketInfo] No valid price entry found for hour ${hourKey}`);
+                continue;
+            }
+            const upMid = (validEntry.upBid + validEntry.upAsk) / 2;
+            const downMid = (validEntry.downBid + validEntry.downAsk) / 2;
+            const winner = upMid >= downMid ? 'UP' : 'DOWN';
             this.hourWinners.set(hourKey, winner);
         }
     }
@@ -174,8 +228,14 @@ export class MockMarketInfo implements IMarketInfo {
     private computeQuarterWinners(): void {
         for (const [quarterKey, entries] of this.quarterlyByPeriod) {
             if (entries.length === 0) continue;
-            const lastEntry = entries[entries.length - 1];
-            const winner = lastEntry.upPrice >= lastEntry.downPrice ? 'UP' : 'DOWN';
+            const validEntry = this.findValidPriceEntry(entries);
+            if (!validEntry) {
+                console.warn(`[MockMarketInfo] No valid price entry found for quarter ${quarterKey}`);
+                continue;
+            }
+            const upMid = (validEntry.upBid + validEntry.upAsk) / 2;
+            const downMid = (validEntry.downBid + validEntry.downAsk) / 2;
+            const winner = upMid >= downMid ? 'UP' : 'DOWN';
             this.quarterWinners.set(quarterKey, winner);
         }
     }
@@ -315,11 +375,13 @@ export class MockMarketInfo implements IMarketInfo {
         // Determine if this is UP or DOWN token based on ID
         const isUpToken = clobTokenId.startsWith('UP-');
 
-        // Return bid price for BUY, ask price for SELL (with small spread simulation)
-        const basePrice = isUpToken ? entry.upPrice : entry.downPrice;
-        const spreadAdjustment = side === Side.BUY ? -0.01 : 0.01;
-
-        return Math.max(0.01, Math.min(0.99, basePrice + spreadAdjustment));
+        // For BUY orders, return ASK price (what sellers are asking)
+        // For SELL orders, return BID price (what buyers are bidding)
+        if (isUpToken) {
+            return side === Side.BUY ? entry.upAsk : entry.upBid;
+        } else {
+            return side === Side.BUY ? entry.downAsk : entry.downBid;
+        }
     }
 
     /**
@@ -350,9 +412,9 @@ export class MockMarketInfo implements IMarketInfo {
 
         return {
             BtcUpTokenId: `UP-${periodKey}`,
-            BtcUp: this.createMockOrderBook(entry.upPrice),
+            BtcUp: this.createMockOrderBook(entry.upBid, entry.upAsk),
             BtcDownTokenId: `DOWN-${periodKey}`,
-            BtcDown: this.createMockOrderBook(entry.downPrice),
+            BtcDown: this.createMockOrderBook(entry.downBid, entry.downAsk),
         };
     }
 
@@ -436,11 +498,21 @@ export class MockMarketInfo implements IMarketInfo {
             };
         }
 
-        const lastEntry = hourEntries[hourEntries.length - 1];
+        const validEntry = this.findValidPriceEntry(hourEntries);
+        if (!validEntry) {
+            return {
+                clobTokenIds: [`UP-${hourKey}`, `DOWN-${hourKey}`],
+                outcomePrices: ['0.50', '0.50'],
+                error: true,
+            };
+        }
 
         return {
             clobTokenIds: [`UP-${hourKey}`, `DOWN-${hourKey}`],
-            outcomePrices: [lastEntry.upPrice.toString(), lastEntry.downPrice.toString()],
+            outcomePrices: [
+                ((validEntry.upBid + validEntry.upAsk) / 2).toString(),
+                ((validEntry.downBid + validEntry.downAsk) / 2).toString()
+            ],
         };
     }
 
@@ -483,11 +555,21 @@ export class MockMarketInfo implements IMarketInfo {
             };
         }
 
-        const lastEntry = quarterEntries[quarterEntries.length - 1];
+        const validEntry = this.findValidPriceEntry(quarterEntries);
+        if (!validEntry) {
+            return {
+                clobTokenIds: [`UP-${quarterKey}`, `DOWN-${quarterKey}`],
+                outcomePrices: ['0.50', '0.50'],
+                error: true,
+            };
+        }
 
         return {
             clobTokenIds: [`UP-${quarterKey}`, `DOWN-${quarterKey}`],
-            outcomePrices: [lastEntry.upPrice.toString(), lastEntry.downPrice.toString()],
+            outcomePrices: [
+                ((validEntry.upBid + validEntry.upAsk) / 2).toString(),
+                ((validEntry.downBid + validEntry.downAsk) / 2).toString()
+            ],
         };
     }
 
@@ -582,13 +664,10 @@ export class MockMarketInfo implements IMarketInfo {
         return this.findPreviousEntry(data, startTime);
     }
 
-    private createMockOrderBook(price: number): OrderBookSummary {
-        const bidPrice = Math.max(0.01, price - 0.01);
-        const askPrice = Math.min(0.99, price + 0.01);
-
+    private createMockOrderBook(bid: number, ask: number): OrderBookSummary {
         return {
-            bids: [{ price: bidPrice.toFixed(2), size: '1000' }],
-            asks: [{ price: askPrice.toFixed(2), size: '1000' }],
+            bids: [{ price: bid.toFixed(2), size: '1000' }],
+            asks: [{ price: ask.toFixed(2), size: '1000' }],
         };
     }
 

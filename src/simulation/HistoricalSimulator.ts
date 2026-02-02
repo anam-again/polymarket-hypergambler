@@ -87,9 +87,9 @@ export class HistoricalSimulator {
         this.config = {
             ...config,
             tickIntervalMs: config.tickIntervalMs ?? 60 * 1000,
-            coinType: config.coinType ?? CoinType.BTC,
+            coinType: config.coinType,
             auditTradesCount: config.auditTradesCount ?? 0,
-            targetedMarket: config.targetedMarket ?? TargetedMarket.BITCOIN_HOURLY,
+            targetedMarket: config.targetedMarket,
         };
         this.logger = new SimulatorLogger(`sim-${this.config.coinType}`);
     }

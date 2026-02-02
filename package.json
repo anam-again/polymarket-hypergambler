@@ -10,6 +10,7 @@
     "tester": "node dist/tester.js",
     "dev": "tsx src/index.ts",
     "histSim": "tsx src/simulation/index.ts",
+    "goptimizer": "tsx src/genetic/runGeneticWriter.ts",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "test": "vitest",
