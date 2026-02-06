@@ -13,7 +13,9 @@
       "Bash(dir:*)",
       "Bash(findstr:*)",
       "Bash(npm run histSim:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(npx tsx:*)",
+      "Bash(./analyze-mmaker-trades.sh:*)"
     ]
   }
 }

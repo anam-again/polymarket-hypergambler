@@ -167,7 +167,6 @@ export class GeneticOptimizedWriter {
         this.intervalTimer = setTimeout(async () => {
             if (this.isRunning) {
                 await this.runAllOptimizations();
-                throw Error('skipped?')
                 this.scheduleNextRun();
             }
         }, intervalMs);

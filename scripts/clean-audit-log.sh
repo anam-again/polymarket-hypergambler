@@ -2,6 +2,9 @@
 # Script to remove simulator-polluted lines from tradeAudit.log
 # These are lines with Quarterly strategies that came from simulator runs
 
+echo "you probably don't want to run this"
+exit();
+
 AUDIT_FILE="../logs/audits/tradeAudit.log"
 BACKUP_FILE="../logs/audits/tradeAudit.log.backup"
 

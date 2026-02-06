@@ -719,6 +719,7 @@ export class QuantBot {
 
     // Register for clock events
     this.clock.on('hourly', () => {
+      if (this.isStopped) return;
       this.emit('hourly');
       if (this.marketSchedule === MarketSchedule.HOURLY) {
         this.emit('reset');
@@ -726,6 +727,7 @@ export class QuantBot {
     });
 
     this.clock.on('quarterly', () => {
+      if (this.isStopped) return;
       this.emit('quarterly');
       if (this.marketSchedule === MarketSchedule.QUARTERLY) {
         this.emit('reset');
@@ -1140,6 +1142,22 @@ export class QuantBot {
       return false;
     }
     return true;
+  }
+
+  /**
+   * Converts a dollar amount to token quantity at the given price.
+   * Rounds down to nearest whole number. Returns null if the resulting
+   * token amount would be invalid (less than minimum order size).
+   */
+  protected dollarToTokens(dollarAmount: number, price: number): number | null {
+    if (price <= 0 || price >= 1) {
+      return null;
+    }
+    const tokens = Math.floor(dollarAmount / price);
+    if (tokens < 5) {
+      return null;
+    }
+    return tokens;
   }
 
   // -------------------------------------------------------------------------

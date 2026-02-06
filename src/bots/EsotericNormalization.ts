@@ -18,7 +18,7 @@ interface EsotericNormalizationProps extends QuantBotProps {
     // Trading parameters
     purchaseThreshold: number;       // Min diff to trigger buy (e.g., 0.08)
     sellPremium: number;             // Sell this much above expected (e.g., 0.04)
-    targetSize: number;
+    targetDollars: number;
     cutoffMinute: number;
     maxTradesPerPeriod: number;      // Max trades per hour/quarter (e.g., 2)
 }
@@ -80,7 +80,7 @@ export class EsotericNormalization extends QuantBot implements QuantBotRun {
     // Trading parameters
     private purchaseThreshold: number;
     private sellPremium: number;
-    private targetSize: number;
+    private targetDollars: number;
     private cutoffMinute: number;
     private maxTradesPerPeriod: number;
 
@@ -107,7 +107,7 @@ export class EsotericNormalization extends QuantBot implements QuantBotRun {
 
         this.purchaseThreshold = props.purchaseThreshold;
         this.sellPremium = props.sellPremium;
-        this.targetSize = props.targetSize;
+        this.targetDollars = props.targetDollars;
         this.cutoffMinute = props.cutoffMinute;
         this.maxTradesPerPeriod = props.maxTradesPerPeriod;
     }
@@ -288,14 +288,17 @@ export class EsotericNormalization extends QuantBot implements QuantBotRun {
     private async createBuyOrder(direction: TokenDirection, buyPrice: number): Promise<void> {
         if (this.buyOrder) return;
 
+        const targetSize = this.dollarToTokens(this.targetDollars, buyPrice);
+        if (targetSize === null) return;
+
         const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
         const tokenId = direction === 'UP'
             ? orderBooks.BtcUpTokenId
             : orderBooks.BtcDownTokenId;
 
-        const totalCost = buyPrice * this.targetSize;
+        const totalCost = buyPrice * targetSize;
 
-        if (!this.checkIfOrderIsValid(buyPrice, this.targetSize)) return;
+        if (!this.checkIfOrderIsValid(buyPrice, targetSize)) return;
         if (!this.canSpend(totalCost)) return;
 
         this.selectedDirection = direction;
@@ -305,7 +308,7 @@ export class EsotericNormalization extends QuantBot implements QuantBotRun {
             'esoteric-buy',
             tokenId,
             buyPrice,
-            this.targetSize,
+            targetSize,
             Side.BUY
         );
 
@@ -336,13 +339,13 @@ export class EsotericNormalization extends QuantBot implements QuantBotRun {
             'esoteric-sell',
             tokenId,
             sellPrice,
-            this.targetSize,
+            this.buyOrder.amount,
             Side.SELL
         );
     }
 
     private async updateSellOrderPrice(): Promise<void> {
-        if (!this.sellOrder || !this.selectedDirection) return;
+        if (!this.sellOrder || !this.selectedDirection || !this.buyOrder) return;
 
         const currentBtcPrice = await this.getCurrentBtcPrice();
         if (!currentBtcPrice) return;
@@ -366,7 +369,7 @@ export class EsotericNormalization extends QuantBot implements QuantBotRun {
                 'esoteric-sell-update',
                 tokenId,
                 newSellPrice,
-                this.targetSize,
+                this.buyOrder.amount,
                 Side.SELL
             );
 

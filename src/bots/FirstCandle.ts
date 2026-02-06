@@ -13,7 +13,7 @@ interface FirstCandleProps extends QuantBotProps {
     pullbackBuffer: number;         // How close price must return to broken level (e.g., 100 = within $100)
     targetBuyPrice: number;
     targetSellPrice: number;
-    targetSize: number;
+    targetDollars: number;
     cutoffMinute: number;
 }
 
@@ -39,7 +39,7 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
     private pullbackBuffer: number;
     private targetBuyPrice: number;
     private targetSellPrice: number;
-    private targetSize: number;
+    private targetDollars: number;
     private cutoffMinute: number;
 
     private buyOrder?: TradeOrder;
@@ -62,7 +62,7 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
         this.pullbackBuffer = props.pullbackBuffer;
         this.targetBuyPrice = props.targetBuyPrice;
         this.targetSellPrice = props.targetSellPrice;
-        this.targetSize = props.targetSize;
+        this.targetDollars = props.targetDollars;
         this.cutoffMinute = props.cutoffMinute;
     }
 
@@ -240,25 +240,62 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
     }
 
     private async createBuyOrder(): Promise<void> {
-        if (this.buyOrder || !this.breakoutDirection) return;
+        if (this.buyOrder) {
+            this.writeLog(`createBuyOrder: already have buyOrder, skipping`);
+            return;
+        }
+        if (!this.breakoutDirection) {
+            this.writeLog(`createBuyOrder: no breakoutDirection, skipping`);
+            return;
+        }
 
         const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
         const tokenId = this.breakoutDirection === 'UP'
             ? orderBooks.BtcUpTokenId
             : orderBooks.BtcDownTokenId;
 
-        const totalCost = this.targetBuyPrice * this.targetSize;
+        const targetSize = this.dollarToTokens(this.targetDollars, this.targetBuyPrice);
+        if (targetSize === null) {
+            this.writeLog(
+                `createBuyOrder: dollarToTokens returned null ` +
+                `(targetDollars=${this.targetDollars}, targetBuyPrice=${this.targetBuyPrice})`
+            );
+            return;
+        }
 
-        if (!this.checkIfOrderIsValid(this.targetBuyPrice, this.targetSize)) return;
-        if (!this.canSpend(totalCost)) return;
+        const totalCost = this.targetBuyPrice * targetSize;
+
+        if (!this.checkIfOrderIsValid(this.targetBuyPrice, targetSize)) {
+            this.writeLog(
+                `createBuyOrder: order invalid ` +
+                `(price=${this.targetBuyPrice}, size=${targetSize})`
+            );
+            return;
+        }
+        if (!this.canSpend(totalCost)) {
+            this.writeLog(
+                `createBuyOrder: cannot spend ` +
+                `(totalCost=${totalCost.toFixed(2)}, hourlyBudget check failed)`
+            );
+            return;
+        }
 
         this.buyOrder = await this.makeOrder(
             'firstcandle-buy',
             tokenId,
             this.targetBuyPrice,
-            this.targetSize,
+            targetSize,
             Side.BUY
         );
+
+        if (this.buyOrder) {
+            this.writeLog(
+                `createBuyOrder: order placed successfully ` +
+                `(orderId=${this.buyOrder.orderId}, size=${targetSize}, price=${this.targetBuyPrice})`
+            );
+        } else {
+            this.writeLog(`createBuyOrder: makeOrder returned undefined`);
+        }
 
         this.state = 'TRADE_ENTERED';
         // Sell order creation is handled by shouldCreateSellOrder() on each tick
@@ -276,7 +313,7 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
             'firstcandle-sell',
             tokenId,
             this.targetSellPrice,
-            this.targetSize,
+            this.buyOrder.amount,
             Side.SELL
         );
     }

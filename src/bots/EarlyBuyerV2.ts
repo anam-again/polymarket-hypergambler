@@ -5,7 +5,7 @@ import { BtcDirection, MarketSchedule } from "../types/interfaces.js";
 
 interface EarlyBuyerV2Props extends QuantBotProps {
     targetBuyPrice: number;
-    targetSize: number;
+    targetDollars: number;
     cutoffMinute: number;
     targetSellPrice: number;
     btcDirection: BtcDirection;
@@ -22,7 +22,7 @@ export class EarlyBuyerV2 extends QuantBot implements QuantBotRun {
     // --- Properties ---
 
     private targetBuyPrice: number;
-    private targetSize: number;
+    private targetDollars: number;
     private cutoffMinute: number;
     private targetSellPrice: number;
     private btcDirection: BtcDirection;
@@ -40,7 +40,7 @@ export class EarlyBuyerV2 extends QuantBot implements QuantBotRun {
 
         this.targetBuyPrice = props.targetBuyPrice;
         this.targetSellPrice = props.targetSellPrice;
-        this.targetSize = props.targetSize;
+        this.targetDollars = props.targetDollars;
         this.cutoffMinute = props.cutoffMinute;
         this.btcDirection = props.btcDirection;
         this.minFlops = props.minFlops;
@@ -113,8 +113,10 @@ export class EarlyBuyerV2 extends QuantBot implements QuantBotRun {
 
     private shouldCreateBuyOrder(): boolean {
         if (this.buyOrder) return false;
-        if (!this.checkIfOrderIsValid(this.targetBuyPrice, this.targetSize)) return false;
-        if (!this.canSpend(this.targetBuyPrice * this.targetSize)) return false;
+        const targetSize = this.dollarToTokens(this.targetDollars, this.targetBuyPrice);
+        if (targetSize === null) return false;
+        if (!this.checkIfOrderIsValid(this.targetBuyPrice, targetSize)) return false;
+        if (!this.canSpend(this.targetBuyPrice * targetSize)) return false;
         if (!this.hasEnoughFlops()) return false;
         return true;
     }
@@ -127,19 +129,22 @@ export class EarlyBuyerV2 extends QuantBot implements QuantBotRun {
     }
 
     private async createBuyOrder(): Promise<void> {
+        const targetSize = this.dollarToTokens(this.targetDollars, this.targetBuyPrice);
+        if (targetSize === null) return;
+
         const tokenId = await this.getTargetTokenId();
         this.buyOrder = await this.makeOrder(
             'init-buy',
             tokenId,
             this.targetBuyPrice,
-            this.targetSize,
+            targetSize,
             Side.BUY
         );
 
     }
 
     private async createSellOrder(): Promise<void> {
-        if (this.sellOrder) return;
+        if (this.sellOrder || !this.buyOrder) return;
 
         const tokenId = await this.getTargetTokenId();
 
@@ -147,7 +152,7 @@ export class EarlyBuyerV2 extends QuantBot implements QuantBotRun {
             'followup-sell',
             tokenId,
             this.targetSellPrice,
-            this.targetSize,
+            this.buyOrder.amount,
             Side.SELL
         );
     }

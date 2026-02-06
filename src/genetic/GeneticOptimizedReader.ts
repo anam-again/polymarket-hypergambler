@@ -22,7 +22,7 @@ export interface BotOverrides {
     name?: string;
     PROD_MODE?: boolean;
     hourlyDollarLimit?: number;
-    targetSize?: number;
+    targetDollars?: number;
     targetBuyPrice?: number;
     targetSellPrice?: number;
     cutoffMinute?: number;
@@ -236,7 +236,7 @@ export class GeneticOptimizedReader {
 
         // Apply param overrides to a merged params object
         const mergedParams = { ...config.params };
-        if (overrides?.targetSize !== undefined) mergedParams.targetSize = overrides.targetSize;
+        if (overrides?.targetDollars !== undefined) mergedParams.targetDollars = overrides.targetDollars;
         if (overrides?.targetBuyPrice !== undefined) mergedParams.targetBuyPrice = overrides.targetBuyPrice;
         if (overrides?.targetSellPrice !== undefined) mergedParams.targetSellPrice = overrides.targetSellPrice;
         if (overrides?.cutoffMinute !== undefined) mergedParams.cutoffMinute = overrides.cutoffMinute;
@@ -266,7 +266,7 @@ export class GeneticOptimizedReader {
                     atrStopMultiple: mergedParams.atrStopMultiple ?? 2.0,
                     targetBuyPrice: mergedParams.targetBuyPrice ?? 0.50,
                     targetSellPrice: mergedParams.targetSellPrice ?? 0.60,
-                    targetSize: mergedParams.targetSize ?? 10,
+                    targetDollars: mergedParams.targetDollars ?? 10,
                     cutoffMinute: mergedParams.cutoffMinute ?? 45,
                 });
 
@@ -279,7 +279,7 @@ export class GeneticOptimizedReader {
                     pullbackBuffer: mergedParams.pullbackBuffer ?? 100,
                     targetBuyPrice: mergedParams.targetBuyPrice ?? 0.50,
                     targetSellPrice: mergedParams.targetSellPrice ?? 0.60,
-                    targetSize: mergedParams.targetSize ?? 10,
+                    targetDollars: mergedParams.targetDollars ?? 10,
                     cutoffMinute: mergedParams.cutoffMinute ?? 45,
                 });
 
@@ -292,7 +292,7 @@ export class GeneticOptimizedReader {
                     buyPriceBuffer: mergedParams.buyPriceBuffer ?? 0.02,
                     sellPriceBuffer: mergedParams.sellPriceBuffer ?? 0.02,
                     minProfitMargin: mergedParams.minProfitMargin ?? 0.05,
-                    targetSize: mergedParams.targetSize ?? 10,
+                    targetDollars: mergedParams.targetDollars ?? 10,
                     cutoffMinute: mergedParams.cutoffMinute ?? 45,
                 });
 
@@ -305,7 +305,7 @@ export class GeneticOptimizedReader {
                     exitThreshold: mergedParams.exitThreshold ?? 0.5,
                     targetBuyPrice: mergedParams.targetBuyPrice ?? 0.50,
                     targetSellPrice: mergedParams.targetSellPrice ?? 0.60,
-                    targetSize: mergedParams.targetSize ?? 10,
+                    targetDollars: mergedParams.targetDollars ?? 10,
                     cutoffMinute: mergedParams.cutoffMinute ?? 45,
                 });
 
@@ -321,9 +321,10 @@ export class GeneticOptimizedReader {
                     stopLossAmount: mergedParams.stopLossAmount ?? 0.10,
                     buyExpirySeconds: mergedParams.buyExpirySeconds ?? 120,
                     totalActiveTrades: mergedParams.totalActiveTrades ?? 10,
-                    requiredVolatility: mergedParams.requiredVolatility ?? 1.0,
+                    maxVolatility: mergedParams.maxVolatility ?? 1.0,
+                    minVolatility: mergedParams.minVolatility ?? 0,
                     volatilityLookbackPeriods: mergedParams.volatilityLookbackPeriods ?? 15,
-                    targetSize: mergedParams.targetSize ?? 10,
+                    targetDollars: mergedParams.targetDollars ?? 10,
                     cutoffMinute: mergedParams.cutoffMinute ?? 45,
                 });
 
@@ -333,7 +334,7 @@ export class GeneticOptimizedReader {
                     lookbackHours: mergedParams.lookbackHours ?? 3,
                     targetBuyPrice: mergedParams.targetBuyPrice ?? 0.48,
                     targetSellPrice: mergedParams.targetSellPrice ?? 0.60,
-                    targetSize: mergedParams.targetSize ?? 10,
+                    targetDollars: mergedParams.targetDollars ?? 10,
                     cutoffMinute: mergedParams.cutoffMinute ?? 30,
                 });
 
@@ -346,7 +347,7 @@ export class GeneticOptimizedReader {
                     minBearishMove: mergedParams.minBearishMove ?? 50,
                     targetBuyPrice: mergedParams.targetBuyPrice ?? 0.50,
                     targetSellPrice: mergedParams.targetSellPrice ?? 0.60,
-                    targetSize: mergedParams.targetSize ?? 10,
+                    targetDollars: mergedParams.targetDollars ?? 10,
                     cutoffMinute: mergedParams.cutoffMinute ?? 45,
                 });
 
@@ -359,7 +360,7 @@ export class GeneticOptimizedReader {
                     minBullishMove: mergedParams.minBullishMove ?? 50,
                     targetBuyPrice: mergedParams.targetBuyPrice ?? 0.50,
                     targetSellPrice: mergedParams.targetSellPrice ?? 0.60,
-                    targetSize: mergedParams.targetSize ?? 10,
+                    targetDollars: mergedParams.targetDollars ?? 10,
                     cutoffMinute: mergedParams.cutoffMinute ?? 45,
                 });
 
@@ -374,7 +375,7 @@ export class GeneticOptimizedReader {
                     sellPriceBuffer: mergedParams.sellPriceBuffer ?? 0.02,
                     minProfitMargin: mergedParams.minProfitMargin ?? 0.05,
                     stopLossMultiplier: mergedParams.stopLossMultiplier ?? 1.5,
-                    targetSize: mergedParams.targetSize ?? 10,
+                    targetDollars: mergedParams.targetDollars ?? 10,
                     cutoffMinute: mergedParams.cutoffMinute ?? 45,
                     maxTradesPerHour: mergedParams.maxTradesPerHour ?? 2,
                 });
@@ -387,7 +388,7 @@ export class GeneticOptimizedReader {
                     ...commonProps,
                     targetBuyPrice: mergedParams.targetBuyPrice ?? 0.48,
                     targetSellPrice: mergedParams.targetSellPrice ?? 0.60,
-                    targetSize: mergedParams.targetSize ?? 10,
+                    targetDollars: mergedParams.targetDollars ?? 10,
                     cutoffMinute: mergedParams.cutoffMinute ?? 30,
                     minFlops: mergedParams.minFlops ?? 3,
                     flopsLookbackHours: mergedParams.flopsLookbackHours ?? 6,
@@ -406,7 +407,7 @@ export class GeneticOptimizedReader {
                     priceScaleConstant: mergedParams.priceScaleConstant ?? 0,
                     purchaseThreshold: mergedParams.purchaseThreshold ?? 0.08,
                     sellPremium: mergedParams.sellPremium ?? 0.04,
-                    targetSize: mergedParams.targetSize ?? 10,
+                    targetDollars: mergedParams.targetDollars ?? 10,
                     cutoffMinute: mergedParams.cutoffMinute ?? 45,
                     maxTradesPerPeriod: mergedParams.maxTradesPerPeriod ?? 2,
                 });

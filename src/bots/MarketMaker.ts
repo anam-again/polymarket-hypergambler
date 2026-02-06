@@ -25,11 +25,12 @@ interface MarketMakerProps extends QuantBotProps {
     totalActiveTrades: number;    // Max concurrent positions (live buys + matched buys without sells)
 
     // Volatility filter
-    requiredVolatility: number;   // Maximum volatility scalar to enter trades (skip if exceeded)
+    maxVolatility: number;        // Maximum volatility scalar to enter trades (skip if exceeded)
+    minVolatility: number;        // Minimum volatility scalar to enter trades (skip if below)
     volatilityLookbackPeriods: number;  // Periods to measure volatility
 
     // Standard parameters
-    targetSize: number;           // Position size per level
+    targetDollars: number;        // Dollar amount per position
     cutoffMinute: number;         // Stop new trades after this minute
 }
 
@@ -42,6 +43,8 @@ interface ActivePosition {
     stopLossPrice: number;
     stopLossTriggered?: boolean;  // Track if we need emergency exit (for retry logic)
     buyExpired?: boolean;         // Track if buy was expired and needs retry
+    tokensSold: number;           // Track how many tokens have been sold (to prevent overselling)
+    sellOrderHistory: string[];   // Track all sell order IDs created for this position
 }
 
 type TokenDirection = 'UP' | 'DOWN';
@@ -67,9 +70,10 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
     private stopLossAmount: number;
     private buyExpirySeconds: number | null;
     private totalActiveTrades: number;
-    private requiredVolatility: number;
+    private maxVolatility: number;
+    private minVolatility: number;
     private volatilityLookbackPeriods: number;
-    private targetSize: number;
+    private targetDollars: number;
     private cutoffMinute: number;
 
     // --- Position Tracking ---
@@ -92,9 +96,10 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
         this.stopLossAmount = props.stopLossAmount;
         this.buyExpirySeconds = props.buyExpirySeconds ?? null;
         this.totalActiveTrades = props.totalActiveTrades;
-        this.requiredVolatility = props.requiredVolatility;
+        this.maxVolatility = props.maxVolatility;
+        this.minVolatility = props.minVolatility;
         this.volatilityLookbackPeriods = props.volatilityLookbackPeriods;
-        this.targetSize = props.targetSize;
+        this.targetDollars = props.targetDollars;
         this.cutoffMinute = props.cutoffMinute;
     }
 
@@ -167,10 +172,14 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
             return;
         }
 
-        // 10. Check volatility filter (skip if too volatile)
+        // 10. Check volatility filter
         const volatility = await this.calculateVolatility();
-        if (volatility > this.requiredVolatility) {
-            this.writeLog(`Volatility ${volatility.toFixed(2)} > max ${this.requiredVolatility}, skipping new orders`);
+        if (volatility < this.minVolatility) {
+            this.writeLog(`Volatility ${volatility.toFixed(2)} < min ${this.minVolatility}, skipping new orders`);
+            return;
+        }
+        if (volatility > this.maxVolatility) {
+            this.writeLog(`Volatility ${volatility.toFixed(2)} > max ${this.maxVolatility}, skipping new orders`);
             return;
         }
 
@@ -211,6 +220,35 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
             if (sellTrade) {
                 position.sellOrder = sellTrade;
             }
+        }
+
+        // CRITICAL: Check ALL historical sell orders to count total tokens sold
+        // This prevents the race condition where we create new sells before old ones are confirmed canceled
+        this.syncSoldTokensFromHistory(position);
+    }
+
+    /**
+     * Syncs the tokensSold count from all historical sell orders.
+     * This catches cases where an "old" sell order was matched after we tried to cancel it.
+     */
+    private syncSoldTokensFromHistory(position: ActivePosition): void {
+        let totalSold = 0;
+
+        for (const orderId of position.sellOrderHistory) {
+            const trade = this.trades.find(t => t.orderId === orderId);
+            if (trade && trade.status === TradeStatus.MATCHED) {
+                totalSold += trade.amount;
+            }
+        }
+
+        // If we've sold more than before, log it (this indicates a race condition occurred)
+        if (totalSold > position.tokensSold) {
+            const newlySold = totalSold - position.tokensSold;
+            this.writeLog(
+                `SYNC: ${position.tokenDirection} position offset ${position.spreadOffset} ` +
+                `detected ${newlySold} additional tokens sold (total: ${totalSold}/${position.buyOrder.amount})`
+            );
+            position.tokensSold = totalSold;
         }
     }
 
@@ -441,6 +479,15 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
         // If stop-loss already triggered, don't re-trigger (recovery logic handles updates)
         if (position.stopLossTriggered) return false;
 
+        // CRITICAL: Check if all tokens have already been sold (prevents overselling)
+        if (position.tokensSold >= position.buyOrder.amount) {
+            this.writeLog(
+                `SKIP STOPLOSS: ${direction} offset ${position.spreadOffset} - ` +
+                `all ${position.tokensSold} tokens already sold`
+            );
+            return false;
+        }
+
         try {
             const currentBidPrice = await this.marketInfo.getPrice(tokenId, Side.SELL, this.targetedMarket);
 
@@ -448,29 +495,45 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
                 // Mark as stop-loss triggered (persists for retry)
                 position.stopLossTriggered = true;
 
+                // Calculate remaining tokens to sell
+                const remainingTokens = position.buyOrder.amount - position.tokensSold;
+                if (remainingTokens <= 0) {
+                    this.writeLog(
+                        `SKIP STOPLOSS: ${direction} offset ${position.spreadOffset} - ` +
+                        `no tokens remaining to sell`
+                    );
+                    return false;
+                }
+
                 this.writeLog(
                     `STOP-LOSS: ${direction} position at ${position.entryPrice.toFixed(2)} ` +
-                    `triggered at ${currentBidPrice.toFixed(2)} (stop: ${position.stopLossPrice.toFixed(2)})`
+                    `triggered at ${currentBidPrice.toFixed(2)} (stop: ${position.stopLossPrice.toFixed(2)}) ` +
+                    `tokens: ${remainingTokens}/${position.buyOrder.amount}`
                 );
 
                 // Cancel existing regular sell order if any
                 if (position.sellOrder && position.sellOrder.status === TradeStatus.LIVE) {
                     await this.cancelTrade(position.sellOrder);
-                    position.sellOrder = undefined;  // Clear so emergency sell can be created
+                    // Don't clear sellOrder yet - wait to verify it was actually canceled
                 }
 
-                // Attempt emergency sell (will retry via createSellOrdersForMatchedBuys if fails)
-                if (!position.sellOrder) {
+                // Only create new sell if no live sell order exists
+                if (!position.sellOrder || position.sellOrder.status === TradeStatus.CANCELED) {
                     const emergencySellPrice = Math.max(0.01, currentBidPrice - 0.01);
                     const sellOrderName = `mm-stoploss-${direction.toLowerCase()}-${position.spreadOffset}-${this.clock.now()}`;
 
-                    position.sellOrder = await this.makeOrder(
+                    const newSellOrder = await this.makeOrder(
                         sellOrderName,
                         tokenId,
                         emergencySellPrice,
-                        position.buyOrder.amount,
+                        remainingTokens,
                         Side.SELL
                     );
+
+                    if (newSellOrder) {
+                        position.sellOrder = newSellOrder;
+                        position.sellOrderHistory.push(newSellOrder.orderId);
+                    }
                 }
 
                 return true;
@@ -512,6 +575,14 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
         // Only check positions with stop-loss triggered
         if (!position.stopLossTriggered) return false;
 
+        // CRITICAL: Check if all tokens have already been sold (prevents overselling)
+        if (position.tokensSold >= position.buyOrder.amount) {
+            // All tokens sold - nothing to do
+            return false;
+        }
+
+        const remainingTokens = position.buyOrder.amount - position.tokensSold;
+
         try {
             const currentBidPrice = await this.marketInfo.getPrice(tokenId, Side.SELL, this.targetedMarket);
 
@@ -519,17 +590,23 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
             if (currentBidPrice > position.entryPrice) {
                 this.writeLog(
                     `STOP-LOSS RECOVERY: ${direction} position at ${position.entryPrice.toFixed(2)} ` +
-                    `recovered to ${currentBidPrice.toFixed(2)}, reverting to profit sell`
+                    `recovered to ${currentBidPrice.toFixed(2)}, reverting to profit sell ` +
+                    `(remaining: ${remainingTokens} tokens)`
                 );
 
-                // Cancel the stop-loss sell order if exists
+                // Cancel the stop-loss sell order if exists and is LIVE
                 if (position.sellOrder && position.sellOrder.status === TradeStatus.LIVE) {
                     await this.cancelTrade(position.sellOrder);
+                    // Wait for next sync to confirm cancellation before clearing
                 }
 
                 // Reset stop-loss state so regular sell will be created
                 position.stopLossTriggered = false;
-                position.sellOrder = undefined;
+
+                // Only clear sellOrder if it was actually canceled
+                if (position.sellOrder?.status === TradeStatus.CANCELED) {
+                    position.sellOrder = undefined;
+                }
 
                 return true;
             }
@@ -544,22 +621,56 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
                 if (optimalEmergencyPrice - currentSellPrice >= 0.02) {
                     this.writeLog(
                         `STOP-LOSS UPDATE: ${direction} position updating emergency sell from ` +
-                        `${currentSellPrice.toFixed(2)} to ${optimalEmergencyPrice.toFixed(2)} (bid=${currentBidPrice.toFixed(2)})`
+                        `${currentSellPrice.toFixed(2)} to ${optimalEmergencyPrice.toFixed(2)} ` +
+                        `(bid=${currentBidPrice.toFixed(2)}, remaining: ${remainingTokens} tokens)`
                     );
 
                     // Cancel stale emergency sell
                     await this.cancelTrade(position.sellOrder);
+
+                    // CRITICAL: Update orders to check if cancel succeeded or if order was matched
+                    await this.updateOrders();
+                    this.syncSoldTokensFromHistory(position);
+
+                    // Re-check remaining tokens after sync
+                    const updatedRemaining = position.buyOrder.amount - position.tokensSold;
+                    if (updatedRemaining <= 0) {
+                        this.writeLog(
+                            `STOP-LOSS UPDATE ABORTED: ${direction} offset ${position.spreadOffset} - ` +
+                            `old order was matched, no tokens remaining`
+                        );
+                        position.sellOrder = undefined;
+                        return true;
+                    }
+
+                    // Check if the sell order was actually canceled (not matched)
+                    const oldOrder = this.trades.find(t => t.orderId === position.sellOrder?.orderId);
+                    if (oldOrder?.status === TradeStatus.MATCHED) {
+                        this.writeLog(
+                            `STOP-LOSS UPDATE ABORTED: ${direction} offset ${position.spreadOffset} - ` +
+                            `old order was matched during cancel attempt`
+                        );
+                        position.sellOrder = oldOrder;  // Keep reference to matched order
+                        return true;
+                    }
+
+                    // Old order was successfully canceled, create new one
                     position.sellOrder = undefined;
 
-                    // Create updated emergency sell at current price
+                    // Create updated emergency sell at current price with remaining tokens
                     const sellOrderName = `mm-stoploss-${direction.toLowerCase()}-${position.spreadOffset}-${this.clock.now()}`;
-                    position.sellOrder = await this.makeOrder(
+                    const newSellOrder = await this.makeOrder(
                         sellOrderName,
                         tokenId,
                         optimalEmergencyPrice,
-                        position.buyOrder.amount,
+                        updatedRemaining,
                         Side.SELL
                     );
+
+                    if (newSellOrder) {
+                        position.sellOrder = newSellOrder;
+                        position.sellOrderHistory.push(newSellOrder.orderId);
+                    }
 
                     return true;
                 }
@@ -599,6 +710,9 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
         // Must have matched buy
         if (position.buyOrder.status !== TradeStatus.MATCHED) return false;
 
+        // CRITICAL: Check if all tokens already sold
+        if (position.tokensSold >= position.buyOrder.amount) return false;
+
         // No sell order yet
         if (!position.sellOrder) return true;
 
@@ -613,6 +727,16 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
         tokenId: string,
         direction: TokenDirection
     ): Promise<void> {
+        // CRITICAL: Check remaining tokens to sell
+        const remainingTokens = position.buyOrder.amount - position.tokensSold;
+        if (remainingTokens <= 0) {
+            this.writeLog(
+                `SKIP SELL: ${direction} offset ${position.spreadOffset} - ` +
+                `all ${position.tokensSold} tokens already sold`
+            );
+            return;
+        }
+
         let sellPrice: number;
         let orderNamePrefix: string;
 
@@ -643,13 +767,18 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
 
         const sellOrderName = `${orderNamePrefix}-${direction.toLowerCase()}-${position.spreadOffset}-${this.clock.now()}`;
 
-        position.sellOrder = await this.makeOrder(
+        const newSellOrder = await this.makeOrder(
             sellOrderName,
             tokenId,
             sellPrice,
-            position.buyOrder.amount,
+            remainingTokens,
             Side.SELL
         );
+
+        if (newSellOrder) {
+            position.sellOrder = newSellOrder;
+            position.sellOrderHistory.push(newSellOrder.orderId);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -662,9 +791,10 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
         const completedUpPositions: { offset: number, direction: TokenDirection }[] = [];
         const completedDownPositions: { offset: number, direction: TokenDirection }[] = [];
 
-        // Find completed UP positions
+        // Find completed UP positions (all tokens sold)
         for (const [_, position] of this.upPositions) {
-            if (position.sellOrder?.status === TradeStatus.MATCHED) {
+            // A position is complete when all tokens have been sold
+            if (position.tokensSold >= position.buyOrder.amount) {
                 completedUpPositions.push({
                     offset: position.spreadOffset,
                     direction: 'UP'
@@ -672,9 +802,10 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
             }
         }
 
-        // Find completed DOWN positions
+        // Find completed DOWN positions (all tokens sold)
         for (const [_, position] of this.downPositions) {
-            if (position.sellOrder?.status === TradeStatus.MATCHED) {
+            // A position is complete when all tokens have been sold
+            if (position.tokensSold >= position.buyOrder.amount) {
                 completedDownPositions.push({
                     offset: position.spreadOffset,
                     direction: 'DOWN'
@@ -685,15 +816,27 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
         // Remove completed positions and recycle
         for (const completed of completedUpPositions) {
             const key = this.getPositionKey('UP', completed.offset);
+            const position = this.upPositions.get(key);
+            if (position) {
+                this.writeLog(
+                    `RECYCLE: UP offset ${completed.offset} - ` +
+                    `sold ${position.tokensSold}/${position.buyOrder.amount} tokens via ${position.sellOrderHistory.length} orders`
+                );
+            }
             this.upPositions.delete(key);
-            // this.writeLog(`Recycling UP position at offset ${completed.offset}`);
             await this.placeSpreadBuyOrder('UP', completed.offset);
         }
 
         for (const completed of completedDownPositions) {
             const key = this.getPositionKey('DOWN', completed.offset);
+            const position = this.downPositions.get(key);
+            if (position) {
+                this.writeLog(
+                    `RECYCLE: DOWN offset ${completed.offset} - ` +
+                    `sold ${position.tokensSold}/${position.buyOrder.amount} tokens via ${position.sellOrderHistory.length} orders`
+                );
+            }
             this.downPositions.delete(key);
-            // this.writeLog(`Recycling DOWN position at offset ${completed.offset}`);
             await this.placeSpreadBuyOrder('DOWN', completed.offset);
         }
     }
@@ -812,7 +955,9 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
                 entryPrice: buyPrice,
                 spreadOffset,
                 tokenDirection: direction,
-                stopLossPrice
+                stopLossPrice,
+                tokensSold: 0,
+                sellOrderHistory: []
             };
 
             const key = this.getPositionKey(direction, spreadOffset);
@@ -872,28 +1017,18 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
     // -------------------------------------------------------------------------
 
     private calculateValidPositionSize(price: number): number | null {
-        let size = this.targetSize;
-
-        if (size < this.MIN_ORDER_SIZE) {
-            size = this.MIN_ORDER_SIZE;
-        }
-
-        if (price * size < this.MIN_ORDER_VALUE) {
-            size = Math.ceil(this.MIN_ORDER_VALUE / price);
-        }
-
-        if (size < this.MIN_ORDER_SIZE) {
-            size = this.MIN_ORDER_SIZE;
+        // Convert dollar amount to token quantity
+        let size = this.dollarToTokens(this.targetDollars, price);
+        if (size === null) {
+            return null;
         }
 
         if (!this.checkIfOrderIsValid(price, size)) {
-            // this.writeLog('Ordeer is  invalid')
             return null;
         }
 
         const totalCost = price * size;
         if (!this.canSpend(totalCost)) {
-            // this.writeLog('Out of budget')
             return null;
         }
 

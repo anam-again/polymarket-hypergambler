@@ -8,7 +8,7 @@ import { MarketSchedule } from "../types/interfaces.js";
 // ============================================================================
 
 interface ContrarianV2Props extends QuantBotProps {
-    targetSize: number;
+    targetDollars: number;
     cutoffMinute: number;
     targetSellPrice: number;
     lookbackHours: number;
@@ -24,7 +24,7 @@ export class ContrarianV2 extends QuantBot implements QuantBotRun {
 
     // --- Properties ---
 
-    private targetSize: number;
+    private targetDollars: number;
     private cutoffMinute: number;
     private targetSellPrice: number;
     private targetBuyPrice: number;
@@ -41,7 +41,7 @@ export class ContrarianV2 extends QuantBot implements QuantBotRun {
     constructor(props: ContrarianV2Props) {
         super(props);
 
-        this.targetSize = props.targetSize;
+        this.targetDollars = props.targetDollars;
         this.cutoffMinute = props.cutoffMinute;
         this.targetSellPrice = props.targetSellPrice;
         this.targetBuyPrice = props.targetBuyPrice;
@@ -129,7 +129,7 @@ export class ContrarianV2 extends QuantBot implements QuantBotRun {
             'followup-sell',
             this.buyOrder.clobTokenId,
             this.targetSellPrice,
-            this.targetSize,
+            this.buyOrder.amount,
             Side.SELL
         );
     }
@@ -162,14 +162,16 @@ export class ContrarianV2 extends QuantBot implements QuantBotRun {
 
         this.writeLog(`Previous ${this.lookbackHours} hours: [${previousHours.results.join(', ')}] -> majority: ${previousHours.majority}, betting on: ${betDirection}`);
 
-        if (!this.checkIfOrderIsValid(this.targetBuyPrice, this.targetSize)) return;
-        if (!this.canSpend(this.targetBuyPrice * this.targetSize)) return;
+        const targetSize = this.dollarToTokens(this.targetDollars, this.targetBuyPrice);
+        if (targetSize === null) return;
+        if (!this.checkIfOrderIsValid(this.targetBuyPrice, targetSize)) return;
+        if (!this.canSpend(this.targetBuyPrice * targetSize)) return;
 
         this.buyOrder = await this.makeOrder(
             'contrarian-buy',
             tokenId,
             this.targetBuyPrice,
-            this.targetSize,
+            targetSize,
             Side.BUY
         );
 

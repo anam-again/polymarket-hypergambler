@@ -14,7 +14,7 @@ interface MorningStarProps extends QuantBotProps {
     minBullishMove: number;         // Min price rise for third candle to be "bullish" (e.g., 50 = $50)
     targetBuyPrice: number;
     targetSellPrice: number;
-    targetSize: number;
+    targetDollars: number;
     cutoffMinute: number;
 }
 
@@ -48,7 +48,7 @@ export class MorningStar extends QuantBot implements QuantBotRun {
     private minBullishMove: number;
     private targetBuyPrice: number;
     private targetSellPrice: number;
-    private targetSize: number;
+    private targetDollars: number;
     private cutoffMinute: number;
 
     private buyOrder?: TradeOrder;
@@ -72,7 +72,7 @@ export class MorningStar extends QuantBot implements QuantBotRun {
         this.minBullishMove = props.minBullishMove;
         this.targetBuyPrice = props.targetBuyPrice;
         this.targetSellPrice = props.targetSellPrice;
-        this.targetSize = props.targetSize;
+        this.targetDollars = props.targetDollars;
         this.cutoffMinute = props.cutoffMinute;
     }
 
@@ -296,20 +296,23 @@ export class MorningStar extends QuantBot implements QuantBotRun {
     private async createBuyOrder(): Promise<void> {
         if (this.buyOrder) return;
 
+        const targetSize = this.dollarToTokens(this.targetDollars, this.targetBuyPrice);
+        if (targetSize === null) return;
+
         // Morning Star is a bullish reversal - buy the UP token
         const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
         const tokenId = orderBooks.BtcUpTokenId;
 
-        const totalCost = this.targetBuyPrice * this.targetSize;
+        const totalCost = this.targetBuyPrice * targetSize;
 
-        if (!this.checkIfOrderIsValid(this.targetBuyPrice, this.targetSize)) return;
+        if (!this.checkIfOrderIsValid(this.targetBuyPrice, targetSize)) return;
         if (!this.canSpend(totalCost)) return;
 
         this.buyOrder = await this.makeOrder(
             'morningstar-buy',
             tokenId,
             this.targetBuyPrice,
-            this.targetSize,
+            targetSize,
             Side.BUY
         );
 
@@ -329,7 +332,7 @@ export class MorningStar extends QuantBot implements QuantBotRun {
             'morningstar-sell',
             tokenId,
             this.targetSellPrice,
-            this.targetSize,
+            this.buyOrder.amount,
             Side.SELL
         );
     }

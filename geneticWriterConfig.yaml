@@ -3,7 +3,7 @@
 
 settings:
   lookbackDays: 1          # Days of historical data to use
-  maxGenerations: 20       # Maximum optimization generations
+  maxGenerations: 10       # Maximum optimization generations
   populationSize: 50       # Population size per generation
   intervalHours: 1         # Hours between optimization runs
   concurrentSimulations: 4 # Number of simulations to run in parallel
@@ -11,6 +11,11 @@ settings:
 # List of bot/market combinations to optimize
 # Each target will be optimized sequentially
 targets:
+
+  
+  - botStyle: MarketMaker
+    market: btc-hourly
+
   - botStyle: QuarterlyTrendFollowing
     market: btc-quarterly
   - botStyle: QuarterlyTrendFollowing

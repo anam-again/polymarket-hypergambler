@@ -24,6 +24,8 @@ import { checkIfBotsHaveMatchingNames, formatDuration, getMsUntilNextHour, targe
 import { MarketMaker } from "./bots/MarketMaker.js";
 import { GeneticOptimizedReader } from "./genetic/GeneticOptimizedReader.js";
 import { GeneticBotManager } from "./genetic/GeneticBotManager.js";
+import { YOLOMLBot } from "./bots/YOLOMLBot.js";
+import { PredictionStyle } from "./ml/types.js";
 
 
 const credentials = new Credentials();
@@ -41,7 +43,7 @@ const commonTestProps = {
   ...commonProps,
   PROD_MODE: false,
   hourlyDollarLimit: 100000,
-  targetSize: 20,
+  targetDollars: 20,
 }
 
 const commonProdProps = {
@@ -64,33 +66,26 @@ OrderBatcher.initialize(clobClient, 200);
 // exit(1);
 
 const prodBots: QuantBotRun[] = [
+  ...([
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, candleMinutes: 4, breakoutBuffer: 50, pullbackBuffer: 10, targetBuyPrice: .52, targetSellPrice: .90, cutoffMinute: 12, targetDollars: 3, hourlyDollarLimit: 5 },
+  ]).map((v) => {
+    return new FirstCandle({
+      ...v,
+      name: `fcandle-${targetMarketToShortname(v.targetedMarket)}-${v.candleMinutes}m-bb${v.breakoutBuffer}-pp${v.pullbackBuffer}-b${v.targetBuyPrice}-s${v.targetSellPrice}-co${v.cutoffMinute}`,
+      ...commonProdProps,
+    })
+  }),
   // ...([
-  //   // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 50, pullbackBuffer: 100, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 50 },
-  //   // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 25, pullbackBuffer: 50, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 50 },
-  //   // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 10, pullbackBuffer: 20, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 50 },
-  //   // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.ETHEREUM_HOURLY, candleMinutes: 10, breakoutBuffer: 50, pullbackBuffer: 100, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 50 },
-  //   // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.ETHEREUM_HOURLY, candleMinutes: 10, breakoutBuffer: 25, pullbackBuffer: 50, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 50 },
-  //   // fcandle-btc15-4m-bb4-pp5-b0.52-s0.9
-  //   { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, candleMinutes: 4, breakoutBuffer: 50, pullbackBuffer: 20, targetBuyPrice: .60, targetSellPrice: .90, targetSize: 10, cutoffMinute: 10 },
-  //   { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, candleMinutes: 4, breakoutBuffer: 4, pullbackBuffer: 5, targetBuyPrice: .52, targetSellPrice: .90, targetSize: 10, cutoffMinute: 12 },
-  // ]).map((v) => {
-  //   return new FirstCandle({
-  //     ...v,
-  //     name: `fcandle-${targetMarketToShortname(v.targetedMarket)}-${v.candleMinutes}m-bb${v.breakoutBuffer}-pp${v.pullbackBuffer}-b${v.targetBuyPrice}-s${v.targetSellPrice}-co${v.cutoffMinute}`,
-  //     ...commonProdProps,
-  //   })
-  // }),
-  // ...([
-  //   { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, cutoffMinute: 8, spreadSize: 5, minSpreadDistance: .01, profitMargin: .50, minPrice: .45, maxPrice: .86, stopLossAmount: .04, totalActiveTrades: 9, requiredVolatility: 5, volatilityLookbackPeriods: 1, buyExpirySeconds: 85, targetSize: 6,  hourlyDollarLimit: 30 },
+  //   { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, cutoffMinute: 8, spreadSize: 5, minSpreadDistance: .01, profitMargin: .50, minPrice: .45, maxPrice: .86, stopLossAmount: .04, totalActiveTrades: 9, maxVolatility: 5, minVolatility: 0, volatilityLookbackPeriods: 1, buyExpirySeconds: 85, targetDollars: 6,  hourlyDollarLimit: 30 },
   // ]).map((v) => {
   //   return new MarketMaker({
-  //     name: `mmaker-${targetMarketToShortname(v.targetedMarket)}-ss${v.spreadSize}-msd${v.minSpreadDistance}-pm${v.profitMargin}-min${v.minPrice}-max${v.maxPrice}-sl${v.stopLossAmount}-rv${v.requiredVolatility}-vlp${v.volatilityLookbackPeriods}-bes${v.buyExpirySeconds}`,
+  //     name: `mmaker-${targetMarketToShortname(v.targetedMarket)}-ss${v.spreadSize}-msd${v.minSpreadDistance}-pm${v.profitMargin}-min${v.minPrice}-max${v.maxPrice}-sl${v.stopLossAmount}-maxv${v.maxVolatility}-minv${v.minVolatility}-vlp${v.volatilityLookbackPeriods}-bes${v.buyExpirySeconds}`,
   //     ...v,
   //     ...commonProdProps,
   //   })
   // }),
   // ...([
-  //   { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 50, pullbackBuffer: 100, targetSize: 10, cutoffMinute: 50, buyPriceBuffer: .02, sellPriceBuffer: .34, minProfitMargin: .57 },
+  //   { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 50, pullbackBuffer: 100, targetDollars: 10, cutoffMinute: 50, buyPriceBuffer: .02, sellPriceBuffer: .34, minProfitMargin: .57 },
   // ]).map((v) => {
   //   return new FirstCandleV2({
   //     ...v,
@@ -99,9 +94,9 @@ const prodBots: QuantBotRun[] = [
   //   })
   // }),
   // ...([
-  //   { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, shortMaPeriod: 5, longMaPeriod: 13, adxPeriod: 6, adxThreshold: 26.4, atrPeriod: 13, atrStopMultiple: 3.59, targetBuyPrice: .07, targetSellPrice: .95, targetSize: 15, cutoffMinute: 9 },
-  //   { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.ETHEREUM_QUARTERLY, shortMaPeriod: 8, longMaPeriod: 18, adxPeriod: 15, adxThreshold: 21.65, atrPeriod: 6, atrStopMultiple: 1.51, targetBuyPrice: .23, targetSellPrice: .95, targetSize: 6, cutoffMinute: 9 },
-  //   { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.XRP_QUARTERLY, shortMaPeriod: 4, longMaPeriod: 19, adxPeriod: 13, adxThreshold: 33.9, atrPeriod: 13, atrStopMultiple: 3.5, targetBuyPrice: .35, targetSellPrice: .63, targetSize: 6, cutoffMinute: 12 },
+  //   { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, shortMaPeriod: 5, longMaPeriod: 13, adxPeriod: 6, adxThreshold: 26.4, atrPeriod: 13, atrStopMultiple: 3.59, targetBuyPrice: .07, targetSellPrice: .95, targetDollars: 15, cutoffMinute: 9 },
+  //   { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.ETHEREUM_QUARTERLY, shortMaPeriod: 8, longMaPeriod: 18, adxPeriod: 15, adxThreshold: 21.65, atrPeriod: 6, atrStopMultiple: 1.51, targetBuyPrice: .23, targetSellPrice: .95, targetDollars: 6, cutoffMinute: 9 },
+  //   { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.XRP_QUARTERLY, shortMaPeriod: 4, longMaPeriod: 19, adxPeriod: 13, adxThreshold: 33.9, atrPeriod: 13, atrStopMultiple: 3.5, targetBuyPrice: .35, targetSellPrice: .63, targetDollars: 6, cutoffMinute: 12 },
   // ]).map((v) => {
   //   return new TrendFollowing({
   //     ...v,
@@ -122,21 +117,15 @@ const testBots: QuantBotRun[] = [
     })
   }),
   ...([
-    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, cutoffMinute: 30, spreadSize: 5, minSpreadDistance: 0, profitMargin: .15, minPrice: .45, maxPrice: .57, stopLossAmount: .2, totalActiveTrades: 5, requiredVolatility: 2.1, volatilityLookbackPeriods: 20, buyExpirySeconds: 40 },
-    // { targetedMarket: TargetedMarket.BITCOIN_HOURLY, cutoffMinute: 55, spreadSize: 8, minSpreadDistance: 0, profitMargin: .02, minPrice: .2, maxPrice: .8, stopLossAmount: .05, totalActiveTrades: 11, requiredVolatility: 2.4, volatilityLookbackPeriods: 25, buyExpirySeconds: 190 },
-    // { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, cutoffMinute: 12, spreadSize: 4, minSpreadDistance: 0, profitMargin: .02, minPrice: .21, maxPrice: .8, stopLossAmount: .03, totalActiveTrades: 6, requiredVolatility: 2, volatilityLookbackPeriods: 9, buyExpirySeconds: 45 },
-    // // L:ast try
-    // { targetedMarket: TargetedMarket.BITCOIN_HOURLY, cutoffMinute: 30, spreadSize: 9, minSpreadDistance: 0, profitMargin: .09, minPrice: .41, maxPrice: .6655, stopLossAmount: .13, totalActiveTrades: 4, requiredVolatility: 2.6, volatilityLookbackPeriods: 20, buyExpirySeconds: 130 },
-    // { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, cutoffMinute: 8, spreadSize: 2, minSpreadDistance: 0, profitMargin: .02, minPrice: .41, maxPrice: .66, stopLossAmount: .13, totalActiveTrades: 2, requiredVolatility: 1.7, volatilityLookbackPeriods: 10, buyExpirySeconds: 120 },
-    // // Goobas
-    // { targetedMarket: TargetedMarket.BITCOIN_HOURLY, cutoffMinute: 30, spreadSize: 3, minSpreadDistance: 0, profitMargin: .09, minPrice: .45, maxPrice: .57, stopLossAmount: .18, totalActiveTrades: 3, requiredVolatility: 1.1, volatilityLookbackPeriods: 20, buyExpirySeconds: 140 },
-    // { targetedMarket: TargetedMarket.SOLANA_HOURLY, cutoffMinute: 50, spreadSize: 6, minSpreadDistance: 0, profitMargin: .11, minPrice: .25, maxPrice: .62, stopLossAmount: .11, totalActiveTrades: 12, requiredVolatility: 1.3, volatilityLookbackPeriods: 25, buyExpirySeconds: 130 },
-    // { targetedMarket: TargetedMarket.ETHEREUM_HOURLY, cutoffMinute: 35, spreadSize: 10, minSpreadDistance: 0, profitMargin: .06, minPrice: .27, maxPrice: .79, stopLossAmount: .2, totalActiveTrades: 13, requiredVolatility: 2.6, volatilityLookbackPeriods: 16, buyExpirySeconds: 270 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, cutoffMinute: 30, spreadSize: 5, minSpreadDistance: 0, profitMargin: .15, minPrice: .45, maxPrice: .57, stopLossAmount: .2, totalActiveTrades: 5, maxVolatility: 2.1, minVolatility: 0, volatilityLookbackPeriods: 20, buyExpirySeconds: 40 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, cutoffMinute: 10, spreadSize: 8, minSpreadDistance: 0, profitMargin: .43, minPrice: .38, maxPrice: .51, stopLossAmount: .02, totalActiveTrades: 5, maxVolatility: 6.9, minVolatility: 0, volatilityLookbackPeriods: 20, buyExpirySeconds: 40 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, cutoffMinute: 15, spreadSize: 6, minSpreadDistance: 0.06, profitMargin: .44, minPrice: .29, maxPrice: .68, stopLossAmount: .01, totalActiveTrades: 5, maxVolatility: 67.3, minVolatility: 32, volatilityLookbackPeriods: 7, buyExpirySeconds: 200 },
   ]).map((v) => {
     return new MarketMaker({
-      name: `mmaker-${targetMarketToShortname(v.targetedMarket)}-ss${v.spreadSize}-pm${v.profitMargin}-min${v.minPrice}-max${v.maxPrice}-sl${v.stopLossAmount}-rv${v.requiredVolatility}-vlp${v.volatilityLookbackPeriods}-bes${v.buyExpirySeconds}`,
+      name: `mmaker-${targetMarketToShortname(v.targetedMarket)}-ss${v.spreadSize}-pm${v.profitMargin}-min${v.minPrice}-max${v.maxPrice}-sl${v.stopLossAmount}-maxv${v.maxVolatility}-minv${v.minVolatility}-vlp${v.volatilityLookbackPeriods}-bes${v.buyExpirySeconds}`,
       ...v,
       ...commonTestProps,
+
     })
   }),
   ...([
@@ -225,7 +214,7 @@ const testBots: QuantBotRun[] = [
     })
   }),
   ...([
-    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 50, pullbackBuffer: 100, targetSize: 10, cutoffMinute: 50, buyPriceBuffer: .02, sellPriceBuffer: .10, minProfitMargin: .05 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 50, pullbackBuffer: 100, targetDollars: 10, cutoffMinute: 50, buyPriceBuffer: .02, sellPriceBuffer: .10, minProfitMargin: .05 },
     // { targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 25, pullbackBuffer: 50, cutoffMinute: 50, buyPriceBuffer: .02, sellPriceBuffer: .10, minProfitMargin: .05 },
     // { targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 10, breakoutBuffer: 10, pullbackBuffer: 20, cutoffMinute: 50, buyPriceBuffer: .02, sellPriceBuffer: .10, minProfitMargin: .05 },
     // { targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 8, breakoutBuffer: 10, pullbackBuffer: 353, cutoffMinute: 50, buyPriceBuffer: .04, sellPriceBuffer: .45, minProfitMargin: .9 },
@@ -266,14 +255,14 @@ const testBots: QuantBotRun[] = [
   // { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, shortMaPeriod: 2, longMaPeriod: 5, adxPeriod: 3, adxThreshold: 6, atrPeriod: 4, atrStopMultiple: 2.0, targetBuyPrice: .52, targetSellPrice: .95, cutoffMinute: 10 },
   // { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, shortMaPeriod: 4, longMaPeriod: 10, adxPeriod: 6, adxThreshold: 12, atrPeriod: 8, atrStopMultiple: 2.0, targetBuyPrice: .52, targetSellPrice: .95, cutoffMinute: 10 },
   // Jan23
-  // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .10, targetSellPrice: .25, targetSize: 10, cutoffMinute: 8 },
-  // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.ETHEREUM_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .10, targetSellPrice: .25, targetSize: 10, cutoffMinute: 8 },
-  // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.SOLANA_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .10, targetSellPrice: .25, targetSize: 10, cutoffMinute: 8 },
-  // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.XRP_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .10, targetSellPrice: .25, targetSize: 10, cutoffMinute: 8 },
-  // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .08, targetSellPrice: .20, targetSize: 10, cutoffMinute: 8 },
-  // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.ETHEREUM_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .08, targetSellPrice: .20, targetSize: 10, cutoffMinute: 8 },
-  // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.SOLANA_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .08, targetSellPrice: .20, targetSize: 10, cutoffMinute: 8 },
-  // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.XRP_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .08, targetSellPrice: .20, targetSize: 10, cutoffMinute: 8 },
+  // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .10, targetSellPrice: .25, targetDollars: 10, cutoffMinute: 8 },
+  // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.ETHEREUM_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .10, targetSellPrice: .25, targetDollars: 10, cutoffMinute: 8 },
+  // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.SOLANA_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .10, targetSellPrice: .25, targetDollars: 10, cutoffMinute: 8 },
+  // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.XRP_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .10, targetSellPrice: .25, targetDollars: 10, cutoffMinute: 8 },
+  // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .08, targetSellPrice: .20, targetDollars: 10, cutoffMinute: 8 },
+  // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.ETHEREUM_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .08, targetSellPrice: .20, targetDollars: 10, cutoffMinute: 8 },
+  // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.SOLANA_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .08, targetSellPrice: .20, targetDollars: 10, cutoffMinute: 8 },
+  // { hourlyDollarLimit: 10, targetedMarket: TargetedMarket.XRP_QUARTERLY, shortMaPeriod: 3, longMaPeriod: 12, adxPeriod: 5, adxThreshold: 39.5, atrPeriod: 6, atrStopMultiple: 2.25, targetBuyPrice: .08, targetSellPrice: .20, targetDollars: 10, cutoffMinute: 8 },
 
   // ]).map((v) => {
   //   return new TrendFollowing({
@@ -282,6 +271,41 @@ const testBots: QuantBotRun[] = [
   //     ...commonTestProps,
   //   })
   // }),
+  // YOLOMLBot - ML-powered trading bot
+  ...([
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, predictionStyle: PredictionStyle.HOURLY_10M_20M, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, predictionStyle: PredictionStyle.HOURLY_10M_30M, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, predictionStyle: PredictionStyle.HOURLY_10M_40M, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, predictionStyle: PredictionStyle.HOURLY_10M_50M, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, predictionStyle: PredictionStyle.HOURLY_10M_EOP, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, predictionStyle: PredictionStyle.HOURLY_20M_30M, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, predictionStyle: PredictionStyle.HOURLY_20M_40M, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, predictionStyle: PredictionStyle.HOURLY_20M_50M, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, predictionStyle: PredictionStyle.HOURLY_20M_EOP, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, predictionStyle: PredictionStyle.HOURLY_30M_40M, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, predictionStyle: PredictionStyle.HOURLY_30M_50M, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, predictionStyle: PredictionStyle.HOURLY_30M_EOP, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, predictionStyle: PredictionStyle.HOURLY_40M_50M, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, predictionStyle: PredictionStyle.HOURLY_40M_EOP, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, predictionStyle: PredictionStyle.HOURLY_50M_EOP, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, predictionStyle: PredictionStyle.QUARTERLY_10M_EOP, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, predictionStyle: PredictionStyle.QUARTERLY_3M_5M, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, predictionStyle: PredictionStyle.QUARTERLY_3M_8M, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, predictionStyle: PredictionStyle.QUARTERLY_3M_EOP, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, predictionStyle: PredictionStyle.QUARTERLY_5M_10M, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, predictionStyle: PredictionStyle.QUARTERLY_5M_8M, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, predictionStyle: PredictionStyle.QUARTERLY_5M_EOP, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, predictionStyle: PredictionStyle.QUARTERLY_8M_EOP, tradeSize: 10, pnlThresholdPercent: 10, minConfidenceThreshold: 0.005, minProfitMargin: 0.05 },
+
+
+  ]).map((v) => {
+    return new YOLOMLBot({
+      name: `yoloml-${targetMarketToShortname(v.targetedMarket)}-${v.predictionStyle}`,
+      ...v,
+      ...commonTestProps,
+    })
+  }),
 ]
 
 // Genetic bot manager - loads bots from YAML and refreshes them hourly
@@ -297,12 +321,12 @@ geneticBotManager
   .addTestBot({
     botStyle: 'QuarterlyTrendFollowing',
     market: TargetedMarket.BITCOIN_QUARTERLY,
-    overrides: { name: 'trendfollowing-btc15-gen1', ...commonTestProps},
+    overrides: { name: 'trendfollowing-btc15-gen1', ...commonTestProps },
   })
   .addTestBot({
     botStyle: 'QuarterlyTrendFollowing',
     market: TargetedMarket.ETHEREUM_QUARTERLY,
-    overrides: { name: 'trendfollowing-eth15-gen1', ...commonTestProps},
+    overrides: { name: 'trendfollowing-eth15-gen1', ...commonTestProps },
   })
   .addTestBot({
     botStyle: 'QuarterlyTrendFollowing',
@@ -376,6 +400,11 @@ geneticBotManager
     botStyle: 'QuarterlyMeanReversion',
     market: TargetedMarket.XRP_QUARTERLY,
     overrides: { name: 'mrev-xrp15-gen1', ...commonTestProps },
+  })
+  .addTestBot({
+    botStyle: 'MarketMaker',
+    market: TargetedMarket.BITCOIN_HOURLY,
+    overrides: { name: 'mmaker-btc-gen1', ...commonTestProps },
   })
 
 checkIfBotsHaveMatchingNames([...testBots, ...prodBots]);

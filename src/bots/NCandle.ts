@@ -15,7 +15,7 @@ interface NCandleProps extends QuantBotProps {
     sellPriceBuffer: number;        // How much below current best bid to place sell order (e.g., 0.02 = 2 cents)
     minProfitMargin: number;        // Minimum profit margin above buy price (e.g., 0.05 = 5 cents)
     stopLossMultiplier: number;     // Stop-loss as multiplier of candle range (e.g., 1.5 = 1.5x range)
-    targetSize: number;             // Target position size
+    targetDollars: number;          // Dollar amount per position
     cutoffMinute: number;           // Minute after which no new trades are entered
     maxTradesPerHour: number;       // Maximum number of trades per hour
 }
@@ -56,7 +56,7 @@ export class NCandle extends QuantBot implements QuantBotRun {
     private sellPriceBuffer: number;
     private minProfitMargin: number;
     private stopLossMultiplier: number;
-    private targetSize: number;
+    private targetDollars: number;
     private cutoffMinute: number;
     private maxTradesPerHour: number;
 
@@ -87,7 +87,7 @@ export class NCandle extends QuantBot implements QuantBotRun {
         this.sellPriceBuffer = props.sellPriceBuffer;
         this.minProfitMargin = props.minProfitMargin;
         this.stopLossMultiplier = props.stopLossMultiplier;
-        this.targetSize = props.targetSize;
+        this.targetDollars = props.targetDollars;
         this.cutoffMinute = props.cutoffMinute;
         this.maxTradesPerHour = props.maxTradesPerHour;
     }
@@ -492,22 +492,10 @@ export class NCandle extends QuantBot implements QuantBotRun {
     // -------------------------------------------------------------------------
 
     private calculateValidPositionSize(price: number): number | null {
-        // Start with target size
-        let size = this.targetSize;
-
-        // Ensure minimum order size
-        if (size < this.MIN_ORDER_SIZE) {
-            size = this.MIN_ORDER_SIZE;
-        }
-
-        // Ensure minimum order value
-        if (price * size < this.MIN_ORDER_VALUE) {
-            size = Math.ceil(this.MIN_ORDER_VALUE / price);
-        }
-
-        // Re-check minimum size after value adjustment
-        if (size < this.MIN_ORDER_SIZE) {
-            size = this.MIN_ORDER_SIZE;
+        // Convert dollar amount to token quantity
+        const size = this.dollarToTokens(this.targetDollars, price);
+        if (size === null) {
+            return null;
         }
 
         // Verify final order is valid

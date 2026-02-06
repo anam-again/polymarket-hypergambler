@@ -33,7 +33,7 @@ export { createSimulatedBot, createMockClobClient, QuantBotSimulationAdapter } f
 // ============================================================================
 
 const contrarianBounds: ParameterBounds = {
-    targetSize: { min: 5, max: 20, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 1 },
     targetBuyPrice: { min: 0.02, max: 0.98 },
     targetSellPrice: { min: 0.02, max: 0.98 },
     lookbackHours: { min: 1, max: 12, step: 1 },
@@ -41,7 +41,7 @@ const contrarianBounds: ParameterBounds = {
 };
 
 const trendFollowingBounds: ParameterBounds = {
-    targetSize: { min: 5, max: 20, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 1 },
     shortMaPeriod: { min: 1, max: 20, step: 1 },
     longMaPeriod: { min: 4, max: 60, step: 1 },
     adxPeriod: { min: 2, max: 50, step: 1 },
@@ -54,7 +54,7 @@ const trendFollowingBounds: ParameterBounds = {
 };
 
 const firstCandleBounds: ParameterBounds = {
-    targetSize: { min: 5, max: 20, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 1 },
     candleMinutes: { min: 5, max: 30, step: 2 },
     breakoutBuffer: { min: 0, max: 1000 },
     pullbackBuffer: { min: 0, max: 1000 },
@@ -64,7 +64,7 @@ const firstCandleBounds: ParameterBounds = {
 };
 
 const firstCandleV2Bounds: ParameterBounds = {
-    targetSize: { min: 5, max: 20, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 1 },
     candleMinutes: { min: 5, max: 30, step: 2 },
     breakoutBuffer: { min: 10, max: 300 },
     pullbackBuffer: { min: 0, max: 1000 },
@@ -76,7 +76,7 @@ const firstCandleV2Bounds: ParameterBounds = {
 };
 
 const eveningStarBounds: ParameterBounds = {
-    targetSize: { min: 5, max: 20, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 1 },
     candleMinutes: { min: 3, max: 20, step: 1 },
     minBullishMove: { min: 20, max: 150 },
     maxIndecisionRange: { min: 10, max: 75 },
@@ -87,7 +87,7 @@ const eveningStarBounds: ParameterBounds = {
 };
 
 const morningStarBounds: ParameterBounds = {
-    targetSize: { min: 5, max: 20, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 1 },
     candleMinutes: { min: 3, max: 20, step: 1 },
     minBearishMove: { min: 20, max: 150 },
     maxIndecisionRange: { min: 10, max: 75 },
@@ -98,7 +98,7 @@ const morningStarBounds: ParameterBounds = {
 };
 
 const meanReversionBounds: ParameterBounds = {
-    targetSize: { min: 5, max: 20, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 1 },
     lookbackPeriods: { min: 5, max: 50, step: 1 },
     entryThreshold: { min: 1.0, max: 4.0 },
     targetBuyPrice: { min: 0.02, max: 0.95 },
@@ -107,7 +107,7 @@ const meanReversionBounds: ParameterBounds = {
 };
 
 const nCandleBounds: ParameterBounds = {
-    targetSize: { min: 5, max: 20, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 1 },
     candleMinutes: { min: 3, max: 20, step: 1 },
     breakoutBuffer: { min: 0, max: 200 },
     pullbackBuffer: { min: 0, max: 250 },
@@ -124,7 +124,7 @@ const nCandleBounds: ParameterBounds = {
 // ============================================================================
 
 const quarterlyFirstCandleBounds: ParameterBounds = {
-    targetSize: { min: 5, max: 20, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 1 },
     candleMinutes: { min: 1, max: 12, step: 1 },  // Smaller for 15-min period
     breakoutBuffer: { min: 0, max: 500 },
     pullbackBuffer: { min: 0, max: 500 },
@@ -134,7 +134,7 @@ const quarterlyFirstCandleBounds: ParameterBounds = {
 };
 
 const quarterlyMeanReversionBounds: ParameterBounds = {
-    targetSize: { min: 5, max: 20, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 1 },
     lookbackPeriods: { min: 3, max: 25, step: 1 },
     entryThreshold: { min: 0.5, max: 3.0 },  // Tighter for faster markets
     targetBuyPrice: { min: 0.02, max: 0.95 },
@@ -143,7 +143,7 @@ const quarterlyMeanReversionBounds: ParameterBounds = {
 };
 
 const quarterlyTrendFollowingBounds: ParameterBounds = {
-    targetSize: { min: 5, max: 20, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 1 },
     shortMaPeriod: { min: 1, max: 8, step: 1 },
     longMaPeriod: { min: 1, max: 20, step: 1 },
     adxPeriod: { min: 1, max: 15, step: 1 },
@@ -156,7 +156,7 @@ const quarterlyTrendFollowingBounds: ParameterBounds = {
 };
 
 const quarterlyNCandleBounds: ParameterBounds = {
-    targetSize: { min: 5, max: 20, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 1 },
     candleMinutes: { min: 1, max: 4, step: 1 },  // Short candles (1-4 min) to leave time for breakout/pullback
     breakoutBuffer: { min: 20, max: 150 },       // BTC price movement in $ to confirm breakout
     pullbackBuffer: { min: 50, max: 200 },       // Must be >= breakoutBuffer for pattern to work
@@ -171,7 +171,7 @@ const quarterlyNCandleBounds: ParameterBounds = {
 const earlyBuyerV2Bounds: ParameterBounds = {
     targetBuyPrice: { min: 0.02, max: 0.90 },    // Target buying below fair value
     targetSellPrice: { min: 0.1, max: 0.98 },   // Target selling above fair value
-    targetSize: { min: 5, max: 25, step: 1 },
+    targetDollars: { min: 5, max: 25, step: 1 },
     cutoffMinute: { min: 15, max: 45, step: 1 }, // For hourly markets, how late to enter
     minFlops: { min: 1, max: 6 },                // Minimum market volatility to trade
     flopsLookbackHours: { min: 2, max: 12, step: 1 },  // Hours of flops data to average
@@ -181,7 +181,7 @@ const earlyBuyerV2Bounds: ParameterBounds = {
 const quarterlyEarlyBuyerV2Bounds: ParameterBounds = {
     targetBuyPrice: { min: 0.02, max: 0.95 },    // Target buying below fair value
     targetSellPrice: { min: 0.05, max: 0.98 },   // Target selling above fair value
-    targetSize: { min: 5, max: 25, step: 1 },
+    targetDollars: { min: 5, max: 25, step: 1 },
     cutoffMinute: { min: 4, max: 12, step: 1 },  // Within 15-min period
     minFlops: { min: 1, max: 10 },                // Minimum market volatility to trade
     flopsLookbackHours: { min: 2, max: 12, step: 1 },  // Hours of flops data to average
@@ -198,7 +198,7 @@ const esotericNormalizationBounds: ParameterBounds = {
     // Trading parameters
     purchaseThreshold: { min: 0.04, max: 0.15 },    // Min diff to trigger buy
     sellPremium: { min: 0.02, max: 0.10 },          // Sell this much above expected
-    targetSize: { min: 5, max: 25, step: 1 },
+    targetDollars: { min: 5, max: 25, step: 1 },
     cutoffMinute: { min: 30, max: 50, step: 1 },    // For hourly markets
     maxTradesPerPeriod: { min: 1, max: 3, step: 1 },
 };
@@ -213,7 +213,7 @@ const quarterlyEsotericNormalizationBounds: ParameterBounds = {
     // Trading parameters
     purchaseThreshold: { min: 0.04, max: 0.15 },
     sellPremium: { min: 0.02, max: 0.10 },
-    targetSize: { min: 5, max: 25, step: 1 },
+    targetDollars: { min: 5, max: 25, step: 1 },
     cutoffMinute: { min: 5, max: 12, step: 1 },     // Within 15-min period
     maxTradesPerPeriod: { min: 1, max: 2, step: 1 },
 };
@@ -227,9 +227,10 @@ const marketMakerBounds: ParameterBounds = {
     stopLossAmount: { min: 0.01, max: 0.30 },       // 5-20 cents
     buyExpirySeconds: { min: 30, max: 300, step: 10 },  // 30s to 5min
     totalActiveTrades: { min: 3, max: 15, step: 1 },
-    requiredVolatility: { min: 0.5, max: 8.0 },
+    maxVolatility: { min: 0.5, max: 100 },
+    minVolatility: { min: 0, max: 100 },
     volatilityLookbackPeriods: { min: 1, max: 30, step: 1 },
-    targetSize: { min: 5, max: 20, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 1 },
     cutoffMinute: { min: 10, max: 55, step: 5 },
 };
 
@@ -242,9 +243,10 @@ const quarterlyMarketMakerBounds: ParameterBounds = {
     stopLossAmount: { min: 0.01, max: 0.30 },
     buyExpirySeconds: { min: 15, max: 120, step: 5 },  // 15s to 2min for faster markets
     totalActiveTrades: { min: 2, max: 10, step: 1 },
-    requiredVolatility: { min: 0.1, max: 5.0 },
+    maxVolatility: { min: 0.1, max: 5.0 },
+    minVolatility: { min: 0, max: 1.0 },
     volatilityLookbackPeriods: { min: 1, max: 30, step: 1 },
-    targetSize: { min: 5, max: 15, step: 1 },
+    targetDollars: { min: 5, max: 15, step: 1 },
     cutoffMinute: { min: 2, max: 14, step: 1 },
 };
 
@@ -270,7 +272,7 @@ function createContrarianBot(botParams: BotParams): SimulatedBot {
         shouldWriteLogs: shouldWriteLogs ?? false,
         targetBuyPrice: params.targetBuyPrice as number ?? 0.48,
         targetSellPrice: params.targetSellPrice as number ?? 0.60,
-        targetSize: params.targetSize as number ?? 10,
+        targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 30,
         lookbackHours: params.lookbackHours as number ?? 3,
         cdLookbackHours: params.cdLookbackHours as number ?? 6,
@@ -301,7 +303,7 @@ function createTrendFollowingBot(botParams: BotParams): SimulatedBot {
         atrStopMultiple: params.atrStopMultiple as number ?? 2.0,
         targetBuyPrice: params.targetBuyPrice as number ?? 0.50,
         targetSellPrice: params.targetSellPrice as number ?? 0.60,
-        targetSize: params.targetSize as number ?? 10,
+        targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 45,
     });
 
@@ -327,7 +329,7 @@ function createFirstCandleBot(botParams: BotParams): SimulatedBot {
         pullbackBuffer: params.pullbackBuffer as number ?? 100,
         targetBuyPrice: params.targetBuyPrice as number ?? 0.50,
         targetSellPrice: params.targetSellPrice as number ?? 0.60,
-        targetSize: params.targetSize as number ?? 10,
+        targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 45,
     });
 
@@ -354,7 +356,7 @@ function createFirstCandleV2Bot(botParams: BotParams): SimulatedBot {
         buyPriceBuffer: params.buyPriceBuffer as number ?? 0.02,
         sellPriceBuffer: params.sellPriceBuffer as number ?? 0.02,
         minProfitMargin: params.minProfitMargin as number ?? 0.05,
-        targetSize: params.targetSize as number ?? 10,
+        targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 45,
     });
 
@@ -381,7 +383,7 @@ function createEveningStarBot(botParams: BotParams): SimulatedBot {
         minBearishMove: params.minBearishMove as number ?? 50,
         targetBuyPrice: params.targetBuyPrice as number ?? 0.50,
         targetSellPrice: params.targetSellPrice as number ?? 0.60,
-        targetSize: params.targetSize as number ?? 10,
+        targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 45,
     });
 
@@ -408,7 +410,7 @@ function createMorningStarBot(botParams: BotParams): SimulatedBot {
         minBullishMove: params.minBullishMove as number ?? 50,
         targetBuyPrice: params.targetBuyPrice as number ?? 0.50,
         targetSellPrice: params.targetSellPrice as number ?? 0.60,
-        targetSize: params.targetSize as number ?? 10,
+        targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 45,
     });
 
@@ -434,7 +436,7 @@ function createMeanReversionBot(botParams: BotParams): SimulatedBot {
         exitThreshold: params.exitThreshold as number ?? 0.5,
         targetBuyPrice: params.targetBuyPrice as number ?? 0.50,
         targetSellPrice: params.targetSellPrice as number ?? 0.60,
-        targetSize: params.targetSize as number ?? 10,
+        targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 45,
     });
 
@@ -462,7 +464,7 @@ function createNCandleBot(botParams: BotParams): SimulatedBot {
         sellPriceBuffer: params.sellPriceBuffer as number ?? 0.02,
         minProfitMargin: params.minProfitMargin as number ?? 0.05,
         stopLossMultiplier: params.stopLossMultiplier as number ?? 1.5,
-        targetSize: params.targetSize as number ?? 10,
+        targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 45,
         maxTradesPerHour: params.maxTradesPerHour as number ?? 2,
     });
@@ -488,7 +490,7 @@ function createEarlyBuyerV2Bot(botParams: BotParams): SimulatedBot {
         shouldWriteLogs: shouldWriteLogs ?? false,
         targetBuyPrice: params.targetBuyPrice as number ?? 0.48,
         targetSellPrice: params.targetSellPrice as number ?? 0.60,
-        targetSize: params.targetSize as number ?? 10,
+        targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 30,
         minFlops: params.minFlops as number ?? 3,
         flopsLookbackHours: params.flopsLookbackHours as number ?? 6,
@@ -519,7 +521,7 @@ function createEsotericNormalizationBot(botParams: BotParams): SimulatedBot {
         priceScaleConstant: params.priceScaleConstant as number ?? 0,
         purchaseThreshold: params.purchaseThreshold as number ?? 0.08,
         sellPremium: params.sellPremium as number ?? 0.04,
-        targetSize: params.targetSize as number ?? 10,
+        targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 45,
         maxTradesPerPeriod: params.maxTradesPerPeriod as number ?? 2,
     });
@@ -550,7 +552,7 @@ function createQuarterlyFirstCandleBot(botParams: BotParams): SimulatedBot {
         pullbackBuffer: params.pullbackBuffer as number ?? 100,
         targetBuyPrice: params.targetBuyPrice as number ?? 0.50,
         targetSellPrice: params.targetSellPrice as number ?? 0.60,
-        targetSize: params.targetSize as number ?? 10,
+        targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 12,
     });
 
@@ -576,7 +578,7 @@ function createQuarterlyMeanReversionBot(botParams: BotParams): SimulatedBot {
         exitThreshold: params.exitThreshold as number ?? 0.5,
         targetBuyPrice: params.targetBuyPrice as number ?? 0.50,
         targetSellPrice: params.targetSellPrice as number ?? 0.60,
-        targetSize: params.targetSize as number ?? 10,
+        targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 12,
     });
 
@@ -605,7 +607,7 @@ function createQuarterlyTrendFollowingBot(botParams: BotParams): SimulatedBot {
         atrStopMultiple: params.atrStopMultiple as number ?? 2.0,
         targetBuyPrice: params.targetBuyPrice as number ?? 0.50,
         targetSellPrice: params.targetSellPrice as number ?? 0.60,
-        targetSize: params.targetSize as number ?? 10,
+        targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 12,
     });
 
@@ -633,7 +635,7 @@ function createQuarterlyNCandleBot(botParams: BotParams): SimulatedBot {
         sellPriceBuffer: params.sellPriceBuffer as number ?? 0.02,
         minProfitMargin: params.minProfitMargin as number ?? 0.05,
         stopLossMultiplier: params.stopLossMultiplier as number ?? 1.5,
-        targetSize: params.targetSize as number ?? 10,
+        targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 12,
         maxTradesPerHour: params.maxTradesPerPeriod as number ?? 1,
     });
@@ -659,7 +661,7 @@ function createQuarterlyEarlyBuyerV2Bot(botParams: BotParams): SimulatedBot {
         shouldWriteLogs: shouldWriteLogs ?? false,
         targetBuyPrice: params.targetBuyPrice as number ?? 0.48,
         targetSellPrice: params.targetSellPrice as number ?? 0.60,
-        targetSize: params.targetSize as number ?? 10,
+        targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 10,
         minFlops: params.minFlops as number ?? 3,
         flopsLookbackHours: params.flopsLookbackHours as number ?? 6,
@@ -690,7 +692,7 @@ function createQuarterlyEsotericNormalizationBot(botParams: BotParams): Simulate
         priceScaleConstant: params.priceScaleConstant as number ?? 0,
         purchaseThreshold: params.purchaseThreshold as number ?? 0.08,
         sellPremium: params.sellPremium as number ?? 0.04,
-        targetSize: params.targetSize as number ?? 10,
+        targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 10,
         maxTradesPerPeriod: params.maxTradesPerPeriod as number ?? 1,
     });
@@ -720,9 +722,10 @@ function createMarketMakerBot(botParams: BotParams): SimulatedBot {
         stopLossAmount: params.stopLossAmount as number ?? 0.10,
         buyExpirySeconds: params.buyExpirySeconds as number ?? 120,
         totalActiveTrades: params.totalActiveTrades as number ?? 10,
-        requiredVolatility: params.requiredVolatility as number ?? 1.0,
+        maxVolatility: params.maxVolatility as number ?? 1.0,
+        minVolatility: params.minVolatility as number ?? 0,
         volatilityLookbackPeriods: params.volatilityLookbackPeriods as number ?? 15,
-        targetSize: params.targetSize as number ?? 10,
+        targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 45,
     });
 
@@ -751,9 +754,10 @@ function createQuarterlyMarketMakerBot(botParams: BotParams): SimulatedBot {
         stopLossAmount: params.stopLossAmount as number ?? 0.08,
         buyExpirySeconds: params.buyExpirySeconds as number ?? 60,
         totalActiveTrades: params.totalActiveTrades as number ?? 6,
-        requiredVolatility: params.requiredVolatility as number ?? 0.8,
+        maxVolatility: params.maxVolatility as number ?? 0.8,
+        minVolatility: params.minVolatility as number ?? 0,
         volatilityLookbackPeriods: params.volatilityLookbackPeriods as number ?? 8,
-        targetSize: params.targetSize as number ?? 10,
+        targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 10,
     });
 

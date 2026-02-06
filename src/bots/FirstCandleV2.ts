@@ -14,7 +14,7 @@ interface FirstCandleV2Props extends QuantBotProps {
     buyPriceBuffer: number;         // How much above current best price to place buy order (e.g., 0.02 = 2 cents)
     sellPriceBuffer: number;        // How much below current best bid to place sell order (e.g., 0.02 = 2 cents)
     minProfitMargin: number;        // Minimum profit margin above buy price (e.g., 0.05 = 5 cents)
-    targetSize: number;
+    targetDollars: number;          // Dollar amount per position
     cutoffMinute: number;
 }
 
@@ -41,7 +41,7 @@ export class FirstCandleV2 extends QuantBot implements QuantBotRun {
     private buyPriceBuffer: number;
     private sellPriceBuffer: number;
     private minProfitMargin: number;
-    private targetSize: number;
+    private targetDollars: number;
     private cutoffMinute: number;
 
     private buyOrder?: TradeOrder;
@@ -66,7 +66,7 @@ export class FirstCandleV2 extends QuantBot implements QuantBotRun {
         this.buyPriceBuffer = props.buyPriceBuffer;
         this.sellPriceBuffer = props.sellPriceBuffer;
         this.minProfitMargin = props.minProfitMargin;
-        this.targetSize = props.targetSize;
+        this.targetDollars = props.targetDollars;
         this.cutoffMinute = props.cutoffMinute;
     }
 
@@ -252,11 +252,15 @@ export class FirstCandleV2 extends QuantBot implements QuantBotRun {
         // Calculate dynamic buy price: current ask + buffer (rounded to 2 decimals)
         const dynamicBuyPrice = Math.round((currentAskPrice + this.buyPriceBuffer) * 100) / 100;
 
-        const totalCost = dynamicBuyPrice * this.targetSize;
+        // Convert dollar amount to token quantity
+        const targetSize = this.dollarToTokens(this.targetDollars, dynamicBuyPrice);
+        if (targetSize === null) return;
+
+        const totalCost = dynamicBuyPrice * targetSize;
 
         this.writeLog(`Setting buy order at ${dynamicBuyPrice.toFixed(2)} (current ask: ${currentAskPrice.toFixed(2)}, buffer: ${this.buyPriceBuffer})`);
 
-        if (!this.checkIfOrderIsValid(dynamicBuyPrice, this.targetSize)) return;
+        if (!this.checkIfOrderIsValid(dynamicBuyPrice, targetSize)) return;
         if (!this.canSpend(totalCost)) return;
 
         // Store the actual buy price for sell order calculation
@@ -266,7 +270,7 @@ export class FirstCandleV2 extends QuantBot implements QuantBotRun {
             'fcv2-buy',
             tokenId,
             dynamicBuyPrice,
-            this.targetSize,
+            targetSize,
             Side.BUY
         );
 
@@ -306,7 +310,7 @@ export class FirstCandleV2 extends QuantBot implements QuantBotRun {
             'fcv2-sell',
             tokenId,
             dynamicSellPrice,
-            this.targetSize,
+            this.buyOrder.amount,
             Side.SELL
         );
     }
