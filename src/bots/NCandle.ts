@@ -9,12 +9,17 @@ import { MarketSchedule } from "../types/interfaces.js";
 
 interface NCandleProps extends QuantBotProps {
     candleMinutes: number;          // Duration of each candle (e.g., 10 minutes)
-    breakoutBuffer: number;         // Price buffer beyond high/low to confirm breakout (e.g., 50 = $50)
-    pullbackBuffer: number;         // How close price must return to broken level (e.g., 100 = within $100)
     buyPriceBuffer: number;         // How much above current best price to place buy order (e.g., 0.02 = 2 cents)
+    buyPriceBufferScalar: number;   // Scalar for buyPriceBuffer based on time left (0-1, higher = more aggressive as time runs out)
     sellPriceBuffer: number;        // How much below current best bid to place sell order (e.g., 0.02 = 2 cents)
     minProfitMargin: number;        // Minimum profit margin above buy price (e.g., 0.05 = 5 cents)
+    minProfitMarginScalar: number;  // Scalar for minProfitMargin based on time left (0-1, higher = accept lower margins as time runs out)
     stopLossMultiplier: number;     // Stop-loss as multiplier of candle range (e.g., 1.5 = 1.5x range)
+    stoplossTimeout: number;        // Seconds price must be under stoploss before triggering (e.g., 30)
+    stoplossTimeoutScalar: number;  // Scalar for stoplossTimeout based on time left (0-1, higher = faster stoploss as time runs out)
+    sellTimeout: number;            // Seconds after buy match to force sell at market price (e.g., 300)
+    sellTimeoutScalar: number;      // Scalar for sellTimeout based on time left (0-1, higher = faster timeout as time runs out)
+    earlySellScalar: number;        // Scalar for early sell based on current PnL and time left (0-1, higher = more willing to take profit/loss early)
     targetDollars: number;          // Dollar amount per position
     cutoffMinute: number;           // Minute after which no new trades are entered
     maxTradesPerHour: number;       // Maximum number of trades per hour
@@ -22,8 +27,6 @@ interface NCandleProps extends QuantBotProps {
 
 type TradingState =
     | 'FORMING_CANDLE'      // Current candle is forming
-    | 'WAITING_BREAKOUT'    // Candle formed, waiting for price to break range
-    | 'WAITING_PULLBACK'    // Breakout occurred, waiting for pullback confirmation
     | 'TRADE_ACTIVE'        // Trade has been placed, monitoring for exit
     | 'PAST_CUTOFF';        // Past cutoff, no more trading
 
@@ -50,12 +53,17 @@ export class NCandle extends QuantBot implements QuantBotRun {
 
     // --- Properties ---
     private candleMinutes: number;
-    private breakoutBuffer: number;
-    private pullbackBuffer: number;
     private buyPriceBuffer: number;
+    private buyPriceBufferScalar: number;
     private sellPriceBuffer: number;
     private minProfitMargin: number;
+    private minProfitMarginScalar: number;
     private stopLossMultiplier: number;
+    private stoplossTimeout: number;
+    private stoplossTimeoutScalar: number;
+    private sellTimeout: number;
+    private sellTimeoutScalar: number;
+    private earlySellScalar: number;
     private targetDollars: number;
     private cutoffMinute: number;
     private maxTradesPerHour: number;
@@ -70,10 +78,16 @@ export class NCandle extends QuantBot implements QuantBotRun {
     private previousCandles: Candle[] = [];
     private lastCandleIndex: number = -1;
     private breakoutDirection?: BreakoutDirection;
-    private breakoutConfirmedPrice?: number;
     private actualBuyPrice?: number;
     private stopLossPrice?: number;
     private entryTokenId?: string;
+    private completedCandle?: Candle;  // The candle we're using for direction detection
+
+    // --- Timeout Tracking ---
+    private stoplossBelowSince?: number;      // Timestamp when price first went below stoploss
+    private buyMatchedAt?: number;            // Timestamp when buy order was matched
+    private originalSellPrice?: number;       // Target sell price before any timeout/stoploss adjustments
+    private isStoplossOrder: boolean = false; // Whether current sell order is a stoploss order
 
     // --- Constructor ---
 
@@ -81,12 +95,17 @@ export class NCandle extends QuantBot implements QuantBotRun {
         super(props);
 
         this.candleMinutes = props.candleMinutes;
-        this.breakoutBuffer = props.breakoutBuffer;
-        this.pullbackBuffer = props.pullbackBuffer;
         this.buyPriceBuffer = props.buyPriceBuffer;
+        this.buyPriceBufferScalar = props.buyPriceBufferScalar;
         this.sellPriceBuffer = props.sellPriceBuffer;
         this.minProfitMargin = props.minProfitMargin;
+        this.minProfitMarginScalar = props.minProfitMarginScalar;
         this.stopLossMultiplier = props.stopLossMultiplier;
+        this.stoplossTimeout = props.stoplossTimeout;
+        this.stoplossTimeoutScalar = props.stoplossTimeoutScalar;
+        this.sellTimeout = props.sellTimeout;
+        this.sellTimeoutScalar = props.sellTimeoutScalar;
+        this.earlySellScalar = props.earlySellScalar;
         this.targetDollars = props.targetDollars;
         this.cutoffMinute = props.cutoffMinute;
         this.maxTradesPerHour = props.maxTradesPerHour;
@@ -119,10 +138,15 @@ export class NCandle extends QuantBot implements QuantBotRun {
         this.previousCandles = [];
         this.lastCandleIndex = -1;
         this.breakoutDirection = undefined;
-        this.breakoutConfirmedPrice = undefined;
         this.actualBuyPrice = undefined;
         this.stopLossPrice = undefined;
         this.entryTokenId = undefined;
+        this.completedCandle = undefined;
+        // Timeout tracking
+        this.stoplossBelowSince = undefined;
+        this.buyMatchedAt = undefined;
+        this.originalSellPrice = undefined;
+        this.isStoplossOrder = false;
     }
 
     private resetForNewTrade(): void {
@@ -132,10 +156,15 @@ export class NCandle extends QuantBot implements QuantBotRun {
         this.state = 'FORMING_CANDLE';
         this.currentCandle = null;
         this.breakoutDirection = undefined;
-        this.breakoutConfirmedPrice = undefined;
         this.actualBuyPrice = undefined;
         this.stopLossPrice = undefined;
         this.entryTokenId = undefined;
+        this.completedCandle = undefined;
+        // Timeout tracking
+        this.stoplossBelowSince = undefined;
+        this.buyMatchedAt = undefined;
+        this.originalSellPrice = undefined;
+        this.isStoplossOrder = false;
         // Keep previousCandles and lastCandleIndex for continuity
     }
 
@@ -152,10 +181,35 @@ export class NCandle extends QuantBot implements QuantBotRun {
     private async executeTradingLogic(): Promise<void> {
         await this.updateOrders();
 
-        // Check for stop-loss
+        // Track when buy order gets matched
+        if (this.buyOrder?.status === TradeStatus.MATCHED && !this.buyMatchedAt) {
+            this.buyMatchedAt = this.clock.now();
+            this.writeLog(`Buy order matched at ${new Date(this.buyMatchedAt).toISOString()}`);
+        }
+
+        // Check for stop-loss with timeout logic
         if (this.state === 'TRADE_ACTIVE' && this.buyOrder?.status === TradeStatus.MATCHED) {
+            // Check if we should recover from a stoploss order (price recovered)
+            const recovered = await this.checkStoplossRecovery();
+            if (recovered) {
+                // Stoploss was cancelled and original sell re-posted, continue
+            }
+
+            // Check for stoploss trigger
             const stopLossTriggered = await this.checkStopLoss();
             if (stopLossTriggered) {
+                return;
+            }
+
+            // Check for sell timeout
+            const sellTimeoutTriggered = await this.checkSellTimeout();
+            if (sellTimeoutTriggered) {
+                return;
+            }
+
+            // Check for early sell opportunity
+            const earlySellTriggered = await this.checkEarlySell();
+            if (earlySellTriggered) {
                 return;
             }
         }
@@ -200,38 +254,60 @@ export class NCandle extends QuantBot implements QuantBotRun {
 
     private async executeStateMachine(): Promise<void> {
         const currentPrice = await this.getCurrentPrice();
-        if (!currentPrice) return;
-
-        // Update candle tracking
-        this.updateCandleTracking(currentPrice);
-
-        switch (this.state) {
-            case 'FORMING_CANDLE':
-                this.handleFormingCandle(currentPrice);
-                break;
-
-            case 'WAITING_BREAKOUT':
-                this.handleWaitingBreakout(currentPrice);
-                break;
-
-            case 'WAITING_PULLBACK':
-                await this.handleWaitingPullback(currentPrice);
-                break;
+        if (!currentPrice) {
+            this.writeLog('executeStateMachine: getCurrentPrice returned null');
+            return;
         }
+
+        // Update candle tracking (this may trigger a trade on candle completion)
+        await this.updateCandleTracking(currentPrice);
+
+        // Note: WAITING_BREAKOUT and WAITING_PULLBACK states are no longer used
+        // Trading now happens immediately on candle completion based on direction
     }
 
-    private updateCandleTracking(currentPrice: number): void {
+    private async updateCandleTracking(currentPrice: number): Promise<void> {
         const currentMinute = this.clock.getMinutes();
         const candleIndex = Math.floor(currentMinute / this.candleMinutes);
 
         // Check if we've moved to a new candle
         if (candleIndex !== this.lastCandleIndex) {
             // Finalize previous candle if it exists
-            if (this.currentCandle) {
+            if (this.currentCandle && this.state === 'FORMING_CANDLE') {
                 this.currentCandle.close = currentPrice;
-                this.previousCandles.push({ ...this.currentCandle });
+                const completedCandle = { ...this.currentCandle };
+                this.previousCandles.push(completedCandle);
 
                 // Keep only last 3 candles for reference
+                if (this.previousCandles.length > 3) {
+                    this.previousCandles.shift();
+                }
+
+                const range = completedCandle.high - completedCandle.low;
+                this.completedCandle = completedCandle;
+                this.writeLog(
+                    `Candle formed [${completedCandle.startMinute}-${completedCandle.startMinute + this.candleMinutes}m]: ` +
+                    `High=${completedCandle.high.toFixed(2)}, Low=${completedCandle.low.toFixed(2)}, ` +
+                    `Range=${range.toFixed(2)}, Open=${completedCandle.open.toFixed(2)}, Close=${completedCandle.close.toFixed(2)}`
+                );
+
+                // Trade on candle direction (Option B: no breakout/pullback required)
+                if (completedCandle.close > completedCandle.open) {
+                    this.breakoutDirection = 'UP';
+                    this.writeLog(`Candle closed UP (${completedCandle.open.toFixed(2)} -> ${completedCandle.close.toFixed(2)}), entering trade`);
+                    await this.createBuyOrder();
+                } else if (completedCandle.close < completedCandle.open) {
+                    this.breakoutDirection = 'DOWN';
+                    this.writeLog(`Candle closed DOWN (${completedCandle.open.toFixed(2)} -> ${completedCandle.close.toFixed(2)}), entering trade`);
+                    await this.createBuyOrder();
+                } else {
+                    // Neutral candle (close == open), skip trading
+                    this.writeLog(`Candle neutral (close == open at ${completedCandle.close.toFixed(2)}), skipping trade`);
+                }
+            } else if (this.currentCandle) {
+                // Still finalize for non-FORMING_CANDLE states
+                this.currentCandle.close = currentPrice;
+                this.previousCandles.push({ ...this.currentCandle });
                 if (this.previousCandles.length > 3) {
                     this.previousCandles.shift();
                 }
@@ -246,18 +322,6 @@ export class NCandle extends QuantBot implements QuantBotRun {
                 startMinute: candleIndex * this.candleMinutes,
             };
             this.lastCandleIndex = candleIndex;
-
-            // For HOURLY markets: reset state on new candles since there's plenty of time
-            // For QUARTERLY markets: DON'T reset state - allow breakout/pullback patterns
-            // to span multiple candles since the 15-minute period is too short for
-            // patterns to develop within a single candle window
-            if (this.marketSchedule === MarketSchedule.HOURLY) {
-                if (this.state === 'WAITING_BREAKOUT' || this.state === 'WAITING_PULLBACK') {
-                    this.state = 'FORMING_CANDLE';
-                    this.breakoutDirection = undefined;
-                    this.breakoutConfirmedPrice = undefined;
-                }
-            }
         }
 
         // Update current candle
@@ -265,77 +329,6 @@ export class NCandle extends QuantBot implements QuantBotRun {
             this.currentCandle.high = Math.max(this.currentCandle.high, currentPrice);
             this.currentCandle.low = Math.min(this.currentCandle.low, currentPrice);
             this.currentCandle.close = currentPrice;
-        }
-    }
-
-    private handleFormingCandle(currentPrice: number): void {
-        if (!this.currentCandle) return;
-
-        const currentMinute = this.clock.getMinutes();
-        const candleEndMinute = this.currentCandle.startMinute + this.candleMinutes;
-
-        // Check if candle is complete
-        if (currentMinute >= candleEndMinute) {
-            const range = this.currentCandle.high - this.currentCandle.low;
-            this.state = 'WAITING_BREAKOUT';
-            this.writeLog(
-                `Candle formed [${this.currentCandle.startMinute}-${candleEndMinute}m]: ` +
-                `High=${this.currentCandle.high.toFixed(2)}, Low=${this.currentCandle.low.toFixed(2)}, ` +
-                `Range=${range.toFixed(2)}`
-            );
-        }
-    }
-
-    private handleWaitingBreakout(currentPrice: number): void {
-        if (!this.currentCandle) return;
-
-        const brokeAbove = currentPrice > this.currentCandle.high + this.breakoutBuffer;
-        const brokeBelow = currentPrice < this.currentCandle.low - this.breakoutBuffer;
-
-        if (brokeAbove) {
-            this.breakoutDirection = 'UP';
-            this.breakoutConfirmedPrice = this.currentCandle.high;
-            this.state = 'WAITING_PULLBACK';
-            this.writeLog(
-                `Breakout UP detected at ${currentPrice.toFixed(2)}, ` +
-                `waiting for pullback to ${this.currentCandle.high.toFixed(2)}`
-            );
-        } else if (brokeBelow) {
-            this.breakoutDirection = 'DOWN';
-            this.breakoutConfirmedPrice = this.currentCandle.low;
-            this.state = 'WAITING_PULLBACK';
-            this.writeLog(
-                `Breakout DOWN detected at ${currentPrice.toFixed(2)}, ` +
-                `waiting for pullback to ${this.currentCandle.low.toFixed(2)}`
-            );
-        }
-    }
-
-    private async handleWaitingPullback(currentPrice: number): Promise<void> {
-        if (!this.breakoutDirection || !this.breakoutConfirmedPrice) return;
-
-        const isPullbackConfirmed = this.checkPullbackConfirmation(currentPrice);
-
-        if (isPullbackConfirmed) {
-            this.writeLog(
-                `Pullback confirmed at ${currentPrice.toFixed(2)}, ` +
-                `entering ${this.breakoutDirection} trade`
-            );
-            await this.createBuyOrder();
-        }
-    }
-
-    private checkPullbackConfirmation(currentPrice: number): boolean {
-        if (!this.breakoutDirection || !this.breakoutConfirmedPrice) return false;
-
-        if (this.breakoutDirection === 'UP') {
-            const pullbackToSupport = Math.abs(currentPrice - this.breakoutConfirmedPrice) <= this.pullbackBuffer;
-            const stillAboveSupport = currentPrice >= this.breakoutConfirmedPrice;
-            return pullbackToSupport && stillAboveSupport;
-        } else {
-            const pullbackToResistance = Math.abs(currentPrice - this.breakoutConfirmedPrice) <= this.pullbackBuffer;
-            const stillBelowResistance = currentPrice <= this.breakoutConfirmedPrice;
-            return pullbackToResistance && stillBelowResistance;
         }
     }
 
@@ -360,8 +353,12 @@ export class NCandle extends QuantBot implements QuantBotRun {
         // Get current best ask price
         const currentAskPrice = await this.marketInfo.getPrice(tokenId, Side.BUY, this.targetedMarket);
 
+        // Calculate effective buy price buffer (more aggressive as time runs out)
+        const timeLeftRatio = this.getTimeLeftRatio();
+        const effectiveBuyBuffer = this.buyPriceBuffer * (1 + this.buyPriceBufferScalar * (1 - timeLeftRatio));
+
         // Calculate dynamic buy price
-        const dynamicBuyPrice = Math.round((currentAskPrice + this.buyPriceBuffer) * 100) / 100;
+        const dynamicBuyPrice = Math.round((currentAskPrice + effectiveBuyBuffer) * 100) / 100;
 
         // Calculate position size ensuring minimums are met
         const positionSize = this.calculateValidPositionSize(dynamicBuyPrice);
@@ -417,15 +414,23 @@ export class NCandle extends QuantBot implements QuantBotRun {
         // Get current best bid price
         const currentBidPrice = await this.marketInfo.getPrice(tokenId, Side.SELL, this.targetedMarket);
 
+        // Calculate effective min profit margin (accept lower margins as time runs out)
+        const timeLeftRatio = this.getTimeLeftRatio();
+        const effectiveMinProfitMargin = this.minProfitMargin * (1 - this.minProfitMarginScalar * (1 - timeLeftRatio));
+
         // Calculate dynamic sell price
         const marketSellPrice = Math.round((currentBidPrice - this.sellPriceBuffer) * 100) / 100;
-        const minSellPrice = Math.round((this.actualBuyPrice + this.minProfitMargin) * 100) / 100;
+        const minSellPrice = Math.round((this.actualBuyPrice + effectiveMinProfitMargin) * 100) / 100;
         const dynamicSellPrice = Math.min(Math.max(marketSellPrice, minSellPrice), this.MAX_SELL_PRICE);
+
+        // Store original sell price for potential recovery after stoploss
+        this.originalSellPrice = dynamicSellPrice;
+        this.isStoplossOrder = false;
 
         this.writeLog(
             `Setting sell order at ${dynamicSellPrice.toFixed(2)} ` +
             `(market: ${marketSellPrice.toFixed(2)}, min: ${minSellPrice.toFixed(2)}, ` +
-            `buy was: ${this.actualBuyPrice.toFixed(2)})`
+            `buy was: ${this.actualBuyPrice.toFixed(2)}, timeLeft: ${(timeLeftRatio * 100).toFixed(1)}%)`
         );
 
         this.sellOrder = await this.makeOrder(
@@ -452,28 +457,190 @@ export class NCandle extends QuantBot implements QuantBotRun {
     private async checkStopLoss(): Promise<boolean> {
         if (!this.stopLossPrice || !this.entryTokenId || !this.buyOrder) return false;
         if (this.buyOrder.status !== TradeStatus.MATCHED) return false;
+        if (this.isStoplossOrder) return false; // Already in stoploss mode
 
         try {
             // Get current market price for our position
             const currentBidPrice = await this.marketInfo.getPrice(this.entryTokenId, Side.SELL, this.targetedMarket);
 
             if (currentBidPrice <= this.stopLossPrice) {
-                this.writeLog(
-                    `STOP-LOSS TRIGGERED: Current bid ${currentBidPrice.toFixed(2)} <= ` +
-                    `stop-loss ${this.stopLossPrice.toFixed(2)}`
-                );
+                const now = this.clock.now();
 
-                // Cancel existing sell order if any
-                if (this.sellOrder && this.sellOrder.status === TradeStatus.LIVE) {
-                    await this.cancelTrade(this.sellOrder);
+                // Start tracking time below stoploss if not already
+                if (!this.stoplossBelowSince) {
+                    this.stoplossBelowSince = now;
+                    this.writeLog(
+                        `Price below stoploss: ${currentBidPrice.toFixed(2)} <= ${this.stopLossPrice.toFixed(2)}, ` +
+                        `starting timeout countdown`
+                    );
+                    return false;
                 }
 
-                // Create market sell (at lower price to ensure fill)
-                const emergencySellPrice = Math.max(0.01, currentBidPrice - 0.02);
+                // Calculate effective stoploss timeout (shorter as time runs out)
+                const timeLeftRatio = this.getTimeLeftRatio();
+                const effectiveTimeout = this.stoplossTimeout * (1 - this.stoplossTimeoutScalar * (1 - timeLeftRatio));
+                const elapsedSeconds = (now - this.stoplossBelowSince) / 1000;
+
+                if (elapsedSeconds >= effectiveTimeout) {
+                    this.writeLog(
+                        `STOP-LOSS TRIGGERED: Price ${currentBidPrice.toFixed(2)} below stoploss ` +
+                        `${this.stopLossPrice.toFixed(2)} for ${elapsedSeconds.toFixed(1)}s ` +
+                        `(timeout: ${effectiveTimeout.toFixed(1)}s)`
+                    );
+
+                    // Cancel existing sell order if any
+                    if (this.sellOrder && this.sellOrder.status === TradeStatus.LIVE) {
+                        await this.cancelTrade(this.sellOrder);
+                    }
+
+                    // Create market sell (at lower price to ensure fill)
+                    const emergencySellPrice = Math.max(0.01, currentBidPrice - 0.02);
+                    this.sellOrder = await this.makeOrder(
+                        'ncandle-stoploss',
+                        this.entryTokenId,
+                        emergencySellPrice,
+                        this.buyOrder.amount,
+                        Side.SELL
+                    );
+                    this.isStoplossOrder = true;
+
+                    return true;
+                }
+            } else {
+                // Price recovered above stoploss, reset timeout tracking
+                if (this.stoplossBelowSince) {
+                    this.writeLog(
+                        `Price recovered above stoploss: ${currentBidPrice.toFixed(2)} > ${this.stopLossPrice.toFixed(2)}`
+                    );
+                    this.stoplossBelowSince = undefined;
+                }
+            }
+        } catch (error) {
+            this.writeError(`Error checking stop-loss: ${error}`);
+        }
+
+        return false;
+    }
+
+    private async checkStoplossRecovery(): Promise<boolean> {
+        if (!this.isStoplossOrder || !this.sellOrder || !this.entryTokenId || !this.buyOrder) return false;
+        if (this.sellOrder.status !== TradeStatus.LIVE) return false;
+        if (!this.stopLossPrice || !this.originalSellPrice) return false;
+
+        try {
+            const currentBidPrice = await this.marketInfo.getPrice(this.entryTokenId, Side.SELL, this.targetedMarket);
+
+            // If price recovered above stoploss, cancel stoploss order and re-post original
+            if (currentBidPrice > this.stopLossPrice) {
+                this.writeLog(
+                    `STOPLOSS RECOVERY: Price ${currentBidPrice.toFixed(2)} recovered above ` +
+                    `stoploss ${this.stopLossPrice.toFixed(2)}, cancelling stoploss order`
+                );
+
+                await this.cancelTrade(this.sellOrder);
+
+                // Re-post at original target price
                 this.sellOrder = await this.makeOrder(
-                    'ncandle-stoploss',
+                    'ncandle-sell-recovered',
                     this.entryTokenId,
-                    emergencySellPrice,
+                    this.originalSellPrice,
+                    this.buyOrder.amount,
+                    Side.SELL
+                );
+                this.isStoplossOrder = false;
+                this.stoplossBelowSince = undefined;
+
+                this.writeLog(`Re-posted sell order at original price ${this.originalSellPrice.toFixed(2)}`);
+                return true;
+            }
+        } catch (error) {
+            this.writeError(`Error checking stoploss recovery: ${error}`);
+        }
+
+        return false;
+    }
+
+    private async checkSellTimeout(): Promise<boolean> {
+        if (!this.buyMatchedAt || !this.sellOrder || !this.entryTokenId || !this.buyOrder) return false;
+        if (this.sellOrder.status !== TradeStatus.LIVE) return false;
+
+        const now = this.clock.now();
+        const elapsedSeconds = (now - this.buyMatchedAt) / 1000;
+
+        // Calculate effective sell timeout (shorter as time runs out)
+        const timeLeftRatio = this.getTimeLeftRatio();
+        const effectiveTimeout = this.sellTimeout * (1 - this.sellTimeoutScalar * (1 - timeLeftRatio));
+
+        if (elapsedSeconds >= effectiveTimeout) {
+            try {
+                const currentBidPrice = await this.marketInfo.getPrice(this.entryTokenId, Side.SELL, this.targetedMarket);
+
+                this.writeLog(
+                    `SELL TIMEOUT: ${elapsedSeconds.toFixed(1)}s elapsed (timeout: ${effectiveTimeout.toFixed(1)}s), ` +
+                    `selling at market price ${currentBidPrice.toFixed(2)}`
+                );
+
+                await this.cancelTrade(this.sellOrder);
+
+                // Sell at market price
+                const marketSellPrice = Math.max(0.01, currentBidPrice - 0.01);
+                this.sellOrder = await this.makeOrder(
+                    'ncandle-timeout-sell',
+                    this.entryTokenId,
+                    marketSellPrice,
+                    this.buyOrder.amount,
+                    Side.SELL
+                );
+
+                return true;
+            } catch (error) {
+                this.writeError(`Error in sell timeout: ${error}`);
+            }
+        }
+
+        return false;
+    }
+
+    private async checkEarlySell(): Promise<boolean> {
+        if (!this.buyMatchedAt || !this.sellOrder || !this.entryTokenId || !this.buyOrder || !this.actualBuyPrice) return false;
+        if (this.sellOrder.status !== TradeStatus.LIVE) return false;
+
+        try {
+            const currentBidPrice = await this.marketInfo.getPrice(this.entryTokenId, Side.SELL, this.targetedMarket);
+            const timeLeftRatio = this.getTimeLeftRatio();
+
+            // Calculate current PnL ratio (positive = profit, negative = loss)
+            const pnlPerToken = currentBidPrice - this.actualBuyPrice;
+            const pnlRatio = pnlPerToken / this.actualBuyPrice;
+
+            // Early sell threshold: combines time pressure and PnL
+            // As time runs out (timeLeftRatio -> 0) and we have profit (pnlRatio > 0),
+            // we become more willing to sell early
+            const urgency = (1 - timeLeftRatio) * this.earlySellScalar;
+            const profitThreshold = this.minProfitMargin * (1 - urgency);
+
+            // Only consider early sell if:
+            // 1. We're in profit (even small)
+            // 2. Time pressure is high enough
+            // 3. Combined with sellTimeoutScalar for additional pressure
+            const combinedPressure = urgency * (1 + this.sellTimeoutScalar);
+            const shouldSellEarly = pnlRatio > 0 && combinedPressure > 0.5 && pnlPerToken >= profitThreshold;
+
+            if (shouldSellEarly) {
+                this.writeLog(
+                    `EARLY SELL: timeLeft=${(timeLeftRatio * 100).toFixed(1)}%, ` +
+                    `PnL=${(pnlRatio * 100).toFixed(2)}% ($${pnlPerToken.toFixed(3)}/token), ` +
+                    `pressure=${(combinedPressure * 100).toFixed(1)}%`
+                );
+
+                await this.cancelTrade(this.sellOrder);
+
+                // Sell at slightly below market to ensure fill
+                const earlySellPrice = Math.max(0.01, currentBidPrice - 0.01);
+                this.sellOrder = await this.makeOrder(
+                    'ncandle-early-sell',
+                    this.entryTokenId,
+                    earlySellPrice,
                     this.buyOrder.amount,
                     Side.SELL
                 );
@@ -481,7 +648,7 @@ export class NCandle extends QuantBot implements QuantBotRun {
                 return true;
             }
         } catch (error) {
-            this.writeError(`Error checking stop-loss: ${error}`);
+            this.writeError(`Error in early sell check: ${error}`);
         }
 
         return false;
@@ -549,6 +716,34 @@ export class NCandle extends QuantBot implements QuantBotRun {
             this.writeError(error);
             return null;
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Time-Based Helpers
+    // -------------------------------------------------------------------------
+
+    /**
+     * Returns ratio of time left in the current period (0-1).
+     * 1 = full period remaining, 0 = period about to end.
+     */
+    private getTimeLeftRatio(): number {
+        const currentMinute = this.clock.getMinutes();
+        let periodMinutes: number;
+        let minuteInPeriod: number;
+
+        if (this.marketSchedule === MarketSchedule.QUARTERLY) {
+            periodMinutes = 15;
+            minuteInPeriod = currentMinute % 15;
+        } else {
+            periodMinutes = 60;
+            minuteInPeriod = currentMinute;
+        }
+
+        // Use cutoffMinute as the effective end of trading period
+        const tradingMinutes = Math.min(this.cutoffMinute, periodMinutes);
+        const minutesLeft = Math.max(0, tradingMinutes - minuteInPeriod);
+
+        return minutesLeft / tradingMinutes;
     }
 
     // -------------------------------------------------------------------------

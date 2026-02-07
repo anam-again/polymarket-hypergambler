@@ -107,16 +107,21 @@ const meanReversionBounds: ParameterBounds = {
 };
 
 const nCandleBounds: ParameterBounds = {
-    targetDollars: { min: 5, max: 20, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 5 },
     candleMinutes: { min: 3, max: 20, step: 1 },
-    breakoutBuffer: { min: 0, max: 200 },
-    pullbackBuffer: { min: 0, max: 250 },
-    buyPriceBuffer: { min: 0.01, max: 0.10 },
-    sellPriceBuffer: { min: 0.01, max: 0.10 },
-    minProfitMargin: { min: 0.02, max: 0.15 },
-    stopLossMultiplier: { min: 0.5, max: 3.0 },
+    buyPriceBuffer: { min: 0.01, max: 0.10, step: .01 },
+    buyPriceBufferScalar: { min: -1, max: 1.0 },
+    sellPriceBuffer: { min: 0.01, max: 0.10, step: .01 },
+    minProfitMargin: { min: 0.01, max: 1, step: .01 },
+    minProfitMarginScalar: { min: -1, max: 1.0 },
+    stopLossMultiplier: { min: 0, max: 5 },
+    stoplossTimeout: { min: 10, max: 3600, step: 5 },
+    stoplossTimeoutScalar: { min: -1, max: 1.0 },
+    sellTimeout: { min: 30, max: 3600, step: 30 },
+    sellTimeoutScalar: { min: -1, max: 1.0 },
+    earlySellScalar: { min: -1, max: 1.0 },
     cutoffMinute: { min: 10, max: 55, step: 5 },
-    maxTradesPerHour: { min: 1, max: 5, step: 1 },
+    maxTradesPerHour: { min: 1, max: 20, step: 1 },
 };
 
 // ============================================================================
@@ -156,16 +161,21 @@ const quarterlyTrendFollowingBounds: ParameterBounds = {
 };
 
 const quarterlyNCandleBounds: ParameterBounds = {
-    targetDollars: { min: 5, max: 20, step: 1 },
-    candleMinutes: { min: 1, max: 4, step: 1 },  // Short candles (1-4 min) to leave time for breakout/pullback
-    breakoutBuffer: { min: 20, max: 150 },       // BTC price movement in $ to confirm breakout
-    pullbackBuffer: { min: 50, max: 200 },       // Must be >= breakoutBuffer for pattern to work
-    buyPriceBuffer: { min: 0.01, max: 0.05 },
-    sellPriceBuffer: { min: 0.01, max: 0.05 },
-    minProfitMargin: { min: 0.02, max: 0.08 },
-    stopLossMultiplier: { min: 0.5, max: 2.0 },
-    cutoffMinute: { min: 8, max: 13, step: 1 },  // Leave time after candle forms (min 8 ensures candle + pattern time)
-    maxTradesPerPeriod: { min: 1, max: 2, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 5 },
+    candleMinutes: { min: 1, max: 4, step: 1 },  // Short candles (1-4 min) for 15-min period
+    buyPriceBuffer: { min: 0.01, max: 0.05, step: .01 },
+    buyPriceBufferScalar: { min: -1, max: 1.0 },
+    sellPriceBuffer: { min: 0.01, max: 0.20, step: .01 },
+    minProfitMargin: { min: 0.01, max: 0.50, step: .01 },
+    minProfitMarginScalar: { min: 0, max: 1.0 },
+    stopLossMultiplier: { min: 0, max: 2.0 },
+    stoplossTimeout: { min: 5, max: 900, step: 5 },      // Shorter for 15-min period
+    stoplossTimeoutScalar: { min: -1, max: 1.0 },
+    sellTimeout: { min: 30, max: 900, step: 15 },       // Shorter for 15-min period
+    sellTimeoutScalar: { min: -1, max: 1.0 },
+    earlySellScalar: { min: -1, max: 1.0 },
+    cutoffMinute: { min: 2, max: 14, step: 1 },
+    maxTradesPerPeriod: { min: 1, max: 10, step: 1 },
 };
 
 const earlyBuyerV2Bounds: ParameterBounds = {
@@ -219,19 +229,25 @@ const quarterlyEsotericNormalizationBounds: ParameterBounds = {
 };
 
 const marketMakerBounds: ParameterBounds = {
-    spreadSize: { min: 2, max: 10, step: 1 },
+    spreadSize: { min: 1, max: 10, step: 1 },
     minSpreadDistance: { min: 0, max: 0.10, step: 0.01 },  // Distance from market to start spread
     profitMargin: { min: 0.01, max: 0.50 },         // 2-20 cents
-    minPrice: { min: 0.05, max: 0.90 },
+    minPrice: { min: 0.02, max: 0.90 },
     maxPrice: { min: 0.1, max: 0.98 },
-    stopLossAmount: { min: 0.01, max: 0.30 },       // 5-20 cents
-    buyExpirySeconds: { min: 30, max: 300, step: 10 },  // 30s to 5min
-    totalActiveTrades: { min: 3, max: 15, step: 1 },
+    stopLossAmount: { min: 0.01, max: 1.0 },  
+    buyExpirySeconds: { min: 10, max: 3600, step: 10 },  // 30s to 5min
+    totalActiveTrades: { min: 1, max: 15, step: 1 },
     maxVolatility: { min: 0.5, max: 100 },
     minVolatility: { min: 0, max: 100 },
-    volatilityLookbackPeriods: { min: 1, max: 30, step: 1 },
-    targetDollars: { min: 5, max: 20, step: 1 },
-    cutoffMinute: { min: 10, max: 55, step: 5 },
+    volatilityLookbackPeriods: { min: 1, max: 100, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 5 },
+    cutoffMinute: { min: 5, max: 55, step: 5 },
+    sellTimeout: { min: 10, max: 3600, step: 5 },
+    sellTimeoutScalar: { min: -10, max: 10 },
+    stoplossCheckTimeout: { min: 0, max: 3600, step: 5 },
+    stoplossCheckTimeoutScalar: { min: -10, max: 10 },
+    stoplossFailureTimeout: { min: 5, max: 3600, step: 5 },
+    stoplossFailureTimeoutScalar: { min: -10, max: -10 },
 };
 
 const quarterlyMarketMakerBounds: ParameterBounds = {
@@ -248,6 +264,13 @@ const quarterlyMarketMakerBounds: ParameterBounds = {
     volatilityLookbackPeriods: { min: 1, max: 30, step: 1 },
     targetDollars: { min: 5, max: 15, step: 1 },
     cutoffMinute: { min: 2, max: 14, step: 1 },
+    // Timeout parameters (shorter for quarterly markets)
+    sellTimeout: { min: 5, max: 60, step: 5 },
+    sellTimeoutScalar: { min: 0.5, max: 3.0 },
+    stoplossCheckTimeout: { min: 3, max: 30, step: 2 },
+    stoplossCheckTimeoutScalar: { min: 0.5, max: 3.0 },
+    stoplossFailureTimeout: { min: 3, max: 30, step: 2 },
+    stoplossFailureTimeoutScalar: { min: 0.5, max: 3.0 },
 };
 
 // ============================================================================
@@ -458,12 +481,17 @@ function createNCandleBot(botParams: BotParams): SimulatedBot {
         logDirectory: logDirectory ?? SIM_LOG_DIR,
         shouldWriteLogs: shouldWriteLogs ?? false,
         candleMinutes: params.candleMinutes as number ?? 10,
-        breakoutBuffer: params.breakoutBuffer as number ?? 50,
-        pullbackBuffer: params.pullbackBuffer as number ?? 100,
         buyPriceBuffer: params.buyPriceBuffer as number ?? 0.02,
+        buyPriceBufferScalar: params.buyPriceBufferScalar as number ?? 0.3,
         sellPriceBuffer: params.sellPriceBuffer as number ?? 0.02,
         minProfitMargin: params.minProfitMargin as number ?? 0.05,
+        minProfitMarginScalar: params.minProfitMarginScalar as number ?? 0.5,
         stopLossMultiplier: params.stopLossMultiplier as number ?? 1.5,
+        stoplossTimeout: params.stoplossTimeout as number ?? 30,
+        stoplossTimeoutScalar: params.stoplossTimeoutScalar as number ?? 0.5,
+        sellTimeout: params.sellTimeout as number ?? 300,
+        sellTimeoutScalar: params.sellTimeoutScalar as number ?? 0.5,
+        earlySellScalar: params.earlySellScalar as number ?? 0.3,
         targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 45,
         maxTradesPerHour: params.maxTradesPerHour as number ?? 2,
@@ -629,12 +657,17 @@ function createQuarterlyNCandleBot(botParams: BotParams): SimulatedBot {
         logDirectory: logDirectory ?? SIM_LOG_DIR,
         shouldWriteLogs: shouldWriteLogs ?? false,
         candleMinutes: params.candleMinutes as number ?? 3,
-        breakoutBuffer: params.breakoutBuffer as number ?? 50,
-        pullbackBuffer: params.pullbackBuffer as number ?? 100,
         buyPriceBuffer: params.buyPriceBuffer as number ?? 0.02,
+        buyPriceBufferScalar: params.buyPriceBufferScalar as number ?? 0.3,
         sellPriceBuffer: params.sellPriceBuffer as number ?? 0.02,
         minProfitMargin: params.minProfitMargin as number ?? 0.05,
+        minProfitMarginScalar: params.minProfitMarginScalar as number ?? 0.5,
         stopLossMultiplier: params.stopLossMultiplier as number ?? 1.5,
+        stoplossTimeout: params.stoplossTimeout as number ?? 15,
+        stoplossTimeoutScalar: params.stoplossTimeoutScalar as number ?? 0.5,
+        sellTimeout: params.sellTimeout as number ?? 120,
+        sellTimeoutScalar: params.sellTimeoutScalar as number ?? 0.5,
+        earlySellScalar: params.earlySellScalar as number ?? 0.3,
         targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 12,
         maxTradesPerHour: params.maxTradesPerPeriod as number ?? 1,
@@ -727,6 +760,13 @@ function createMarketMakerBot(botParams: BotParams): SimulatedBot {
         volatilityLookbackPeriods: params.volatilityLookbackPeriods as number ?? 15,
         targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 45,
+        // Timeout parameters
+        sellTimeout: params.sellTimeout as number ?? 30,
+        sellTimeoutScalar: params.sellTimeoutScalar as number ?? 1.0,
+        stoplossCheckTimeout: params.stoplossCheckTimeout as number ?? 10,
+        stoplossCheckTimeoutScalar: params.stoplossCheckTimeoutScalar as number ?? 1.0,
+        stoplossFailureTimeout: params.stoplossFailureTimeout as number ?? 15,
+        stoplossFailureTimeoutScalar: params.stoplossFailureTimeoutScalar as number ?? 1.0,
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
@@ -759,6 +799,13 @@ function createQuarterlyMarketMakerBot(botParams: BotParams): SimulatedBot {
         volatilityLookbackPeriods: params.volatilityLookbackPeriods as number ?? 8,
         targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 10,
+        // Timeout parameters (shorter defaults for quarterly)
+        sellTimeout: params.sellTimeout as number ?? 15,
+        sellTimeoutScalar: params.sellTimeoutScalar as number ?? 1.0,
+        stoplossCheckTimeout: params.stoplossCheckTimeout as number ?? 5,
+        stoplossCheckTimeoutScalar: params.stoplossCheckTimeoutScalar as number ?? 1.0,
+        stoplossFailureTimeout: params.stoplossFailureTimeout as number ?? 8,
+        stoplossFailureTimeoutScalar: params.stoplossFailureTimeoutScalar as number ?? 1.0,
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);

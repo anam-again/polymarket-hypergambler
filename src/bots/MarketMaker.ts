@@ -32,6 +32,14 @@ interface MarketMakerProps extends QuantBotProps {
     // Standard parameters
     targetDollars: number;        // Dollar amount per position
     cutoffMinute: number;         // Stop new trades after this minute
+
+    // Timeout configuration
+    sellTimeout: number;                  // Base timeout (seconds) before canceling unfilled sell order
+    sellTimeoutScalar: number;            // Scales timeout based on time left in period and profit status
+    stoplossCheckTimeout: number;         // Base delay (seconds) before posting stoploss after buy match
+    stoplossCheckTimeoutScalar: number;   // Scales delay based on time remaining in period
+    stoplossFailureTimeout: number;       // Seconds before re-adjusting unfilled stoploss order
+    stoplossFailureTimeoutScalar: number; // Scales timeout based on time remaining in period
 }
 
 interface ActivePosition {
@@ -45,6 +53,9 @@ interface ActivePosition {
     buyExpired?: boolean;         // Track if buy was expired and needs retry
     tokensSold: number;           // Track how many tokens have been sold (to prevent overselling)
     sellOrderHistory: string[];   // Track all sell order IDs created for this position
+    buyMatchedAt?: number;        // Timestamp when buy was matched
+    sellOrderCreatedAt?: number;  // Timestamp when sell order was created
+    stoplossCreatedAt?: number;   // Timestamp when stoploss order was created
 }
 
 type TokenDirection = 'UP' | 'DOWN';
@@ -76,6 +87,14 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
     private targetDollars: number;
     private cutoffMinute: number;
 
+    // --- Timeout Properties ---
+    private sellTimeout: number;
+    private sellTimeoutScalar: number;
+    private stoplossCheckTimeout: number;
+    private stoplossCheckTimeoutScalar: number;
+    private stoplossFailureTimeout: number;
+    private stoplossFailureTimeoutScalar: number;
+
     // --- Position Tracking ---
     private upPositions: Map<string, ActivePosition> = new Map();
     private downPositions: Map<string, ActivePosition> = new Map();
@@ -101,6 +120,14 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
         this.volatilityLookbackPeriods = props.volatilityLookbackPeriods;
         this.targetDollars = props.targetDollars;
         this.cutoffMinute = props.cutoffMinute;
+
+        // Timeout configuration
+        this.sellTimeout = props.sellTimeout ?? 30;
+        this.sellTimeoutScalar = props.sellTimeoutScalar ?? 1.0;
+        this.stoplossCheckTimeout = props.stoplossCheckTimeout ?? 10;
+        this.stoplossCheckTimeoutScalar = props.stoplossCheckTimeoutScalar ?? 1.0;
+        this.stoplossFailureTimeout = props.stoplossFailureTimeout ?? 15;
+        this.stoplossFailureTimeoutScalar = props.stoplossFailureTimeoutScalar ?? 1.0;
     }
 
     // --- Main Run Loop ---
@@ -108,6 +135,43 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
     public async run(): Promise<void> {
         this.setupPeriodReset();
         this.startTradingLoop();
+    }
+
+    // -------------------------------------------------------------------------
+    // Timeout Calculation Helpers
+    // -------------------------------------------------------------------------
+
+    /**
+     * Calculates a scaled timeout based on time remaining in the trading period.
+     * More time remaining = longer timeout (patience early, urgency late).
+     *
+     * @param baseTimeout - Base timeout in seconds
+     * @param scalar - Scaling factor (1.0 = no scaling)
+     * @returns Scaled timeout in milliseconds
+     */
+    private calculateScaledTimeout(baseTimeout: number, scalar: number): number {
+        // Calculate time remaining in period (0-1, where 1 = full period remaining)
+        const minuteInPeriod = this.getMinutesIntoPeriod();
+        const periodLength = this.marketSchedule === MarketSchedule.QUARTERLY ? 15 : 60;
+        const timeRemaining = (periodLength - minuteInPeriod) / periodLength;
+
+        // Scale timeout: more time remaining = longer timeout
+        // At period start (timeRemaining=1): timeout * scalar
+        // At period end (timeRemaining=0): timeout * 1.0 (unscaled)
+        const scaledFactor = 1 + (scalar - 1) * timeRemaining;
+        return Math.max(5000, baseTimeout * scaledFactor * 1000); // Minimum 5 seconds, convert to ms
+    }
+
+    /**
+     * Gets the current minute within the trading period.
+     * For quarterly markets (15-min periods), returns 0-14.
+     * For hourly markets (60-min periods), returns 0-59.
+     */
+    private getMinutesIntoPeriod(): number {
+        const currentMinute = this.clock.getMinutes();
+        return this.marketSchedule === MarketSchedule.QUARTERLY
+            ? currentMinute % 15
+            : currentMinute;
     }
 
     // -------------------------------------------------------------------------
@@ -488,6 +552,18 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
             return false;
         }
 
+        // After buy matched, wait stoplossCheckTimeout before checking stoploss
+        if (!position.buyMatchedAt) {
+            position.buyMatchedAt = this.clock.now();
+        }
+        const scaledDelay = this.calculateScaledTimeout(
+            this.stoplossCheckTimeout,
+            this.stoplossCheckTimeoutScalar
+        );
+        if (this.clock.now() - position.buyMatchedAt < scaledDelay) {
+            return false; // Not yet time to check stoploss
+        }
+
         try {
             const currentBidPrice = await this.marketInfo.getPrice(tokenId, Side.SELL, this.targetedMarket);
 
@@ -533,6 +609,7 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
                     if (newSellOrder) {
                         position.sellOrder = newSellOrder;
                         position.sellOrderHistory.push(newSellOrder.orderId);
+                        position.stoplossCreatedAt = this.clock.now();
                     }
                 }
 
@@ -612,13 +689,23 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
             }
 
             // Case 2: Price in "danger zone" (above stop-loss but below entry)
-            // Update emergency sell price if it's become stale
+            // Update emergency sell price if it's become stale (by price OR timeout)
             if (currentBidPrice > position.stopLossPrice && position.sellOrder?.status === TradeStatus.LIVE) {
                 const currentSellPrice = position.sellOrder.targetSellPrice ?? 0;
                 const optimalEmergencyPrice = Math.max(0.01, currentBidPrice - 0.01);
 
-                // If current sell price is more than 2 cents below optimal, update it
-                if (optimalEmergencyPrice - currentSellPrice >= 0.02) {
+                // Check if stoploss order has timed out (not filled within configured time)
+                let stoplossTimedOut = false;
+                if (position.stoplossCreatedAt) {
+                    const scaledTimeout = this.calculateScaledTimeout(
+                        this.stoplossFailureTimeout,
+                        this.stoplossFailureTimeoutScalar
+                    );
+                    stoplossTimedOut = this.clock.now() - position.stoplossCreatedAt > scaledTimeout;
+                }
+
+                // If current sell price is more than 2 cents below optimal, OR timeout exceeded, update it
+                if (optimalEmergencyPrice - currentSellPrice >= 0.02 || stoplossTimedOut) {
                     this.writeLog(
                         `STOP-LOSS UPDATE: ${direction} position updating emergency sell from ` +
                         `${currentSellPrice.toFixed(2)} to ${optimalEmergencyPrice.toFixed(2)} ` +
@@ -670,6 +757,7 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
                     if (newSellOrder) {
                         position.sellOrder = newSellOrder;
                         position.sellOrderHistory.push(newSellOrder.orderId);
+                        position.stoplossCreatedAt = this.clock.now();
                     }
 
                     return true;
@@ -778,6 +866,10 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
         if (newSellOrder) {
             position.sellOrder = newSellOrder;
             position.sellOrderHistory.push(newSellOrder.orderId);
+            position.sellOrderCreatedAt = this.clock.now();
+            if (position.stopLossTriggered) {
+                position.stoplossCreatedAt = this.clock.now();
+            }
         }
     }
 

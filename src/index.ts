@@ -67,7 +67,7 @@ OrderBatcher.initialize(clobClient, 200);
 
 const prodBots: QuantBotRun[] = [
   ...([
-    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, candleMinutes: 4, breakoutBuffer: 50, pullbackBuffer: 10, targetBuyPrice: .52, targetSellPrice: .90, cutoffMinute: 12, targetDollars: 3, hourlyDollarLimit: 5 },
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, candleMinutes: 4, breakoutBuffer: 50, pullbackBuffer: 10, targetBuyPrice: .52, targetSellPrice: .90, cutoffMinute: 12, targetDollars: 5, hourlyDollarLimit: 5 },
   ]).map((v) => {
     return new FirstCandle({
       ...v,
@@ -117,9 +117,11 @@ const testBots: QuantBotRun[] = [
     })
   }),
   ...([
-    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, cutoffMinute: 30, spreadSize: 5, minSpreadDistance: 0, profitMargin: .15, minPrice: .45, maxPrice: .57, stopLossAmount: .2, totalActiveTrades: 5, maxVolatility: 2.1, minVolatility: 0, volatilityLookbackPeriods: 20, buyExpirySeconds: 40 },
-    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, cutoffMinute: 10, spreadSize: 8, minSpreadDistance: 0, profitMargin: .43, minPrice: .38, maxPrice: .51, stopLossAmount: .02, totalActiveTrades: 5, maxVolatility: 6.9, minVolatility: 0, volatilityLookbackPeriods: 20, buyExpirySeconds: 40 },
-    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, cutoffMinute: 15, spreadSize: 6, minSpreadDistance: 0.06, profitMargin: .44, minPrice: .29, maxPrice: .68, stopLossAmount: .01, totalActiveTrades: 5, maxVolatility: 67.3, minVolatility: 32, volatilityLookbackPeriods: 7, buyExpirySeconds: 200 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, cutoffMinute: 30, spreadSize: 5, minSpreadDistance: 0, profitMargin: .15, minPrice: .45, maxPrice: .57, stopLossAmount: .2, totalActiveTrades: 5, maxVolatility: 2.1, minVolatility: 0, volatilityLookbackPeriods: 20, buyExpirySeconds: 40, sellTimeout: 10, sellTimeoutScalar: -1.9, stoplossCheckTimeout: 2550, stoplossCheckTimeoutScalar: -6.9, stoplossFailureTimeout: 764, stoplossFailureTimeoutScalar: -10 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, cutoffMinute: 10, spreadSize: 8, minSpreadDistance: 0, profitMargin: .43, minPrice: .38, maxPrice: .51, stopLossAmount: .02, totalActiveTrades: 5, maxVolatility: 6.9, minVolatility: 0, volatilityLookbackPeriods: 20, buyExpirySeconds: 40, sellTimeout: 10, sellTimeoutScalar: -1.9, stoplossCheckTimeout: 2550, stoplossCheckTimeoutScalar: -6.9, stoplossFailureTimeout: 764, stoplossFailureTimeoutScalar: -10 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, cutoffMinute: 15, spreadSize: 6, minSpreadDistance: 0.06, profitMargin: .44, minPrice: .29, maxPrice: .68, stopLossAmount: .01, totalActiveTrades: 5, maxVolatility: 67.3, minVolatility: 32, volatilityLookbackPeriods: 7, buyExpirySeconds: 200, sellTimeout: 10, sellTimeoutScalar: -1.9, stoplossCheckTimeout: 2550, stoplossCheckTimeoutScalar: -6.9, stoplossFailureTimeout: 764, stoplossFailureTimeoutScalar: -10 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, cutoffMinute: 20, spreadSize: 8, minSpreadDistance: 0.05, profitMargin: .32, minPrice: .17, maxPrice: .42, stopLossAmount: 1, totalActiveTrades: 5, maxVolatility: 96.5, minVolatility: 73.3, volatilityLookbackPeriods: 53, buyExpirySeconds: 2160, sellTimeout: 10, sellTimeoutScalar: -1.9, stoplossCheckTimeout: 2550, stoplossCheckTimeoutScalar: -6.9, stoplossFailureTimeout: 764, stoplossFailureTimeoutScalar: -10 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, cutoffMinute: 20, spreadSize: 8, minSpreadDistance: 0.05, profitMargin: .32, minPrice: .17, maxPrice: .42, stopLossAmount: 1, totalActiveTrades: 5, maxVolatility: 96.5, minVolatility: 20, volatilityLookbackPeriods: 53, buyExpirySeconds: 2160, sellTimeout: 10, sellTimeoutScalar: -1.9, stoplossCheckTimeout: 2550, stoplossCheckTimeoutScalar: -6.9, stoplossFailureTimeout: 764, stoplossFailureTimeoutScalar: -10 },
   ]).map((v) => {
     return new MarketMaker({
       name: `mmaker-${targetMarketToShortname(v.targetedMarket)}-ss${v.spreadSize}-pm${v.profitMargin}-min${v.minPrice}-max${v.maxPrice}-sl${v.stopLossAmount}-maxv${v.maxVolatility}-minv${v.minVolatility}-vlp${v.volatilityLookbackPeriods}-bes${v.buyExpirySeconds}`,
@@ -210,6 +212,16 @@ const testBots: QuantBotRun[] = [
     return new FirstCandle({
       ...v,
       name: `fcandle-${targetMarketToShortname(v.targetedMarket)}-${v.candleMinutes}m-bb${v.candleMinutes}-pp${v.pullbackBuffer}-b${v.targetBuyPrice}-s${v.targetSellPrice}-co${v.cutoffMinute}`,
+      ...commonTestProps,
+    })
+  }),
+  ...([
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, candleMinutes: 5, breakoutBuffer: 50, pullbackBuffer: 50, buyPriceBuffer: .01, buyPriceBufferScalar: 0.3, sellPriceBuffer: .01, minProfitMargin: .05, minProfitMarginScalar: 0.5, stopLossMultiplier: 1, stoplossTimeout: 30, stoplossTimeoutScalar: 0.5, sellTimeout: 300, sellTimeoutScalar: 0.5, earlySellScalar: 0.3, cutoffMinute: 20, maxTradesPerHour: 10 },
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, candleMinutes: 5, breakoutBuffer: 50, pullbackBuffer: 50, buyPriceBuffer: .01, buyPriceBufferScalar: 0.3, sellPriceBuffer: .01, minProfitMargin: .05, minProfitMarginScalar: 0.5, stopLossMultiplier: 1, stoplossTimeout: 15, stoplossTimeoutScalar: 0.5, sellTimeout: 120, sellTimeoutScalar: 0.5, earlySellScalar: 0.3, cutoffMinute: 20, maxTradesPerHour: 10 },
+  ]).map((v) => {
+    return new NCandle({
+      ...v,
+      name: `ncandle-${targetMarketToShortname(v.targetedMarket)}-cm${v.candleMinutes}-bb${v.breakoutBuffer}-pbb${v.pullbackBuffer}-mpm${v.minProfitMargin}-slm${v.stopLossMultiplier}-com${v.cutoffMinute}`,
       ...commonTestProps,
     })
   }),
