@@ -29,6 +29,7 @@ interface BtcOrderBooks {
 export interface MarketInfoSimple {
     clobTokenIds: string[],
     outcomePrices: string[],
+    closed: boolean,
     error?: boolean,
 }
 
@@ -245,10 +246,12 @@ export class MarketInfo {
                 });
 
                 const markets = (responseJson as { markets?: { clobTokenIds?: string, outcomePrices: string }[] })?.markets ?? [];
+                const closed =  ((responseJson as {closed?: string})?.closed ?? 'false') === 'true' ? true : false;
                 if (!markets) throw Error("Failed to getBitcoinHourlyClobs");
                 const marketJson = {
                     clobTokenIds: JSON.parse(markets[0].clobTokenIds || "") as string[],
                     outcomePrices: JSON.parse(markets[0].outcomePrices || "") as string[],
+                    closed: closed,
                 };
                 if (!marketJson.clobTokenIds) throw Error("Failed to parse clobTokenIds");
                 if (!marketJson.outcomePrices) throw Error("Failed to JSON parse outcomePrices");
@@ -256,6 +259,7 @@ export class MarketInfo {
                 const result: MarketInfoSimple = {
                     clobTokenIds: marketJson.clobTokenIds,
                     outcomePrices: marketJson.outcomePrices,
+                    closed: closed,
                 };
 
                 // Store in cache
@@ -274,6 +278,7 @@ export class MarketInfo {
                     clobTokenIds: [],
                     outcomePrices: [],
                     error: true,
+                    closed: false,
                 }
                 this.marketInfoCache.set(url, {
                     data: result,
@@ -406,15 +411,15 @@ export class MarketInfo {
             const currentInterval = MarketInfo.getFifteenMinuteTimestamp(now);
             const cachedInterval = MarketInfo.getFifteenMinuteTimestamp(fetchedAt);
             isExpired = fetchedAt === 0 ||
-                        currentInterval !== cachedInterval ||
-                        now - fetchedAt >= MarketInfo.UPDATE_DATA_INTERVAL;
+                currentInterval !== cachedInterval ||
+                now - fetchedAt >= MarketInfo.UPDATE_DATA_INTERVAL;
         } else {
             // Hourly markets: expire on hour boundaries OR time-based expiry
             const currentHour = new Date(now).getHours();
             const cachedHour = new Date(fetchedAt).getHours();
             isExpired = fetchedAt === 0 ||
-                        currentHour !== cachedHour ||
-                        now - fetchedAt >= MarketInfo.UPDATE_DATA_INTERVAL;
+                currentHour !== cachedHour ||
+                now - fetchedAt >= MarketInfo.UPDATE_DATA_INTERVAL;
         }
 
         const cached = this.cachedOrderBooks.get(targetedMarket);
@@ -434,7 +439,7 @@ export class MarketInfo {
                     const tokenDownOrderBook = orderBooks.find((book) => {
                         return book.asset_id === clobTokenIds[1];
                     });
-                    if(!tokenUpOrderBook || !tokenDownOrderBook) {
+                    if (!tokenUpOrderBook || !tokenDownOrderBook) {
                         throw Error("Failed to parse order book");
                     }
                     const result: BtcOrderBooks = {

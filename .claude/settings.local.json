@@ -15,7 +15,9 @@
       "Bash(npm run histSim:*)",
       "Bash(npm install:*)",
       "Bash(npx tsx:*)",
-      "Bash(./analyze-mmaker-trades.sh:*)"
+      "Bash(./analyze-mmaker-trades.sh:*)",
+      "Bash(bash scripts/analyze-ncandle-trades.sh:*)",
+      "Bash(wc:*)"
     ]
   }
 }

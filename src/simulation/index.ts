@@ -24,6 +24,7 @@ import { NCandle } from '../bots/NCandle.js';
 import { EarlyBuyerV2 } from '../bots/EarlyBuyerV2.js';
 import { EsotericNormalization } from '../bots/EsotericNormalization.js';
 import { MarketMaker } from '../bots/MarketMaker.js';
+import { ScalingPEQ } from '../utils/ScalingPEQ.js';
 
 // Re-export adapter utilities for external use
 export { createSimulatedBot, createMockClobClient, QuantBotSimulationAdapter } from './QuantBotSimulationAdapter.js';
@@ -110,15 +111,37 @@ const nCandleBounds: ParameterBounds = {
     targetDollars: { min: 5, max: 20, step: 5 },
     candleMinutes: { min: 3, max: 20, step: 1 },
     buyPriceBuffer: { min: 0.01, max: 0.10, step: .01 },
-    buyPriceBufferScalar: { min: -1, max: 1.0 },
+    // buyPriceBufferPEQ coefficients (flat params for optimizer)
+    buyPriceBufferPEQ_c0: { min: 0, max: 2.0 },
+    buyPriceBufferPEQ_c1: { min: -2, max: 2.0 },
+    buyPriceBufferPEQ_c2: { min: -2, max: 2.0 },
+    buyPriceBufferPEQ_c3: { min: -2, max: 2.0 },
     sellPriceBuffer: { min: 0.01, max: 0.10, step: .01 },
     minProfitMargin: { min: 0.01, max: 1, step: .01 },
-    minProfitMarginScalar: { min: -1, max: 1.0 },
+    // minProfitMarginPEQ coefficients
+    minProfitMarginPEQ_c0: { min: 0, max: 2.0 },
+    minProfitMarginPEQ_c1: { min: -2, max: 2.0 },
+    minProfitMarginPEQ_c2: { min: -2, max: 2.0 },
+    minProfitMarginPEQ_c3: { min: -2, max: 2.0 },
     stopLossMultiplier: { min: 0, max: 5 },
     stoplossTimeout: { min: 10, max: 3600, step: 5 },
-    stoplossTimeoutScalar: { min: -1, max: 1.0 },
+    // stoplossTimeoutPEQ coefficients
+    stoplossTimeoutPEQ_c0: { min: 0, max: 2.0 },
+    stoplossTimeoutPEQ_c1: { min: -2, max: 2.0 },
+    stoplossTimeoutPEQ_c2: { min: -2, max: 2.0 },
+    stoplossTimeoutPEQ_c3: { min: -2, max: 2.0 },
     sellTimeout: { min: 30, max: 3600, step: 30 },
-    sellTimeoutScalar: { min: -1, max: 1.0 },
+    // sellTimeoutPEQ coefficients
+    sellTimeoutPEQ_c0: { min: 0, max: 2.0 },
+    sellTimeoutPEQ_c1: { min: -2, max: 2.0 },
+    sellTimeoutPEQ_c2: { min: -2, max: 2.0 },
+    sellTimeoutPEQ_c3: { min: -2, max: 2.0 },
+    stoplossFailureTimeout: { min: 5, max: 3600, step: 5 },
+    // stoplossFailureTimeoutPEQ coefficients
+    stoplossFailureTimeoutPEQ_c0: { min: 0, max: 2.0 },
+    stoplossFailureTimeoutPEQ_c1: { min: -2, max: 2.0 },
+    stoplossFailureTimeoutPEQ_c2: { min: -2, max: 2.0 },
+    stoplossFailureTimeoutPEQ_c3: { min: -2, max: 2.0 },
     earlySellScalar: { min: -1, max: 1.0 },
     cutoffMinute: { min: 10, max: 55, step: 5 },
     maxTradesPerHour: { min: 1, max: 20, step: 1 },
@@ -130,12 +153,12 @@ const nCandleBounds: ParameterBounds = {
 
 const quarterlyFirstCandleBounds: ParameterBounds = {
     targetDollars: { min: 5, max: 20, step: 1 },
-    candleMinutes: { min: 1, max: 12, step: 1 },  // Smaller for 15-min period
+    candleMinutes: { min: 1, max: 7, step: 1 },  // Smaller for 15-min period
     breakoutBuffer: { min: 0, max: 500 },
     pullbackBuffer: { min: 0, max: 500 },
     targetBuyPrice: { min: 0.02, max: 0.95 },
     targetSellPrice: { min: 0.05, max: 0.98 },
-    cutoffMinute: { min: 5, max: 13, step: 1 },  // Within 15-min period
+    cutoffMinute: { min: 5, max: 14, step: 1 },  // Within 15-min period
 };
 
 const quarterlyMeanReversionBounds: ParameterBounds = {
@@ -164,15 +187,37 @@ const quarterlyNCandleBounds: ParameterBounds = {
     targetDollars: { min: 5, max: 20, step: 5 },
     candleMinutes: { min: 1, max: 4, step: 1 },  // Short candles (1-4 min) for 15-min period
     buyPriceBuffer: { min: 0.01, max: 0.05, step: .01 },
-    buyPriceBufferScalar: { min: -1, max: 1.0 },
+    // buyPriceBufferPEQ coefficients (flat params for optimizer)
+    buyPriceBufferPEQ_c0: { min: 0, max: 2.0 },
+    buyPriceBufferPEQ_c1: { min: -2, max: 2.0 },
+    buyPriceBufferPEQ_c2: { min: -2, max: 2.0 },
+    buyPriceBufferPEQ_c3: { min: -2, max: 2.0 },
     sellPriceBuffer: { min: 0.01, max: 0.20, step: .01 },
     minProfitMargin: { min: 0.01, max: 0.50, step: .01 },
-    minProfitMarginScalar: { min: 0, max: 1.0 },
+    // minProfitMarginPEQ coefficients
+    minProfitMarginPEQ_c0: { min: 0, max: 2.0 },
+    minProfitMarginPEQ_c1: { min: -2, max: 2.0 },
+    minProfitMarginPEQ_c2: { min: -2, max: 2.0 },
+    minProfitMarginPEQ_c3: { min: -2, max: 2.0 },
     stopLossMultiplier: { min: 0, max: 2.0 },
     stoplossTimeout: { min: 5, max: 900, step: 5 },      // Shorter for 15-min period
-    stoplossTimeoutScalar: { min: -1, max: 1.0 },
+    // stoplossTimeoutPEQ coefficients
+    stoplossTimeoutPEQ_c0: { min: 0, max: 2.0 },
+    stoplossTimeoutPEQ_c1: { min: -2, max: 2.0 },
+    stoplossTimeoutPEQ_c2: { min: -2, max: 2.0 },
+    stoplossTimeoutPEQ_c3: { min: -2, max: 2.0 },
     sellTimeout: { min: 30, max: 900, step: 15 },       // Shorter for 15-min period
-    sellTimeoutScalar: { min: -1, max: 1.0 },
+    // sellTimeoutPEQ coefficients
+    sellTimeoutPEQ_c0: { min: 0, max: 2.0 },
+    sellTimeoutPEQ_c1: { min: -2, max: 2.0 },
+    sellTimeoutPEQ_c2: { min: -2, max: 2.0 },
+    sellTimeoutPEQ_c3: { min: -2, max: 2.0 },
+    stoplossFailureTimeout: { min: 5, max: 900, step: 5 },
+    // stoplossFailureTimeoutPEQ coefficients
+    stoplossFailureTimeoutPEQ_c0: { min: 0, max: 2.0 },
+    stoplossFailureTimeoutPEQ_c1: { min: -2, max: 2.0 },
+    stoplossFailureTimeoutPEQ_c2: { min: -2, max: 2.0 },
+    stoplossFailureTimeoutPEQ_c3: { min: -2, max: 2.0 },
     earlySellScalar: { min: -1, max: 1.0 },
     cutoffMinute: { min: 2, max: 14, step: 1 },
     maxTradesPerPeriod: { min: 1, max: 10, step: 1 },
@@ -234,7 +279,7 @@ const marketMakerBounds: ParameterBounds = {
     profitMargin: { min: 0.01, max: 0.50 },         // 2-20 cents
     minPrice: { min: 0.02, max: 0.90 },
     maxPrice: { min: 0.1, max: 0.98 },
-    stopLossAmount: { min: 0.01, max: 1.0 },  
+    stopLossAmount: { min: 0.01, max: 1.0 },
     buyExpirySeconds: { min: 10, max: 3600, step: 10 },  // 30s to 5min
     totalActiveTrades: { min: 1, max: 15, step: 1 },
     maxVolatility: { min: 0.5, max: 100 },
@@ -243,11 +288,23 @@ const marketMakerBounds: ParameterBounds = {
     targetDollars: { min: 5, max: 20, step: 5 },
     cutoffMinute: { min: 5, max: 55, step: 5 },
     sellTimeout: { min: 10, max: 3600, step: 5 },
-    sellTimeoutScalar: { min: -10, max: 10 },
+    // sellTimeoutPEQ coefficients
+    sellTimeoutPEQ_c0: { min: 0, max: 2.0 },
+    sellTimeoutPEQ_c1: { min: -2, max: 2.0 },
+    sellTimeoutPEQ_c2: { min: -2, max: 2.0 },
+    sellTimeoutPEQ_c3: { min: -2, max: 2.0 },
     stoplossCheckTimeout: { min: 0, max: 3600, step: 5 },
-    stoplossCheckTimeoutScalar: { min: -10, max: 10 },
+    // stoplossCheckTimeoutPEQ coefficients
+    stoplossCheckTimeoutPEQ_c0: { min: 0, max: 2.0 },
+    stoplossCheckTimeoutPEQ_c1: { min: -2, max: 2.0 },
+    stoplossCheckTimeoutPEQ_c2: { min: -2, max: 2.0 },
+    stoplossCheckTimeoutPEQ_c3: { min: -2, max: 2.0 },
     stoplossFailureTimeout: { min: 5, max: 3600, step: 5 },
-    stoplossFailureTimeoutScalar: { min: -10, max: -10 },
+    // stoplossFailureTimeoutPEQ coefficients
+    stoplossFailureTimeoutPEQ_c0: { min: 0, max: 2.0 },
+    stoplossFailureTimeoutPEQ_c1: { min: -2, max: 2.0 },
+    stoplossFailureTimeoutPEQ_c2: { min: -2, max: 2.0 },
+    stoplossFailureTimeoutPEQ_c3: { min: -2, max: 2.0 },
 };
 
 const quarterlyMarketMakerBounds: ParameterBounds = {
@@ -266,11 +323,23 @@ const quarterlyMarketMakerBounds: ParameterBounds = {
     cutoffMinute: { min: 2, max: 14, step: 1 },
     // Timeout parameters (shorter for quarterly markets)
     sellTimeout: { min: 5, max: 60, step: 5 },
-    sellTimeoutScalar: { min: 0.5, max: 3.0 },
+    // sellTimeoutPEQ coefficients
+    sellTimeoutPEQ_c0: { min: 0, max: 2.0 },
+    sellTimeoutPEQ_c1: { min: -2, max: 2.0 },
+    sellTimeoutPEQ_c2: { min: -2, max: 2.0 },
+    sellTimeoutPEQ_c3: { min: -2, max: 2.0 },
     stoplossCheckTimeout: { min: 3, max: 30, step: 2 },
-    stoplossCheckTimeoutScalar: { min: 0.5, max: 3.0 },
+    // stoplossCheckTimeoutPEQ coefficients
+    stoplossCheckTimeoutPEQ_c0: { min: 0, max: 2.0 },
+    stoplossCheckTimeoutPEQ_c1: { min: -2, max: 2.0 },
+    stoplossCheckTimeoutPEQ_c2: { min: -2, max: 2.0 },
+    stoplossCheckTimeoutPEQ_c3: { min: -2, max: 2.0 },
     stoplossFailureTimeout: { min: 3, max: 30, step: 2 },
-    stoplossFailureTimeoutScalar: { min: 0.5, max: 3.0 },
+    // stoplossFailureTimeoutPEQ coefficients
+    stoplossFailureTimeoutPEQ_c0: { min: 0, max: 2.0 },
+    stoplossFailureTimeoutPEQ_c1: { min: -2, max: 2.0 },
+    stoplossFailureTimeoutPEQ_c2: { min: -2, max: 2.0 },
+    stoplossFailureTimeoutPEQ_c3: { min: -2, max: 2.0 },
 };
 
 // ============================================================================
@@ -350,10 +419,15 @@ function createFirstCandleBot(botParams: BotParams): SimulatedBot {
         candleMinutes: params.candleMinutes as number ?? 15,
         breakoutBuffer: params.breakoutBuffer as number ?? 50,
         pullbackBuffer: params.pullbackBuffer as number ?? 100,
-        targetBuyPrice: params.targetBuyPrice as number ?? 0.50,
-        targetSellPrice: params.targetSellPrice as number ?? 0.60,
         targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 45,
+        candleSizeReference: params.candleSizeReference as number ?? 1000,
+        baseBuyPrice: params.baseBuyPrice as number ?? 0.50,
+        minProfitMargin: params.minProfitMargin as number ?? 0.05,
+        targetBuyPricePEQ: (params.targetBuyPricePEQ as { c0: number; c1: number; c2: number; c3: number }) ?? { c0: 1, c1: 0, c2: 0, c3: 0 },
+        targetSellPricePEQ: (params.targetSellPricePEQ as { c0: number; c1: number; c2: number; c3: number }) ?? { c0: 1, c1: 0, c2: 0, c3: 0 },
+        earlySellTimePEQ: (params.earlySellTimePEQ as { c0: number; c1: number; c2: number; c3: number }) ?? { c0: 0.2, c1: 0, c2: 0, c3: 0 },
+        earlySellPricePEQ: (params.earlySellPricePEQ as { c0: number; c1: number; c2: number; c3: number }) ?? { c0: 1, c1: 0, c2: 0, c3: 0 },
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
@@ -482,15 +556,42 @@ function createNCandleBot(botParams: BotParams): SimulatedBot {
         shouldWriteLogs: shouldWriteLogs ?? false,
         candleMinutes: params.candleMinutes as number ?? 10,
         buyPriceBuffer: params.buyPriceBuffer as number ?? 0.02,
-        buyPriceBufferScalar: params.buyPriceBufferScalar as number ?? 0.3,
+        buyPriceBufferPEQ: new ScalingPEQ({
+            c0: params.buyPriceBufferPEQ_c0 as number ?? 1.0,
+            c1: params.buyPriceBufferPEQ_c1 as number ?? 0,
+            c2: params.buyPriceBufferPEQ_c2 as number ?? 0,
+            c3: params.buyPriceBufferPEQ_c3 as number ?? 0,
+        }),
         sellPriceBuffer: params.sellPriceBuffer as number ?? 0.02,
         minProfitMargin: params.minProfitMargin as number ?? 0.05,
-        minProfitMarginScalar: params.minProfitMarginScalar as number ?? 0.5,
+        minProfitMarginPEQ: new ScalingPEQ({
+            c0: params.minProfitMarginPEQ_c0 as number ?? 1.0,
+            c1: params.minProfitMarginPEQ_c1 as number ?? 0,
+            c2: params.minProfitMarginPEQ_c2 as number ?? 0,
+            c3: params.minProfitMarginPEQ_c3 as number ?? 0,
+        }),
         stopLossMultiplier: params.stopLossMultiplier as number ?? 1.5,
         stoplossTimeout: params.stoplossTimeout as number ?? 30,
-        stoplossTimeoutScalar: params.stoplossTimeoutScalar as number ?? 0.5,
+        stoplossTimeoutPEQ: new ScalingPEQ({
+            c0: params.stoplossTimeoutPEQ_c0 as number ?? 1.0,
+            c1: params.stoplossTimeoutPEQ_c1 as number ?? 0,
+            c2: params.stoplossTimeoutPEQ_c2 as number ?? 0,
+            c3: params.stoplossTimeoutPEQ_c3 as number ?? 0,
+        }),
         sellTimeout: params.sellTimeout as number ?? 300,
-        sellTimeoutScalar: params.sellTimeoutScalar as number ?? 0.5,
+        sellTimeoutPEQ: new ScalingPEQ({
+            c0: params.sellTimeoutPEQ_c0 as number ?? 1.0,
+            c1: params.sellTimeoutPEQ_c1 as number ?? 0,
+            c2: params.sellTimeoutPEQ_c2 as number ?? 0,
+            c3: params.sellTimeoutPEQ_c3 as number ?? 0,
+        }),
+        stoplossFailureTimeout: params.stoplossFailureTimeout as number ?? 15,
+        stoplossFailureTimeoutPEQ: new ScalingPEQ({
+            c0: params.stoplossFailureTimeoutPEQ_c0 as number ?? 1.0,
+            c1: params.stoplossFailureTimeoutPEQ_c1 as number ?? 0,
+            c2: params.stoplossFailureTimeoutPEQ_c2 as number ?? 0,
+            c3: params.stoplossFailureTimeoutPEQ_c3 as number ?? 0,
+        }),
         earlySellScalar: params.earlySellScalar as number ?? 0.3,
         targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 45,
@@ -578,10 +679,15 @@ function createQuarterlyFirstCandleBot(botParams: BotParams): SimulatedBot {
         candleMinutes: params.candleMinutes as number ?? 5,
         breakoutBuffer: params.breakoutBuffer as number ?? 50,
         pullbackBuffer: params.pullbackBuffer as number ?? 100,
-        targetBuyPrice: params.targetBuyPrice as number ?? 0.50,
-        targetSellPrice: params.targetSellPrice as number ?? 0.60,
         targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 12,
+        candleSizeReference: params.candleSizeReference as number ?? 1000,
+        baseBuyPrice: params.baseBuyPrice as number ?? 0.50,
+        minProfitMargin: params.minProfitMargin as number ?? 0.05,
+        targetBuyPricePEQ: (params.targetBuyPricePEQ as { c0: number; c1: number; c2: number; c3: number }) ?? { c0: 1, c1: 0, c2: 0, c3: 0 },
+        targetSellPricePEQ: (params.targetSellPricePEQ as { c0: number; c1: number; c2: number; c3: number }) ?? { c0: 1, c1: 0, c2: 0, c3: 0 },
+        earlySellTimePEQ: (params.earlySellTimePEQ as { c0: number; c1: number; c2: number; c3: number }) ?? { c0: 0.2, c1: 0, c2: 0, c3: 0 },
+        earlySellPricePEQ: (params.earlySellPricePEQ as { c0: number; c1: number; c2: number; c3: number }) ?? { c0: 1, c1: 0, c2: 0, c3: 0 },
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
@@ -658,15 +764,42 @@ function createQuarterlyNCandleBot(botParams: BotParams): SimulatedBot {
         shouldWriteLogs: shouldWriteLogs ?? false,
         candleMinutes: params.candleMinutes as number ?? 3,
         buyPriceBuffer: params.buyPriceBuffer as number ?? 0.02,
-        buyPriceBufferScalar: params.buyPriceBufferScalar as number ?? 0.3,
+        buyPriceBufferPEQ: new ScalingPEQ({
+            c0: params.buyPriceBufferPEQ_c0 as number ?? 1.0,
+            c1: params.buyPriceBufferPEQ_c1 as number ?? 0,
+            c2: params.buyPriceBufferPEQ_c2 as number ?? 0,
+            c3: params.buyPriceBufferPEQ_c3 as number ?? 0,
+        }),
         sellPriceBuffer: params.sellPriceBuffer as number ?? 0.02,
         minProfitMargin: params.minProfitMargin as number ?? 0.05,
-        minProfitMarginScalar: params.minProfitMarginScalar as number ?? 0.5,
+        minProfitMarginPEQ: new ScalingPEQ({
+            c0: params.minProfitMarginPEQ_c0 as number ?? 1.0,
+            c1: params.minProfitMarginPEQ_c1 as number ?? 0,
+            c2: params.minProfitMarginPEQ_c2 as number ?? 0,
+            c3: params.minProfitMarginPEQ_c3 as number ?? 0,
+        }),
         stopLossMultiplier: params.stopLossMultiplier as number ?? 1.5,
         stoplossTimeout: params.stoplossTimeout as number ?? 15,
-        stoplossTimeoutScalar: params.stoplossTimeoutScalar as number ?? 0.5,
+        stoplossTimeoutPEQ: new ScalingPEQ({
+            c0: params.stoplossTimeoutPEQ_c0 as number ?? 1.0,
+            c1: params.stoplossTimeoutPEQ_c1 as number ?? 0,
+            c2: params.stoplossTimeoutPEQ_c2 as number ?? 0,
+            c3: params.stoplossTimeoutPEQ_c3 as number ?? 0,
+        }),
         sellTimeout: params.sellTimeout as number ?? 120,
-        sellTimeoutScalar: params.sellTimeoutScalar as number ?? 0.5,
+        sellTimeoutPEQ: new ScalingPEQ({
+            c0: params.sellTimeoutPEQ_c0 as number ?? 1.0,
+            c1: params.sellTimeoutPEQ_c1 as number ?? 0,
+            c2: params.sellTimeoutPEQ_c2 as number ?? 0,
+            c3: params.sellTimeoutPEQ_c3 as number ?? 0,
+        }),
+        stoplossFailureTimeout: params.stoplossFailureTimeout as number ?? 15,
+        stoplossFailureTimeoutPEQ: new ScalingPEQ({
+            c0: params.stoplossFailureTimeoutPEQ_c0 as number ?? 1.0,
+            c1: params.stoplossFailureTimeoutPEQ_c1 as number ?? 0,
+            c2: params.stoplossFailureTimeoutPEQ_c2 as number ?? 0,
+            c3: params.stoplossFailureTimeoutPEQ_c3 as number ?? 0,
+        }),
         earlySellScalar: params.earlySellScalar as number ?? 0.3,
         targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 12,
@@ -760,13 +893,28 @@ function createMarketMakerBot(botParams: BotParams): SimulatedBot {
         volatilityLookbackPeriods: params.volatilityLookbackPeriods as number ?? 15,
         targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 45,
-        // Timeout parameters
+        // Timeout parameters with polynomial scaling
         sellTimeout: params.sellTimeout as number ?? 30,
-        sellTimeoutScalar: params.sellTimeoutScalar as number ?? 1.0,
+        sellTimeoutPEQ: new ScalingPEQ({
+            c0: params.sellTimeoutPEQ_c0 as number ?? 1.0,
+            c1: params.sellTimeoutPEQ_c1 as number ?? 0,
+            c2: params.sellTimeoutPEQ_c2 as number ?? 0,
+            c3: params.sellTimeoutPEQ_c3 as number ?? 0,
+        }),
         stoplossCheckTimeout: params.stoplossCheckTimeout as number ?? 10,
-        stoplossCheckTimeoutScalar: params.stoplossCheckTimeoutScalar as number ?? 1.0,
+        stoplossCheckTimeoutPEQ: new ScalingPEQ({
+            c0: params.stoplossCheckTimeoutPEQ_c0 as number ?? 1.0,
+            c1: params.stoplossCheckTimeoutPEQ_c1 as number ?? 0,
+            c2: params.stoplossCheckTimeoutPEQ_c2 as number ?? 0,
+            c3: params.stoplossCheckTimeoutPEQ_c3 as number ?? 0,
+        }),
         stoplossFailureTimeout: params.stoplossFailureTimeout as number ?? 15,
-        stoplossFailureTimeoutScalar: params.stoplossFailureTimeoutScalar as number ?? 1.0,
+        stoplossFailureTimeoutPEQ: new ScalingPEQ({
+            c0: params.stoplossFailureTimeoutPEQ_c0 as number ?? 1.0,
+            c1: params.stoplossFailureTimeoutPEQ_c1 as number ?? 0,
+            c2: params.stoplossFailureTimeoutPEQ_c2 as number ?? 0,
+            c3: params.stoplossFailureTimeoutPEQ_c3 as number ?? 0,
+        }),
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
@@ -799,13 +947,28 @@ function createQuarterlyMarketMakerBot(botParams: BotParams): SimulatedBot {
         volatilityLookbackPeriods: params.volatilityLookbackPeriods as number ?? 8,
         targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 10,
-        // Timeout parameters (shorter defaults for quarterly)
+        // Timeout parameters with polynomial scaling (shorter defaults for quarterly)
         sellTimeout: params.sellTimeout as number ?? 15,
-        sellTimeoutScalar: params.sellTimeoutScalar as number ?? 1.0,
+        sellTimeoutPEQ: new ScalingPEQ({
+            c0: params.sellTimeoutPEQ_c0 as number ?? 1.0,
+            c1: params.sellTimeoutPEQ_c1 as number ?? 0,
+            c2: params.sellTimeoutPEQ_c2 as number ?? 0,
+            c3: params.sellTimeoutPEQ_c3 as number ?? 0,
+        }),
         stoplossCheckTimeout: params.stoplossCheckTimeout as number ?? 5,
-        stoplossCheckTimeoutScalar: params.stoplossCheckTimeoutScalar as number ?? 1.0,
+        stoplossCheckTimeoutPEQ: new ScalingPEQ({
+            c0: params.stoplossCheckTimeoutPEQ_c0 as number ?? 1.0,
+            c1: params.stoplossCheckTimeoutPEQ_c1 as number ?? 0,
+            c2: params.stoplossCheckTimeoutPEQ_c2 as number ?? 0,
+            c3: params.stoplossCheckTimeoutPEQ_c3 as number ?? 0,
+        }),
         stoplossFailureTimeout: params.stoplossFailureTimeout as number ?? 8,
-        stoplossFailureTimeoutScalar: params.stoplossFailureTimeoutScalar as number ?? 1.0,
+        stoplossFailureTimeoutPEQ: new ScalingPEQ({
+            c0: params.stoplossFailureTimeoutPEQ_c0 as number ?? 1.0,
+            c1: params.stoplossFailureTimeoutPEQ_c1 as number ?? 0,
+            c2: params.stoplossFailureTimeoutPEQ_c2 as number ?? 0,
+            c3: params.stoplossFailureTimeoutPEQ_c3 as number ?? 0,
+        }),
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
@@ -1122,7 +1285,8 @@ async function main() {
     logger.log(`  Coin Type: ${coinType.toUpperCase()}`);
     logger.log(`  Lookback Days: ${lookbackDays}`);
     logger.log(`  Max Generations: ${maxGenerations}`);
-    logger.log(`  Convergence Threshold: $${convergenceThreshold.toFixed(2)}`);
+    logger.log(`  Convergence Threshold: $${convergenceThreshold.toFixed(2)} (absolute fallback)`);
+    logger.log(`  Relative Convergence: enabled (1% of best fitness, min $0.10)`);
     logger.log(`  Population Size: ${populationSize}`);
 
     const geneticConfig = {

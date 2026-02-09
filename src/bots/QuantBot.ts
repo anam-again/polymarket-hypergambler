@@ -669,6 +669,9 @@ export class QuantBot {
   private currentPeriodId: number = 0;
   private isResetting: boolean = false;
 
+  // Track available tokens per clobTokenId to prevent double-selling
+  private tokenHoldings: Map<string, number> = new Map();
+
   // Stop function for the tick wrapper
   private tickStopFn: (() => void) | null = null;
   private isStopped: boolean = false;
@@ -687,6 +690,9 @@ export class QuantBot {
   // Simulation order delay - orders cannot match until this delay has passed
   private static readonly DEFAULT_SIMULATION_ORDER_DELAY_MS = 10 * 1000;  // 10 seconds
   protected simulationOrderDelayMs: number;
+
+  // Track asset price at period start for settlement validation
+  private periodStartPrice: number | null = null;
 
   // --- Constructor ---
 
@@ -878,6 +884,13 @@ export class QuantBot {
         return undefined;
       }
 
+      // For SELL orders, check and reserve tokens
+      if (side === Side.SELL) {
+        if (!this.reserveTokensForSell(clobTokenId, amount)) {
+          return undefined;  // Not enough tokens available
+        }
+      }
+
       if (this.orderOperationPending) {
         // Escape if our subclass entered into makeOrder, but there was a racecondition with clobIds, can often happen if we
         // try to place an order during an audit reset (the tickwrapper was running, and slowly progressing past the 'do nothing' due to awaits)
@@ -971,6 +984,11 @@ export class QuantBot {
 
       this.updateTradeStatus(trade, TradeStatus.CANCELED);
       this.recordSpend(-trade.totalCost, trade.side);
+
+      // Return tokens on SELL cancel
+      if (trade.side === Side.SELL) {
+        this.returnTokens(trade.clobTokenId, trade.amount);
+      }
 
       this.spentThisHour -= trade.totalCost;
       if (this.spentThisHour < 0) {
@@ -1104,8 +1122,21 @@ export class QuantBot {
       );
       const winningClob = previousMarket.clobTokenIds[winningIndex];
 
+      // Determine asset price winner (if we have period start price)
+      let assetPriceWinner: 'UP' | 'DOWN' | null = null;
+      if (this.periodStartPrice !== null && this.cdMarketData) {
+        const currentPrice = await this.cdMarketData.getCurrentPriceByMarket(this.targetedMarket);
+        if (currentPrice >= this.periodStartPrice) {
+          // UP wins if price went up OR stayed the same (favor UP on tie)
+          assetPriceWinner = 'UP';
+        } else {
+          assetPriceWinner = 'DOWN';
+        }
+        this.writeLog(`Asset price: start=$${this.periodStartPrice.toFixed(2)}, end=$${currentPrice.toFixed(2)}, winner=${assetPriceWinner}`);
+      }
+
       // Settle expired positions (handles remaining unmatched buy positions)
-      this.settleExpiredPositions(winningClob);
+      this.settleExpiredPositions(winningClob, previousMarket.clobTokenIds, assetPriceWinner);
     }
 
     // Mark matched trades as audited (but don't write to file in simulation)
@@ -1117,11 +1148,18 @@ export class QuantBot {
 
     // Clear trades since adapter has accumulated them before calling this method
     this.trades = [];
+    this.tokenHoldings.clear();
 
     this.isResetting = false;
 
     // Call bot-specific reset logic (child classes override this)
     this.resetTradeState();
+
+    // Capture period start price for next period's settlement validation
+    if (this.cdMarketData) {
+      this.periodStartPrice = await this.cdMarketData.getCurrentPriceByMarket(this.targetedMarket);
+      this.writeLog(`Period start price captured: $${this.periodStartPrice.toFixed(2)}`);
+    }
   }
 
   /**
@@ -1207,8 +1245,21 @@ export class QuantBot {
       );
       const winningClob = previousMarket.clobTokenIds[winningIndex];
 
+      // Determine asset price winner (if we have period start price)
+      let assetPriceWinner: 'UP' | 'DOWN' | null = null;
+      if (this.periodStartPrice !== null && this.cdMarketData) {
+        const currentPrice = await this.cdMarketData.getCurrentPriceByMarket(this.targetedMarket);
+        if (currentPrice >= this.periodStartPrice) {
+          // UP wins if price went up OR stayed the same (favor UP on tie)
+          assetPriceWinner = 'UP';
+        } else {
+          assetPriceWinner = 'DOWN';
+        }
+        this.writeLog(`Asset price: start=$${this.periodStartPrice.toFixed(2)}, end=$${currentPrice.toFixed(2)}, winner=${assetPriceWinner}`);
+      }
+
       // Settle expired positions (handles remaining unmatched buy positions)
-      this.settleExpiredPositions(winningClob);
+      this.settleExpiredPositions(winningClob, previousMarket.clobTokenIds, assetPriceWinner);
 
       // Write any completed trades that haven't been audited yet
       for (const trade of this.trades) {
@@ -1219,7 +1270,14 @@ export class QuantBot {
       }
 
       this.trades = [];
+      this.tokenHoldings.clear();
       this.isResetting = false;
+
+      // Capture period start price for next period's settlement validation
+      if (this.cdMarketData) {
+        this.periodStartPrice = await this.cdMarketData.getCurrentPriceByMarket(this.targetedMarket);
+        this.writeLog(`Period start price captured: $${this.periodStartPrice.toFixed(2)}`);
+      }
     })();
 
     this.orderOperationPending = auditPromise.finally(() => {
@@ -1293,6 +1351,49 @@ export class QuantBot {
       limit: this.hourlyDollarLimit,
       trades: this.tradesThisHour,
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // Token Holdings Management
+  // -------------------------------------------------------------------------
+
+  /**
+   * Gets the current available token count for a given clobTokenId.
+   */
+  protected getAvailableTokens(clobTokenId: string): number {
+    return this.tokenHoldings.get(clobTokenId) ?? 0;
+  }
+
+  /**
+   * Reserves tokens for a sell order. Returns true if successful, false if insufficient tokens.
+   */
+  private reserveTokensForSell(clobTokenId: string, amount: number): boolean {
+    const available = this.getAvailableTokens(clobTokenId);
+    if (available < amount) {
+      this.writeLog(`Cannot sell ${amount} tokens: only ${available} available for ...${clobTokenId.slice(-20)}`);
+      return false;
+    }
+    this.tokenHoldings.set(clobTokenId, available - amount);
+    this.writeLog(`Reserved ${amount} tokens for sell, ${available - amount} remaining for ...${clobTokenId.slice(-20)}`);
+    return true;
+  }
+
+  /**
+   * Returns tokens to available pool (on SELL cancel/expire).
+   */
+  private returnTokens(clobTokenId: string, amount: number): void {
+    const current = this.getAvailableTokens(clobTokenId);
+    this.tokenHoldings.set(clobTokenId, current + amount);
+    this.writeLog(`Returned ${amount} tokens, now ${current + amount} available for ...${clobTokenId.slice(-20)}`);
+  }
+
+  /**
+   * Credits tokens on BUY match.
+   */
+  private creditTokensOnBuy(clobTokenId: string, amount: number): void {
+    const current = this.getAvailableTokens(clobTokenId);
+    this.tokenHoldings.set(clobTokenId, current + amount);
+    this.writeLog(`Credited ${amount} tokens on BUY match, now ${current + amount} available for ...${clobTokenId.slice(-20)}`);
   }
 
   // -------------------------------------------------------------------------
@@ -1570,12 +1671,20 @@ export class QuantBot {
     switch (newStatus) {
       case TradeStatus.EXPIRED:
         trade.emit('tradeExpired');
+        // Return tokens on SELL expire
+        if (trade.side === Side.SELL) {
+          this.returnTokens(trade.clobTokenId, trade.amount);
+        }
         break;
       case TradeStatus.CANCELED:
         trade.emit('tradeCanceled');
         break;
       case TradeStatus.MATCHED:
         trade.emit('tradeMatched');
+        // Credit tokens on BUY match
+        if (trade.side === Side.BUY) {
+          this.creditTokensOnBuy(trade.clobTokenId, trade.amount);
+        }
         break;
       case TradeStatus.LIVE:
         trade.emit('tradeLive');
@@ -1588,7 +1697,11 @@ export class QuantBot {
     }
   }
 
-  private settleExpiredPositions(winningClob: string): void {
+  private settleExpiredPositions(
+    winningClob: string,
+    allClobTokenIds: string[],
+    assetPriceWinner: 'UP' | 'DOWN' | null
+  ): void {
     const positionsByClob: Record<string, number> = {};
 
     for (const trade of this.trades) {
@@ -1599,11 +1712,21 @@ export class QuantBot {
       }
     }
 
+    // Determine p-market winner direction (clobTokenIds[0] = UP, clobTokenIds[1] = DOWN)
+    const pMarketWinner: 'UP' | 'DOWN' = winningClob === allClobTokenIds[0] ? 'UP' : 'DOWN';
+
+    // Check for winner mismatch
+    const hasMismatch = assetPriceWinner !== null && pMarketWinner !== assetPriceWinner;
+    if (hasMismatch) {
+      this.writeLog(`ERROR: Winner mismatch! P-market says ${pMarketWinner}, asset price says ${assetPriceWinner}. Expiring all positions for $0.`);
+    }
+
     // Settle remaining positions (bought but not sold)
     for (const [clobId, amount] of Object.entries(positionsByClob)) {
       if (amount <= 0) continue;
 
-      const isWin = clobId === winningClob;
+      // If mismatch, all positions expire for zero
+      const isWin = hasMismatch ? false : (clobId === winningClob);
       const finalValue = isWin ? amount : 0;
 
       this.writeLog(`${clobId} expired (${isWin ? 'win' : 'loss'}) with ${amount} units for $${finalValue}`);

@@ -2,6 +2,7 @@ import { Side } from "@polymarket/clob-client";
 
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
 import { MarketSchedule } from "../types/interfaces.js";
+import { ScalingPEQ } from "../utils/ScalingPEQ.js";
 
 // ============================================================================
 // Types & Interfaces
@@ -33,13 +34,13 @@ interface MarketMakerProps extends QuantBotProps {
     targetDollars: number;        // Dollar amount per position
     cutoffMinute: number;         // Stop new trades after this minute
 
-    // Timeout configuration
-    sellTimeout: number;                  // Base timeout (seconds) before canceling unfilled sell order
-    sellTimeoutScalar: number;            // Scales timeout based on time left in period and profit status
-    stoplossCheckTimeout: number;         // Base delay (seconds) before posting stoploss after buy match
-    stoplossCheckTimeoutScalar: number;   // Scales delay based on time remaining in period
-    stoplossFailureTimeout: number;       // Seconds before re-adjusting unfilled stoploss order
-    stoplossFailureTimeoutScalar: number; // Scales timeout based on time remaining in period
+    // Timeout configuration with polynomial scaling
+    sellTimeout: number;                      // Base timeout (seconds) before canceling unfilled sell order
+    sellTimeoutPEQ: ScalingPEQ;               // Polynomial scaling for sellTimeout based on time left
+    stoplossCheckTimeout: number;             // Base delay (seconds) before posting stoploss after buy match
+    stoplossCheckTimeoutPEQ: ScalingPEQ;      // Polynomial scaling for stoplossCheckTimeout based on time left
+    stoplossFailureTimeout: number;           // Seconds before re-adjusting unfilled stoploss order
+    stoplossFailureTimeoutPEQ: ScalingPEQ;    // Polynomial scaling for stoplossFailureTimeout based on time left
 }
 
 interface ActivePosition {
@@ -89,11 +90,11 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
 
     // --- Timeout Properties ---
     private sellTimeout: number;
-    private sellTimeoutScalar: number;
+    private sellTimeoutPEQ: ScalingPEQ;
     private stoplossCheckTimeout: number;
-    private stoplossCheckTimeoutScalar: number;
+    private stoplossCheckTimeoutPEQ: ScalingPEQ;
     private stoplossFailureTimeout: number;
-    private stoplossFailureTimeoutScalar: number;
+    private stoplossFailureTimeoutPEQ: ScalingPEQ;
 
     // --- Position Tracking ---
     private upPositions: Map<string, ActivePosition> = new Map();
@@ -121,13 +122,13 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
         this.targetDollars = props.targetDollars;
         this.cutoffMinute = props.cutoffMinute;
 
-        // Timeout configuration
+        // Timeout configuration with polynomial scaling
         this.sellTimeout = props.sellTimeout ?? 30;
-        this.sellTimeoutScalar = props.sellTimeoutScalar ?? 1.0;
+        this.sellTimeoutPEQ = props.sellTimeoutPEQ;
         this.stoplossCheckTimeout = props.stoplossCheckTimeout ?? 10;
-        this.stoplossCheckTimeoutScalar = props.stoplossCheckTimeoutScalar ?? 1.0;
+        this.stoplossCheckTimeoutPEQ = props.stoplossCheckTimeoutPEQ;
         this.stoplossFailureTimeout = props.stoplossFailureTimeout ?? 15;
-        this.stoplossFailureTimeoutScalar = props.stoplossFailureTimeoutScalar ?? 1.0;
+        this.stoplossFailureTimeoutPEQ = props.stoplossFailureTimeoutPEQ;
     }
 
     // --- Main Run Loop ---
@@ -143,23 +144,21 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
 
     /**
      * Calculates a scaled timeout based on time remaining in the trading period.
-     * More time remaining = longer timeout (patience early, urgency late).
+     * Uses polynomial equation scaling for more expressive optimization.
      *
      * @param baseTimeout - Base timeout in seconds
-     * @param scalar - Scaling factor (1.0 = no scaling)
+     * @param peq - ScalingPEQ for polynomial-based scaling
      * @returns Scaled timeout in milliseconds
      */
-    private calculateScaledTimeout(baseTimeout: number, scalar: number): number {
+    private calculateScaledTimeout(baseTimeout: number, peq: ScalingPEQ): number {
         // Calculate time remaining in period (0-1, where 1 = full period remaining)
         const minuteInPeriod = this.getMinutesIntoPeriod();
         const periodLength = this.marketSchedule === MarketSchedule.QUARTERLY ? 15 : 60;
         const timeRemaining = (periodLength - minuteInPeriod) / periodLength;
 
-        // Scale timeout: more time remaining = longer timeout
-        // At period start (timeRemaining=1): timeout * scalar
-        // At period end (timeRemaining=0): timeout * 1.0 (unscaled)
-        const scaledFactor = 1 + (scalar - 1) * timeRemaining;
-        return Math.max(5000, baseTimeout * scaledFactor * 1000); // Minimum 5 seconds, convert to ms
+        // Use polynomial scaling: baseTimeout * f(timeRemaining)
+        const scaledTimeout = peq.scale(baseTimeout, timeRemaining);
+        return Math.max(5000, scaledTimeout * 1000); // Minimum 5 seconds, convert to ms
     }
 
     /**
@@ -220,6 +219,9 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
 
         // 6. Check for stop-loss recovery (price recovered above entry)
         await this.checkStopLossRecovery();
+
+        // 6.5 Check for sell order timeouts and reprice if needed
+        await this.checkSellOrderTimeouts();
 
         // 7. Create sell orders for newly matched buys
         await this.createSellOrdersForMatchedBuys();
@@ -558,7 +560,7 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
         }
         const scaledDelay = this.calculateScaledTimeout(
             this.stoplossCheckTimeout,
-            this.stoplossCheckTimeoutScalar
+            this.stoplossCheckTimeoutPEQ
         );
         if (this.clock.now() - position.buyMatchedAt < scaledDelay) {
             return false; // Not yet time to check stoploss
@@ -699,7 +701,7 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
                 if (position.stoplossCreatedAt) {
                     const scaledTimeout = this.calculateScaledTimeout(
                         this.stoplossFailureTimeout,
-                        this.stoplossFailureTimeoutScalar
+                        this.stoplossFailureTimeoutPEQ
                     );
                     stoplossTimedOut = this.clock.now() - position.stoplossCreatedAt > scaledTimeout;
                 }
@@ -767,6 +769,131 @@ export class MarketMaker extends QuantBot implements QuantBotRun {
             // Case 3: No sell order exists (previous attempt failed) - will be retried by createSellOrdersForMatchedBuys
         } catch (error) {
             this.writeError(`Error checking stop-loss recovery for ${direction}: ${error}`);
+        }
+
+        return false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Sell Order Timeout Logic
+    // -------------------------------------------------------------------------
+
+    /**
+     * Checks for regular sell orders that have timed out and reprices them.
+     * Only applies to non-stoploss sell orders that remain unfilled.
+     */
+    private async checkSellOrderTimeouts(): Promise<void> {
+        const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
+
+        // Check UP positions
+        for (const [_, position] of this.upPositions) {
+            await this.checkPositionSellTimeout(position, orderBooks.BtcUpTokenId, 'UP');
+        }
+
+        // Check DOWN positions
+        for (const [_, position] of this.downPositions) {
+            await this.checkPositionSellTimeout(position, orderBooks.BtcDownTokenId, 'DOWN');
+        }
+    }
+
+    private async checkPositionSellTimeout(
+        position: ActivePosition,
+        tokenId: string,
+        direction: TokenDirection
+    ): Promise<boolean> {
+        // Only check positions with:
+        // - Matched buy order
+        // - Live sell order (non-stoploss)
+        // - Sell order timestamp tracked
+        if (position.buyOrder.status !== TradeStatus.MATCHED) return false;
+        if (!position.sellOrder || position.sellOrder.status !== TradeStatus.LIVE) return false;
+        if (position.stopLossTriggered) return false; // Don't reprice stoploss orders here
+        if (!position.sellOrderCreatedAt) return false;
+
+        // Check if sell order has timed out
+        const scaledTimeout = this.calculateScaledTimeout(
+            this.sellTimeout,
+            this.sellTimeoutPEQ
+        );
+
+        if (this.clock.now() - position.sellOrderCreatedAt <= scaledTimeout) {
+            return false; // Not yet timed out
+        }
+
+        // CRITICAL: Check if all tokens have already been sold
+        if (position.tokensSold >= position.buyOrder.amount) {
+            return false;
+        }
+
+        const remainingTokens = position.buyOrder.amount - position.tokensSold;
+
+        try {
+            // Get current market bid price
+            const currentBidPrice = await this.marketInfo.getPrice(tokenId, Side.SELL, this.targetedMarket);
+
+            // Calculate new sell price: slightly below market bid to encourage fill
+            const newSellPrice = Math.min(
+                Math.max(0.01, currentBidPrice - 0.01),
+                this.MAX_SELL_PRICE
+            );
+
+            this.writeLog(
+                `SELL TIMEOUT: ${direction} offset ${position.spreadOffset} - ` +
+                `repricing from ${position.sellOrder.targetSellPrice?.toFixed(2)} to ${newSellPrice.toFixed(2)} ` +
+                `(bid=${currentBidPrice.toFixed(2)}, remaining: ${remainingTokens} tokens)`
+            );
+
+            // Cancel the current sell order
+            await this.cancelTrade(position.sellOrder);
+
+            // Update orders to check if cancel succeeded or if order was matched
+            await this.updateOrders();
+            this.syncSoldTokensFromHistory(position);
+
+            // Re-check remaining tokens after sync
+            const updatedRemaining = position.buyOrder.amount - position.tokensSold;
+            if (updatedRemaining <= 0) {
+                this.writeLog(
+                    `SELL TIMEOUT ABORTED: ${direction} offset ${position.spreadOffset} - ` +
+                    `old order was matched, no tokens remaining`
+                );
+                position.sellOrder = undefined;
+                return true;
+            }
+
+            // Check if the sell order was actually canceled (not matched)
+            const oldOrder = this.trades.find(t => t.orderId === position.sellOrder?.orderId);
+            if (oldOrder?.status === TradeStatus.MATCHED) {
+                this.writeLog(
+                    `SELL TIMEOUT ABORTED: ${direction} offset ${position.spreadOffset} - ` +
+                    `old order was matched during cancel attempt`
+                );
+                position.sellOrder = oldOrder;
+                return true;
+            }
+
+            // Old order was successfully canceled, create new one
+            position.sellOrder = undefined;
+
+            // Create new sell order at updated price
+            const sellOrderName = `mm-sell-repriced-${direction.toLowerCase()}-${position.spreadOffset}-${this.clock.now()}`;
+            const newSellOrder = await this.makeOrder(
+                sellOrderName,
+                tokenId,
+                newSellPrice,
+                updatedRemaining,
+                Side.SELL
+            );
+
+            if (newSellOrder) {
+                position.sellOrder = newSellOrder;
+                position.sellOrderHistory.push(newSellOrder.orderId);
+                position.sellOrderCreatedAt = this.clock.now();
+            }
+
+            return true;
+        } catch (error) {
+            this.writeError(`Error checking sell timeout for ${direction}: ${error}`);
         }
 
         return false;

@@ -19,6 +19,7 @@ interface UpDownPriceEntry {
 export interface MarketInfoSimple {
     clobTokenIds: string[];
     outcomePrices: string[];
+    closed: boolean;
     error?: boolean;
 }
 
@@ -495,6 +496,7 @@ export class MockMarketInfo implements IMarketInfo {
             return {
                 clobTokenIds: [`UP-${hourKey}`, `DOWN-${hourKey}`],
                 outcomePrices: ['0.50', '0.50'],
+                closed: false,
             };
         }
 
@@ -503,6 +505,7 @@ export class MockMarketInfo implements IMarketInfo {
             return {
                 clobTokenIds: [`UP-${hourKey}`, `DOWN-${hourKey}`],
                 outcomePrices: ['0.50', '0.50'],
+                closed: false,
                 error: true,
             };
         }
@@ -513,6 +516,7 @@ export class MockMarketInfo implements IMarketInfo {
                 ((validEntry.upBid + validEntry.upAsk) / 2).toString(),
                 ((validEntry.downBid + validEntry.downAsk) / 2).toString()
             ],
+            closed: false,
         };
     }
 
@@ -552,6 +556,7 @@ export class MockMarketInfo implements IMarketInfo {
             return {
                 clobTokenIds: [`UP-${quarterKey}`, `DOWN-${quarterKey}`],
                 outcomePrices: ['0.50', '0.50'],
+                closed: false,
             };
         }
 
@@ -561,6 +566,7 @@ export class MockMarketInfo implements IMarketInfo {
                 clobTokenIds: [`UP-${quarterKey}`, `DOWN-${quarterKey}`],
                 outcomePrices: ['0.50', '0.50'],
                 error: true,
+                closed: false,
             };
         }
 
@@ -570,6 +576,7 @@ export class MockMarketInfo implements IMarketInfo {
                 ((validEntry.upBid + validEntry.upAsk) / 2).toString(),
                 ((validEntry.downBid + validEntry.downAsk) / 2).toString()
             ],
+            closed: false,
         };
     }
 

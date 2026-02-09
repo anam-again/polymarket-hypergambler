@@ -2,11 +2,11 @@
 # This file configures which bot/market combinations to optimize
 
 settings:
-  lookbackDays: 1          # Days of historical data to use
-  maxGenerations: 10       # Maximum optimization generations
-  populationSize: 50       # Population size per generation
-  intervalHours: 1         # Hours between optimization runs
-  concurrentSimulations: 4 # Number of simulations to run in parallel
+  lookbackDays: 3          # Days of historical data to use
+  maxGenerations: 12       # Maximum optimization generations
+  populationSize: 75       # Population size per generation
+  intervalHours: 8         # Hours between optimization runs
+  concurrentSimulations: 2 # Number of simulations to run in parallel
 
 # List of bot/market combinations to optimize
 # Each target will be optimized sequentially

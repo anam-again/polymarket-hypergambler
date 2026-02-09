@@ -2,6 +2,7 @@ import { Side } from "@polymarket/clob-client";
 
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
 import { MarketSchedule } from "../types/interfaces.js";
+import { ScalingPEQ, ScalingPEQCoefficients } from "../utils/ScalingPEQ.js";
 
 // ============================================================================
 // Types & Interfaces
@@ -11,10 +12,19 @@ interface FirstCandleProps extends QuantBotProps {
     candleMinutes: number;          // Duration of first candle (e.g., 30 minutes)
     breakoutBuffer: number;         // Price buffer beyond high/low to confirm breakout (e.g., 50 = $50)
     pullbackBuffer: number;         // How close price must return to broken level (e.g., 100 = within $100)
-    targetBuyPrice: number;
-    targetSellPrice: number;
     targetDollars: number;
     cutoffMinute: number;
+
+    // ScalingPEQ configuration
+    candleSizeReference: number;    // Divisor to normalize candle size (e.g., 1000 for BTC)
+    baseBuyPrice: number;           // Base buy price before scaling
+    minProfitMargin: number;        // Minimum profit margin above buy price
+
+    // PEQs
+    targetBuyPricePEQ: ScalingPEQCoefficients;   // Scales baseBuyPrice by candle size
+    targetSellPricePEQ: ScalingPEQCoefficients;  // Scales (buyPrice + minProfit) by candle size
+    earlySellTimePEQ: ScalingPEQCoefficients;    // Outputs time threshold for early sell decision
+    earlySellPricePEQ: ScalingPEQCoefficients;   // Scales early sell price by time left
 }
 
 type TradingState =
@@ -37,13 +47,24 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
     private candleMinutes: number;
     private breakoutBuffer: number;
     private pullbackBuffer: number;
-    private targetBuyPrice: number;
-    private targetSellPrice: number;
     private targetDollars: number;
     private cutoffMinute: number;
 
+    // ScalingPEQ configuration
+    private candleSizeReference: number;
+    private baseBuyPrice: number;
+    private minProfitMargin: number;
+    private targetBuyPricePEQ: ScalingPEQ;
+    private targetSellPricePEQ: ScalingPEQ;
+    private earlySellTimePEQ: ScalingPEQ;
+    private earlySellPricePEQ: ScalingPEQ;
+
+    // Track actual buy price for sell calculations
+    private actualBuyPrice: number = 0;
+
     private buyOrder?: TradeOrder;
     private sellOrder?: TradeOrder;
+    private earlySellOrder?: TradeOrder;
 
     // State tracking
     private state: TradingState = 'FORMING_CANDLE';
@@ -60,10 +81,17 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
         this.candleMinutes = props.candleMinutes;
         this.breakoutBuffer = props.breakoutBuffer;
         this.pullbackBuffer = props.pullbackBuffer;
-        this.targetBuyPrice = props.targetBuyPrice;
-        this.targetSellPrice = props.targetSellPrice;
         this.targetDollars = props.targetDollars;
         this.cutoffMinute = props.cutoffMinute;
+
+        // ScalingPEQ configuration
+        this.candleSizeReference = props.candleSizeReference;
+        this.baseBuyPrice = props.baseBuyPrice;
+        this.minProfitMargin = props.minProfitMargin;
+        this.targetBuyPricePEQ = new ScalingPEQ(props.targetBuyPricePEQ);
+        this.targetSellPricePEQ = new ScalingPEQ(props.targetSellPricePEQ);
+        this.earlySellTimePEQ = new ScalingPEQ(props.earlySellTimePEQ);
+        this.earlySellPricePEQ = new ScalingPEQ(props.earlySellPricePEQ);
     }
 
     // --- Main Run Loop ---
@@ -88,6 +116,8 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
     protected override resetTradeState(): void {
         this.buyOrder = undefined;
         this.sellOrder = undefined;
+        this.earlySellOrder = undefined;
+        this.actualBuyPrice = 0;
         this.state = 'FORMING_CANDLE';
         this.candleHigh = 0;
         this.candleLow = Infinity;
@@ -115,6 +145,11 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
         // Handle sell order creation if buy matched
         if (this.shouldCreateSellOrder()) {
             await this.createSellOrder();
+        }
+
+        // Check for early sell trigger (when we have matched buy but no sell yet)
+        if (this.shouldTriggerEarlySell()) {
+            await this.createEarlySellOrder();
         }
 
         if (this.state === 'PAST_CUTOFF' || this.state === 'TRADE_ENTERED') {
@@ -181,6 +216,17 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
             return currentMinute % 15;
         }
         return currentMinute;
+    }
+
+    private getCandleSizeNormalized(): number {
+        const candleSize = this.candleHigh - this.candleLow;
+        return candleSize / this.candleSizeReference;
+    }
+
+    private getTimeLeftRatio(): number {
+        const minuteInPeriod = this.getMinuteInPeriod();
+        const periodLength = this.marketSchedule === MarketSchedule.QUARTERLY ? 15 : 60;
+        return Math.max(0, (periodLength - minuteInPeriod) / periodLength);
     }
 
     private handleWaitingBreakout(currentPrice: number): void {
@@ -254,21 +300,33 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
             ? orderBooks.BtcUpTokenId
             : orderBooks.BtcDownTokenId;
 
-        const targetSize = this.dollarToTokens(this.targetDollars, this.targetBuyPrice);
+        // Calculate dynamic buy price using candle size
+        const candleSizeNormalized = this.getCandleSizeNormalized();
+        const dynamicBuyPrice = Math.round(
+            this.targetBuyPricePEQ.scale(this.baseBuyPrice, candleSizeNormalized) * 100
+        ) / 100;
+
+        // Clamp to valid range [0.01, 0.99]
+        const targetBuyPrice = Math.max(0.01, Math.min(0.99, dynamicBuyPrice));
+
+        // Store actual buy price for sell calculations
+        this.actualBuyPrice = targetBuyPrice;
+
+        const targetSize = this.dollarToTokens(this.targetDollars, targetBuyPrice);
         if (targetSize === null) {
             this.writeLog(
                 `createBuyOrder: dollarToTokens returned null ` +
-                `(targetDollars=${this.targetDollars}, targetBuyPrice=${this.targetBuyPrice})`
+                `(targetDollars=${this.targetDollars}, targetBuyPrice=${targetBuyPrice})`
             );
             return;
         }
 
-        const totalCost = this.targetBuyPrice * targetSize;
+        const totalCost = targetBuyPrice * targetSize;
 
-        if (!this.checkIfOrderIsValid(this.targetBuyPrice, targetSize)) {
+        if (!this.checkIfOrderIsValid(targetBuyPrice, targetSize)) {
             this.writeLog(
                 `createBuyOrder: order invalid ` +
-                `(price=${this.targetBuyPrice}, size=${targetSize})`
+                `(price=${targetBuyPrice}, size=${targetSize})`
             );
             return;
         }
@@ -283,7 +341,7 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
         this.buyOrder = await this.makeOrder(
             'firstcandle-buy',
             tokenId,
-            this.targetBuyPrice,
+            targetBuyPrice,
             targetSize,
             Side.BUY
         );
@@ -291,7 +349,7 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
         if (this.buyOrder) {
             this.writeLog(
                 `createBuyOrder: order placed successfully ` +
-                `(orderId=${this.buyOrder.orderId}, size=${targetSize}, price=${this.targetBuyPrice})`
+                `(orderId=${this.buyOrder.orderId}, size=${targetSize}, price=${targetBuyPrice}, candleSize=${candleSizeNormalized.toFixed(3)})`
             );
         } else {
             this.writeLog(`createBuyOrder: makeOrder returned undefined`);
@@ -309,10 +367,73 @@ export class FirstCandle extends QuantBot implements QuantBotRun {
             ? orderBooks.BtcUpTokenId
             : orderBooks.BtcDownTokenId;
 
+        // Calculate dynamic sell price: (buyPrice + minProfit) scaled by candle size
+        const candleSizeNormalized = this.getCandleSizeNormalized();
+        const baseValue = this.actualBuyPrice + this.minProfitMargin;
+        const dynamicSellPrice = Math.round(
+            this.targetSellPricePEQ.scale(baseValue, candleSizeNormalized) * 100
+        ) / 100;
+
+        // Clamp to valid range, must be above buy price
+        const targetSellPrice = Math.max(this.actualBuyPrice + 0.01, Math.min(0.99, dynamicSellPrice));
+
         this.sellOrder = await this.makeOrder(
             'firstcandle-sell',
             tokenId,
-            this.targetSellPrice,
+            targetSellPrice,
+            this.buyOrder.amount,
+            Side.SELL
+        );
+
+        if (this.sellOrder) {
+            this.writeLog(
+                `createSellOrder: order placed (price=${targetSellPrice}, candleSize=${candleSizeNormalized.toFixed(3)})`
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Early Sell Logic
+    // -------------------------------------------------------------------------
+
+    private shouldTriggerEarlySell(): boolean {
+        // Only check if we have a matched buy order and no sell order yet
+        if (!this.buyOrder || this.buyOrder.status !== TradeStatus.MATCHED) return false;
+        if (this.sellOrder || this.earlySellOrder) return false;
+
+        // Calculate threshold from candle size
+        const candleSizeNormalized = this.getCandleSizeNormalized();
+        const timeThreshold = this.earlySellTimePEQ.compute(candleSizeNormalized);
+
+        // Check if time left ratio is below threshold
+        const timeLeftRatio = this.getTimeLeftRatio();
+        return timeLeftRatio < timeThreshold;
+    }
+
+    private async createEarlySellOrder(): Promise<void> {
+        if (this.sellOrder || this.earlySellOrder || !this.buyOrder || !this.breakoutDirection) return;
+
+        const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
+        const tokenId = this.breakoutDirection === 'UP'
+            ? orderBooks.BtcUpTokenId
+            : orderBooks.BtcDownTokenId;
+
+        // Calculate early sell price using time left
+        const timeLeftRatio = this.getTimeLeftRatio();
+        const baseValue = this.actualBuyPrice + this.minProfitMargin;
+        const dynamicSellPrice = Math.round(
+            this.earlySellPricePEQ.scale(baseValue, timeLeftRatio) * 100
+        ) / 100;
+
+        // Clamp price
+        const earlySellPrice = Math.max(this.actualBuyPrice + 0.01, Math.min(0.99, dynamicSellPrice));
+
+        this.writeLog(`Early sell triggered: timeLeftRatio=${timeLeftRatio.toFixed(3)}, price=${earlySellPrice}`);
+
+        this.earlySellOrder = await this.makeOrder(
+            'firstcandle-early-sell',
+            tokenId,
+            earlySellPrice,
             this.buyOrder.amount,
             Side.SELL
         );

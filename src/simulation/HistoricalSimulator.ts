@@ -2,7 +2,7 @@ import { Side } from '@polymarket/clob-client';
 import { SimulationClock } from './SimulationClock.js';
 import { MockCDMarketData } from './MockCDMarketData.js';
 import { MockMarketInfo } from './MockMarketInfo.js';
-import { GeneticOptimizer, GeneticConfig, ParameterBounds, OptimizationResult, CoinType } from './GeneticOptimizer.js';
+import { GeneticOptimizer, GeneticConfig, ParameterBounds, OptimizationResult, CoinType, ValidationResult, StabilityResult } from './GeneticOptimizer.js';
 import { SimulatorLogger } from './SimulatorLogger.js';
 import { TargetedMarket } from '../types/interfaces.js';
 
@@ -20,6 +20,27 @@ export interface SimulationConfig {
     coinType: CoinType;       // Coin type to simulate
     auditTradesCount?: number; // Number of top trades to write to audit (0 = disabled)
     targetedMarket: TargetedMarket; // Market to simulate
+    // Anti-overfitting validation settings
+    validationConfig?: ValidationConfig;
+}
+
+export interface ValidationConfig {
+    // Walk-forward validation
+    enableWalkForward: boolean;     // Enable walk-forward validation (default: true)
+    trainRatio: number;             // Ratio of data for training (default: 0.7)
+
+    // Cross-period validation
+    enableCrossPeriod: boolean;     // Enable cross-period validation (default: true)
+    numCrossPeriods: number;        // Number of periods to test (default: 3)
+
+    // Out-of-sample hold-back
+    enableHoldout: boolean;         // Enable holdout set (default: true)
+    holdoutRatio: number;           // Ratio of data to hold back (default: 0.2)
+
+    // Stability testing
+    enableStabilityTest: boolean;   // Enable parameter stability testing (default: true)
+    stabilityPerturbations: number; // Number of perturbation tests (default: 10)
+    stabilityStrength: number;      // Perturbation strength as fraction of range (default: 0.1)
 }
 
 export interface BotConfig {
@@ -58,6 +79,18 @@ export interface SimulatedTrade {
     pnl?: number;
 }
 
+interface PeriodAssignment {
+    periodStart: number;
+    periodEnd: number;
+    bucket: 'train' | 'validation' | 'holdout';
+}
+
+interface CrossPeriodAssignment {
+    periodStart: number;
+    periodEnd: number;
+    bucket: number;
+}
+
 export interface SimulationResult {
     botName: string;
     params: Record<string, unknown>;
@@ -84,12 +117,25 @@ export class HistoricalSimulator {
     private lastAuditLogDir: string | null = null;
 
     constructor(config: SimulationConfig) {
+        const defaultValidationConfig: ValidationConfig = {
+            enableWalkForward: true,
+            trainRatio: 0.7,
+            enableCrossPeriod: true,
+            numCrossPeriods: 3,
+            enableHoldout: true,
+            holdoutRatio: 0.2,
+            enableStabilityTest: true,
+            stabilityPerturbations: 10,
+            stabilityStrength: 0.1,
+        };
+
         this.config = {
             ...config,
             tickIntervalMs: config.tickIntervalMs ?? 60 * 1000,
             coinType: config.coinType,
             auditTradesCount: config.auditTradesCount ?? 0,
             targetedMarket: config.targetedMarket,
+            validationConfig: config.validationConfig ?? defaultValidationConfig,
         };
         this.logger = new SimulatorLogger(`sim-${this.config.coinType}`);
     }
@@ -256,12 +302,23 @@ export class HistoricalSimulator {
         // Print summary
         optimizer.printSummary();
 
+        // Get optimization result
+        const optimizationResult = optimizer.getResult();
+        const bestParams = optimizationResult.bestIndividual.params;
+        const trainPnl = optimizationResult.bestIndividual.rawPnl ?? optimizationResult.bestIndividual.fitness;
+
+        // Run validation suite if enabled
+        if (this.config.validationConfig) {
+            const { validationResult, stabilityResult } = await this.runValidationSuite(
+                botName, botFactory, optimizer, bestParams, trainPnl
+            );
+            optimizationResult.validationResult = validationResult;
+            optimizationResult.stabilityResult = stabilityResult;
+        }
+
         // Write trade audit file for the best individual
         const auditPath = this.logger.createAuditFile(botName, optimizer.getGeneration());
         this.logger.writeSimulatedTradeAudits(botName, bestTrades);
-
-        // Write top trades and average stats if enabled
-        const bestParams = optimizer.getResult().bestIndividual.params;
         if (auditCount > 0) {
             this.logger.writeTopTradesWithParams(bestTrades, bestParams, auditCount);
             this.logger.writeAverageTradeStats(bestTrades, bestParams);
@@ -309,7 +366,7 @@ export class HistoricalSimulator {
         // Clean up status bar
         this.logger.clearStatusBar();
 
-        return optimizer.getResult();
+        return optimizationResult;
     }
 
     /**
@@ -404,6 +461,397 @@ export class HistoricalSimulator {
     }
 
     /**
+     * Initializes simulation for a specific time window.
+     */
+    private initializeSimulationForWindow(startTime: number, endTime: number): void {
+        const coinType = this.config.coinType!;
+        this.clock = new SimulationClock(startTime, endTime, this.config.tickIntervalMs);
+        this.marketInfo = new MockMarketInfo(this.clock, coinType);
+        this.cdMarketData = new MockCDMarketData(this.clock, coinType);
+    }
+
+    /**
+     * Generates random period assignments for train/validation/holdout buckets.
+     * Periods are randomly shuffled and assigned to buckets based on ratios.
+     */
+    private generateRandomPeriodAssignments(
+        startTime: number,
+        endTime: number,
+        trainRatio: number,
+        holdoutRatio: number
+    ): PeriodAssignment[] {
+        const isQuarterly = this.config.targetedMarket?.toString().includes('Quarterly');
+        const periodMs = isQuarterly ? 15 * 60 * 1000 : 60 * 60 * 1000; // 15min or 1hr
+
+        const assignments: PeriodAssignment[] = [];
+        let currentTime = startTime;
+
+        // Create period entries
+        while (currentTime < endTime) {
+            const periodEnd = Math.min(currentTime + periodMs, endTime);
+            assignments.push({
+                periodStart: currentTime,
+                periodEnd,
+                bucket: 'train' // Will be assigned randomly below
+            });
+            currentTime = periodEnd;
+        }
+
+        // Shuffle and assign buckets
+        const shuffled = [...assignments].sort(() => Math.random() - 0.5);
+        const trainCount = Math.floor(shuffled.length * trainRatio);
+        const holdoutCount = Math.floor(shuffled.length * holdoutRatio);
+
+        shuffled.forEach((period, i) => {
+            if (i < trainCount) {
+                period.bucket = 'train';
+            } else if (i < trainCount + holdoutCount) {
+                period.bucket = 'holdout';
+            } else {
+                period.bucket = 'validation';
+            }
+        });
+
+        return assignments;
+    }
+
+    /**
+     * Classifies trades by their period assignment bucket.
+     */
+    private classifyTradesByPeriod(
+        trades: SimulatedTrade[],
+        assignments: PeriodAssignment[]
+    ): { train: SimulatedTrade[]; validation: SimulatedTrade[]; holdout: SimulatedTrade[] } {
+        const result: { train: SimulatedTrade[]; validation: SimulatedTrade[]; holdout: SimulatedTrade[] } = {
+            train: [],
+            validation: [],
+            holdout: []
+        };
+
+        for (const trade of trades) {
+            const assignment = assignments.find(
+                a => trade.timestamp >= a.periodStart && trade.timestamp < a.periodEnd
+            );
+            if (assignment) {
+                result[assignment.bucket].push(trade);
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Generates random cross-period assignments for N buckets.
+     */
+    private generateRandomCrossPeriodAssignments(
+        startTime: number,
+        endTime: number,
+        numBuckets: number
+    ): CrossPeriodAssignment[] {
+        const isQuarterly = this.config.targetedMarket?.toString().includes('Quarterly');
+        const periodMs = isQuarterly ? 15 * 60 * 1000 : 60 * 60 * 1000;
+
+        const assignments: CrossPeriodAssignment[] = [];
+        let currentTime = startTime;
+
+        while (currentTime < endTime) {
+            const periodEnd = Math.min(currentTime + periodMs, endTime);
+            assignments.push({
+                periodStart: currentTime,
+                periodEnd,
+                bucket: Math.floor(Math.random() * numBuckets) // Random bucket 0 to N-1
+            });
+            currentTime = periodEnd;
+        }
+
+        return assignments;
+    }
+
+    /**
+     * Runs simulation on a specific time window.
+     */
+    private async runSimulationOnWindow(
+        botName: string,
+        botFactory: (params: BotParams) => SimulatedBot,
+        params: Record<string, number>,
+        startTime: number,
+        endTime: number
+    ): Promise<SimulationResult> {
+        // Initialize for this specific window
+        this.initializeSimulationForWindow(startTime, endTime);
+
+        // Create the bot
+        const bot = botFactory({
+            name: botName,
+            clock: this.clock,
+            marketInfo: this.marketInfo,
+            cdMarketData: this.cdMarketData,
+            params,
+            targetedMarket: this.config.targetedMarket!,
+            shouldWriteLogs: false,
+        });
+
+        // Register period change handler
+        const isQuarterly = this.config.targetedMarket?.toString().includes('Quarterly');
+        if (isQuarterly) {
+            this.clock.on('quarterly', async () => {
+                await bot.onHourChange();
+            });
+        } else {
+            this.clock.on('hourly', async () => {
+                await bot.onHourChange();
+            });
+        }
+
+        // Run the simulation
+        while (!this.clock.isComplete()) {
+            try {
+                await bot.onTick();
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                if (!errorMessage.includes('No data available')) {
+                    throw error;
+                }
+            }
+            await this.clock.tick();
+        }
+
+        // Calculate results
+        const trades = bot.getTrades();
+        const result = this.calculateResults(botName, params, trades);
+
+        // Cleanup
+        this.clock.clearListeners();
+
+        return result;
+    }
+
+    /**
+     * Runs walk-forward validation with random period assignment.
+     * Runs ONE full simulation, then classifies trades by randomly assigned periods.
+     */
+    private async runWalkForwardValidation(
+        botName: string,
+        botFactory: (params: BotParams) => SimulatedBot,
+        params: Record<string, number>
+    ): Promise<{ trainPnl: number; validationPnl: number }> {
+        const valConfig = this.config.validationConfig!;
+        const endTime = Date.now();
+        const totalMs = this.config.lookbackDays * 24 * 60 * 60 * 1000;
+        const startTime = endTime - totalMs;
+
+        // Generate random period assignments
+        const assignments = this.generateRandomPeriodAssignments(
+            startTime, endTime, valConfig.trainRatio, 0 // No holdout for walk-forward
+        );
+
+        // Run full simulation
+        const { trades } = await this.runSingleBotSimulationWithTrades(
+            botName, botFactory, params
+        );
+
+        // Classify trades by period
+        const classified = this.classifyTradesByPeriod(trades, assignments);
+
+        // Calculate PnL for each bucket
+        const trainPnl = classified.train.reduce((sum, t) => sum + (t.pnl ?? 0), 0);
+        const validationPnl = classified.validation.reduce((sum, t) => sum + (t.pnl ?? 0), 0);
+
+        return { trainPnl, validationPnl };
+    }
+
+    /**
+     * Runs cross-period validation with random bucket assignment.
+     * Runs ONE full simulation, then classifies trades into N random buckets.
+     */
+    private async runCrossPeriodValidation(
+        botName: string,
+        botFactory: (params: BotParams) => SimulatedBot,
+        params: Record<string, number>
+    ): Promise<{ pnls: number[]; avg: number; stdDev: number }> {
+        const valConfig = this.config.validationConfig!;
+        const endTime = Date.now();
+        const totalMs = this.config.lookbackDays * 24 * 60 * 60 * 1000;
+        const startTime = endTime - totalMs;
+
+        // Generate periods and randomly assign to buckets
+        const assignments = this.generateRandomCrossPeriodAssignments(
+            startTime, endTime, valConfig.numCrossPeriods
+        );
+
+        // Run full simulation
+        const { trades } = await this.runSingleBotSimulationWithTrades(
+            botName, botFactory, params
+        );
+
+        // Calculate PnL per bucket
+        const pnls: number[] = [];
+        for (let bucket = 0; bucket < valConfig.numCrossPeriods; bucket++) {
+            const bucketTrades = trades.filter(t => {
+                const assignment = assignments.find(
+                    a => t.timestamp >= a.periodStart && t.timestamp < a.periodEnd
+                );
+                return assignment?.bucket === bucket;
+            });
+            const pnl = bucketTrades.reduce((sum, t) => sum + (t.pnl ?? 0), 0);
+            pnls.push(pnl);
+        }
+
+        const avg = pnls.reduce((a, b) => a + b, 0) / pnls.length;
+        const variance = pnls.reduce((sum, pnl) => sum + Math.pow(pnl - avg, 2), 0) / pnls.length;
+        const stdDev = Math.sqrt(variance);
+
+        return { pnls, avg, stdDev };
+    }
+
+    /**
+     * Runs simulation on holdout (out-of-sample) data only.
+     */
+    private async runHoldoutValidation(
+        botName: string,
+        botFactory: (params: BotParams) => SimulatedBot,
+        params: Record<string, number>
+    ): Promise<number> {
+        const valConfig = this.config.validationConfig!;
+        const endTime = Date.now();
+        const totalMs = this.config.lookbackDays * 24 * 60 * 60 * 1000;
+
+        // Holdout is the most recent portion of data
+        const holdoutMs = totalMs * valConfig.holdoutRatio;
+        const holdoutStart = endTime - holdoutMs;
+
+        const result = await this.runSimulationOnWindow(
+            botName, botFactory, params, holdoutStart, endTime
+        );
+
+        return result.totalPnl;
+    }
+
+    /**
+     * Runs parameter stability testing.
+     */
+    private async runStabilityTest(
+        botName: string,
+        botFactory: (params: BotParams) => SimulatedBot,
+        optimizer: GeneticOptimizer,
+        bestParams: Record<string, number>,
+        originalPnl: number
+    ): Promise<StabilityResult> {
+        const valConfig = this.config.validationConfig!;
+
+        // Generate perturbed parameter sets
+        const perturbedParams = optimizer.generatePerturbedParams(
+            bestParams,
+            valConfig.stabilityPerturbations,
+            valConfig.stabilityStrength
+        );
+
+        // Run simulations on each perturbed set
+        const perturbedPnls: number[] = [];
+        for (const params of perturbedParams) {
+            const { result } = await this.runSingleBotSimulationWithTrades(
+                botName, botFactory, params
+            );
+            perturbedPnls.push(result.totalPnl);
+        }
+
+        return optimizer.calculateStabilityScore(originalPnl, perturbedPnls);
+    }
+
+    /**
+     * Runs comprehensive validation suite on best parameters.
+     */
+    public async runValidationSuite(
+        botName: string,
+        botFactory: (params: BotParams) => SimulatedBot,
+        optimizer: GeneticOptimizer,
+        bestParams: Record<string, number>,
+        trainPnl: number
+    ): Promise<{ validationResult: ValidationResult; stabilityResult: StabilityResult }> {
+        const valConfig = this.config.validationConfig!;
+
+        this.logger.log(`\n${'='.repeat(60)}`);
+        this.logger.log('ANTI-OVERFITTING VALIDATION SUITE');
+        this.logger.log(`${'='.repeat(60)}`);
+
+        // Walk-forward validation
+        let walkForwardResult = { trainPnl, validationPnl: trainPnl };
+        if (valConfig.enableWalkForward) {
+            this.logger.log('\n[1/4] Running Walk-Forward Validation...');
+            walkForwardResult = await this.runWalkForwardValidation(botName, botFactory, bestParams);
+            this.logger.log(`  Train PnL: $${walkForwardResult.trainPnl.toFixed(2)}`);
+            this.logger.log(`  Validation PnL: $${walkForwardResult.validationPnl.toFixed(2)}`);
+            const ratio = walkForwardResult.validationPnl / (walkForwardResult.trainPnl || 1);
+            this.logger.log(`  Ratio (val/train): ${(ratio * 100).toFixed(1)}%`);
+        }
+
+        // Cross-period validation
+        let crossPeriodResult = { pnls: [trainPnl], avg: trainPnl, stdDev: 0 };
+        if (valConfig.enableCrossPeriod) {
+            this.logger.log('\n[2/4] Running Cross-Period Validation...');
+            crossPeriodResult = await this.runCrossPeriodValidation(botName, botFactory, bestParams);
+            this.logger.log(`  Period PnLs: [${crossPeriodResult.pnls.map(p => `$${p.toFixed(2)}`).join(', ')}]`);
+            this.logger.log(`  Average: $${crossPeriodResult.avg.toFixed(2)}`);
+            this.logger.log(`  Std Dev: $${crossPeriodResult.stdDev.toFixed(2)}`);
+        }
+
+        // Holdout validation
+        let holdoutPnl: number | undefined;
+        if (valConfig.enableHoldout) {
+            this.logger.log('\n[3/4] Running Out-of-Sample Holdout Validation...');
+            holdoutPnl = await this.runHoldoutValidation(botName, botFactory, bestParams);
+            this.logger.log(`  Holdout PnL: $${holdoutPnl.toFixed(2)}`);
+            const holdoutRatio = holdoutPnl / (trainPnl || 1);
+            this.logger.log(`  Ratio (holdout/train): ${(holdoutRatio * 100).toFixed(1)}%`);
+        }
+
+        // Stability testing
+        let stabilityResult: StabilityResult = {
+            originalPnl: trainPnl,
+            perturbedPnls: [],
+            avgPerturbedPnl: trainPnl,
+            stabilityScore: 1.0,
+            isStable: true,
+        };
+        if (valConfig.enableStabilityTest) {
+            this.logger.log('\n[4/4] Running Parameter Stability Test...');
+            stabilityResult = await this.runStabilityTest(
+                botName, botFactory, optimizer, bestParams, trainPnl
+            );
+            this.logger.log(`  Original PnL: $${stabilityResult.originalPnl.toFixed(2)}`);
+            this.logger.log(`  Avg Perturbed PnL: $${stabilityResult.avgPerturbedPnl.toFixed(2)}`);
+            this.logger.log(`  Stability Score: ${(stabilityResult.stabilityScore * 100).toFixed(1)}%`);
+            this.logger.log(`  Is Stable: ${stabilityResult.isStable ? 'YES ✓' : 'NO ✗'}`);
+        }
+
+        // Determine if overfit
+        const validationPnl = walkForwardResult.validationPnl;
+        const overfit = validationPnl < trainPnl * 0.5 ||  // Validation < 50% of training
+            (holdoutPnl !== undefined && holdoutPnl < trainPnl * 0.5) ||
+            crossPeriodResult.stdDev > crossPeriodResult.avg;  // High variance
+
+        // Print summary
+        this.logger.log(`\n${'-'.repeat(60)}`);
+        this.logger.log('VALIDATION SUMMARY');
+        this.logger.log(`${'-'.repeat(60)}`);
+        this.logger.log(`  Overfit Risk: ${overfit ? 'HIGH ⚠️' : 'LOW ✓'}`);
+        this.logger.log(`  Parameter Stability: ${stabilityResult.isStable ? 'STABLE ✓' : 'UNSTABLE ⚠️'}`);
+        this.logger.log(`  Cross-Period Consistency: ${crossPeriodResult.stdDev < crossPeriodResult.avg * 0.5 ? 'GOOD ✓' : 'VARIABLE ⚠️'}`);
+
+        const validationResult: ValidationResult = {
+            trainPnl: walkForwardResult.trainPnl,
+            validationPnl: walkForwardResult.validationPnl,
+            holdoutPnl,
+            crossPeriodPnls: crossPeriodResult.pnls,
+            crossPeriodAvg: crossPeriodResult.avg,
+            crossPeriodStdDev: crossPeriodResult.stdDev,
+            overfit,
+        };
+
+        return { validationResult, stabilityResult };
+    }
+
+    /**
      * Runs genetic optimization for multiple bot strategies.
      */
     public async runMultiStrategyGeneticOptimization(
@@ -443,17 +891,33 @@ export class HistoricalSimulator {
         const sortedResults = Array.from(results.entries())
             .sort((a, b) => b[1].bestIndividual.fitness - a[1].bestIndividual.fitness);
 
-        this.logger.log('\nStrategies Ranked by Best PnL:');
+        this.logger.log('\nStrategies Ranked by Composite Fitness:');
         this.logger.log('-'.repeat(60));
 
         for (let i = 0; i < sortedResults.length; i++) {
             const [name, result] = sortedResults[i];
-            this.logger.log(`\n${i + 1}. ${name}`);
-            this.logger.log(`   Best PnL: $${result.bestIndividual.fitness.toFixed(2)}`);
-            this.logger.log(`   Generations: ${result.totalGenerations}`);
-            this.logger.log(`   Optimized Parameters:`);
+            const best = result.bestIndividual;
+            const val = result.validationResult;
+            const stab = result.stabilityResult;
 
-            for (const [key, value] of Object.entries(result.bestIndividual.params)) {
+            this.logger.log(`\n${i + 1}. ${name}`);
+            this.logger.log(`   Composite Fitness: ${best.fitness.toFixed(2)}`);
+            this.logger.log(`   Raw PnL: $${(best.rawPnl ?? 0).toFixed(2)}`);
+            this.logger.log(`   Sharpe: ${(best.sharpeRatio ?? 0).toFixed(3)} | Win Rate: ${(best.winRate ?? 0).toFixed(1)}%`);
+            this.logger.log(`   Trades: ${best.tradeCount ?? 0} | Generations: ${result.totalGenerations}`);
+
+            // Validation metrics if available
+            if (val) {
+                const overfitStr = val.overfit ? '⚠️ HIGH' : '✓ LOW';
+                this.logger.log(`   Validation PnL: $${val.validationPnl.toFixed(2)} | Overfit Risk: ${overfitStr}`);
+            }
+            if (stab) {
+                const stabStr = stab.isStable ? '✓ STABLE' : '⚠️ UNSTABLE';
+                this.logger.log(`   Stability: ${(stab.stabilityScore * 100).toFixed(1)}% ${stabStr}`);
+            }
+
+            this.logger.log(`   Parameters:`);
+            for (const [key, value] of Object.entries(best.params)) {
                 this.logger.log(`     ${key}: ${value.toFixed(4)}`);
             }
         }

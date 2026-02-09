@@ -40,6 +40,35 @@ import { MorningStar } from '../bots/MorningStar.js';
 import { NCandle } from '../bots/NCandle.js';
 import { EarlyBuyerV2 } from '../bots/EarlyBuyerV2.js';
 import { EsotericNormalization } from '../bots/EsotericNormalization.js';
+import { ScalingPEQ, ScalingPEQCoefficients } from '../utils/ScalingPEQ.js';
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Extract PEQ coefficients from merged params.
+ * Supports both nested object format ({ c0, c1, c2, c3 }) and flat format (_c0, _c1, _c2, _c3).
+ */
+function extractPEQCoefficients(
+    params: Record<string, unknown>,
+    prefix: string,
+    defaults: ScalingPEQCoefficients = { c0: 1, c1: 0, c2: 0, c3: 0 }
+): ScalingPEQCoefficients {
+    // Check for nested object format first
+    const nested = params[prefix];
+    if (nested && typeof nested === 'object' && 'c0' in nested) {
+        return nested as ScalingPEQCoefficients;
+    }
+
+    // Fall back to flat format
+    return {
+        c0: (params[`${prefix}_c0`] as number) ?? defaults.c0,
+        c1: (params[`${prefix}_c1`] as number) ?? defaults.c1,
+        c2: (params[`${prefix}_c2`] as number) ?? defaults.c2,
+        c3: (params[`${prefix}_c3`] as number) ?? defaults.c3,
+    };
+}
 
 // ============================================================================
 // Constants
@@ -277,10 +306,15 @@ export class GeneticOptimizedReader {
                     candleMinutes: mergedParams.candleMinutes ?? 15,
                     breakoutBuffer: mergedParams.breakoutBuffer ?? 50,
                     pullbackBuffer: mergedParams.pullbackBuffer ?? 100,
-                    targetBuyPrice: mergedParams.targetBuyPrice ?? 0.50,
-                    targetSellPrice: mergedParams.targetSellPrice ?? 0.60,
                     targetDollars: mergedParams.targetDollars ?? 10,
                     cutoffMinute: mergedParams.cutoffMinute ?? 45,
+                    candleSizeReference: mergedParams.candleSizeReference ?? 1000,
+                    baseBuyPrice: mergedParams.baseBuyPrice ?? 0.50,
+                    minProfitMargin: mergedParams.minProfitMargin ?? 0.05,
+                    targetBuyPricePEQ: extractPEQCoefficients(mergedParams, 'targetBuyPricePEQ'),
+                    targetSellPricePEQ: extractPEQCoefficients(mergedParams, 'targetSellPricePEQ'),
+                    earlySellTimePEQ: extractPEQCoefficients(mergedParams, 'earlySellTimePEQ', { c0: 0.2, c1: 0, c2: 0, c3: 0 }),
+                    earlySellPricePEQ: extractPEQCoefficients(mergedParams, 'earlySellPricePEQ'),
                 });
 
             case 'FirstCandleV2':
@@ -326,6 +360,28 @@ export class GeneticOptimizedReader {
                     volatilityLookbackPeriods: mergedParams.volatilityLookbackPeriods ?? 15,
                     targetDollars: mergedParams.targetDollars ?? 10,
                     cutoffMinute: mergedParams.cutoffMinute ?? 45,
+                    // Timeout parameters with polynomial scaling
+                    sellTimeout: mergedParams.sellTimeout ?? 30,
+                    sellTimeoutPEQ: new ScalingPEQ({
+                        c0: mergedParams.sellTimeoutPEQ_c0 ?? 1.0,
+                        c1: mergedParams.sellTimeoutPEQ_c1 ?? 0,
+                        c2: mergedParams.sellTimeoutPEQ_c2 ?? 0,
+                        c3: mergedParams.sellTimeoutPEQ_c3 ?? 0,
+                    }),
+                    stoplossCheckTimeout: mergedParams.stoplossCheckTimeout ?? 10,
+                    stoplossCheckTimeoutPEQ: new ScalingPEQ({
+                        c0: mergedParams.stoplossCheckTimeoutPEQ_c0 ?? 1.0,
+                        c1: mergedParams.stoplossCheckTimeoutPEQ_c1 ?? 0,
+                        c2: mergedParams.stoplossCheckTimeoutPEQ_c2 ?? 0,
+                        c3: mergedParams.stoplossCheckTimeoutPEQ_c3 ?? 0,
+                    }),
+                    stoplossFailureTimeout: mergedParams.stoplossFailureTimeout ?? 15,
+                    stoplossFailureTimeoutPEQ: new ScalingPEQ({
+                        c0: mergedParams.stoplossFailureTimeoutPEQ_c0 ?? 1.0,
+                        c1: mergedParams.stoplossFailureTimeoutPEQ_c1 ?? 0,
+                        c2: mergedParams.stoplossFailureTimeoutPEQ_c2 ?? 0,
+                        c3: mergedParams.stoplossFailureTimeoutPEQ_c3 ?? 0,
+                    }),
                 });
 
             case 'Contrarian':
@@ -369,12 +425,44 @@ export class GeneticOptimizedReader {
                 return new NCandle({
                     ...commonProps,
                     candleMinutes: mergedParams.candleMinutes ?? 10,
-                    breakoutBuffer: mergedParams.breakoutBuffer ?? 50,
-                    pullbackBuffer: mergedParams.pullbackBuffer ?? 100,
                     buyPriceBuffer: mergedParams.buyPriceBuffer ?? 0.02,
+                    buyPriceBufferPEQ: new ScalingPEQ({
+                        c0: mergedParams.buyPriceBufferPEQ_c0 ?? 1.0,
+                        c1: mergedParams.buyPriceBufferPEQ_c1 ?? 0,
+                        c2: mergedParams.buyPriceBufferPEQ_c2 ?? 0,
+                        c3: mergedParams.buyPriceBufferPEQ_c3 ?? 0,
+                    }),
                     sellPriceBuffer: mergedParams.sellPriceBuffer ?? 0.02,
                     minProfitMargin: mergedParams.minProfitMargin ?? 0.05,
+                    minProfitMarginPEQ: new ScalingPEQ({
+                        c0: mergedParams.minProfitMarginPEQ_c0 ?? 1.0,
+                        c1: mergedParams.minProfitMarginPEQ_c1 ?? 0,
+                        c2: mergedParams.minProfitMarginPEQ_c2 ?? 0,
+                        c3: mergedParams.minProfitMarginPEQ_c3 ?? 0,
+                    }),
                     stopLossMultiplier: mergedParams.stopLossMultiplier ?? 1.5,
+                    stoplossTimeout: mergedParams.stoplossTimeout ?? 30,
+                    stoplossTimeoutPEQ: new ScalingPEQ({
+                        c0: mergedParams.stoplossTimeoutPEQ_c0 ?? 1.0,
+                        c1: mergedParams.stoplossTimeoutPEQ_c1 ?? 0,
+                        c2: mergedParams.stoplossTimeoutPEQ_c2 ?? 0,
+                        c3: mergedParams.stoplossTimeoutPEQ_c3 ?? 0,
+                    }),
+                    sellTimeout: mergedParams.sellTimeout ?? 300,
+                    sellTimeoutPEQ: new ScalingPEQ({
+                        c0: mergedParams.sellTimeoutPEQ_c0 ?? 1.0,
+                        c1: mergedParams.sellTimeoutPEQ_c1 ?? 0,
+                        c2: mergedParams.sellTimeoutPEQ_c2 ?? 0,
+                        c3: mergedParams.sellTimeoutPEQ_c3 ?? 0,
+                    }),
+                    stoplossFailureTimeout: mergedParams.stoplossFailureTimeout ?? 15,
+                    stoplossFailureTimeoutPEQ: new ScalingPEQ({
+                        c0: mergedParams.stoplossFailureTimeoutPEQ_c0 ?? 1.0,
+                        c1: mergedParams.stoplossFailureTimeoutPEQ_c1 ?? 0,
+                        c2: mergedParams.stoplossFailureTimeoutPEQ_c2 ?? 0,
+                        c3: mergedParams.stoplossFailureTimeoutPEQ_c3 ?? 0,
+                    }),
+                    earlySellScalar: mergedParams.earlySellScalar ?? 0.3,
                     targetDollars: mergedParams.targetDollars ?? 10,
                     cutoffMinute: mergedParams.cutoffMinute ?? 45,
                     maxTradesPerHour: mergedParams.maxTradesPerHour ?? 2,

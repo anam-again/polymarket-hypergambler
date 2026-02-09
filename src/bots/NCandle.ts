@@ -2,27 +2,30 @@ import { Side } from "@polymarket/clob-client";
 
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
 import { MarketSchedule } from "../types/interfaces.js";
+import { ScalingPEQ } from "../utils/ScalingPEQ.js";
 
 // ============================================================================
 // Types & Interfaces
 // ============================================================================
 
 interface NCandleProps extends QuantBotProps {
-    candleMinutes: number;          // Duration of each candle (e.g., 10 minutes)
-    buyPriceBuffer: number;         // How much above current best price to place buy order (e.g., 0.02 = 2 cents)
-    buyPriceBufferScalar: number;   // Scalar for buyPriceBuffer based on time left (0-1, higher = more aggressive as time runs out)
-    sellPriceBuffer: number;        // How much below current best bid to place sell order (e.g., 0.02 = 2 cents)
-    minProfitMargin: number;        // Minimum profit margin above buy price (e.g., 0.05 = 5 cents)
-    minProfitMarginScalar: number;  // Scalar for minProfitMargin based on time left (0-1, higher = accept lower margins as time runs out)
-    stopLossMultiplier: number;     // Stop-loss as multiplier of candle range (e.g., 1.5 = 1.5x range)
-    stoplossTimeout: number;        // Seconds price must be under stoploss before triggering (e.g., 30)
-    stoplossTimeoutScalar: number;  // Scalar for stoplossTimeout based on time left (0-1, higher = faster stoploss as time runs out)
-    sellTimeout: number;            // Seconds after buy match to force sell at market price (e.g., 300)
-    sellTimeoutScalar: number;      // Scalar for sellTimeout based on time left (0-1, higher = faster timeout as time runs out)
-    earlySellScalar: number;        // Scalar for early sell based on current PnL and time left (0-1, higher = more willing to take profit/loss early)
-    targetDollars: number;          // Dollar amount per position
-    cutoffMinute: number;           // Minute after which no new trades are entered
-    maxTradesPerHour: number;       // Maximum number of trades per hour
+    candleMinutes: number;              // Duration of each candle (e.g., 10 minutes)
+    buyPriceBuffer: number;             // How much above current best price to place buy order (e.g., 0.02 = 2 cents)
+    buyPriceBufferPEQ: ScalingPEQ;      // Polynomial scaling for buyPriceBuffer based on time left
+    sellPriceBuffer: number;            // How much below current best bid to place sell order (e.g., 0.02 = 2 cents)
+    minProfitMargin: number;            // Minimum profit margin above buy price (e.g., 0.05 = 5 cents)
+    minProfitMarginPEQ: ScalingPEQ;     // Polynomial scaling for minProfitMargin based on time left
+    stopLossMultiplier: number;         // Stop-loss as multiplier of candle range (e.g., 1.5 = 1.5x range)
+    stoplossTimeout: number;            // Seconds price must be under stoploss before triggering (e.g., 30)
+    stoplossTimeoutPEQ: ScalingPEQ;     // Polynomial scaling for stoplossTimeout based on time left
+    sellTimeout: number;                // Seconds after buy match to force sell at market price (e.g., 300)
+    sellTimeoutPEQ: ScalingPEQ;         // Polynomial scaling for sellTimeout based on time left
+    stoplossFailureTimeout: number;     // Seconds before re-adjusting unfilled stoploss order
+    stoplossFailureTimeoutPEQ: ScalingPEQ; // Polynomial scaling for stoplossFailureTimeout based on time left
+    earlySellScalar: number;            // Scalar for early sell based on current PnL and time left (0-1, higher = more willing to take profit/loss early)
+    targetDollars: number;              // Dollar amount per position
+    cutoffMinute: number;               // Minute after which no new trades are entered
+    maxTradesPerHour: number;           // Maximum number of trades per hour
 }
 
 type TradingState =
@@ -54,15 +57,17 @@ export class NCandle extends QuantBot implements QuantBotRun {
     // --- Properties ---
     private candleMinutes: number;
     private buyPriceBuffer: number;
-    private buyPriceBufferScalar: number;
+    private buyPriceBufferPEQ: ScalingPEQ;
     private sellPriceBuffer: number;
     private minProfitMargin: number;
-    private minProfitMarginScalar: number;
+    private minProfitMarginPEQ: ScalingPEQ;
     private stopLossMultiplier: number;
     private stoplossTimeout: number;
-    private stoplossTimeoutScalar: number;
+    private stoplossTimeoutPEQ: ScalingPEQ;
     private sellTimeout: number;
-    private sellTimeoutScalar: number;
+    private sellTimeoutPEQ: ScalingPEQ;
+    private stoplossFailureTimeout: number;
+    private stoplossFailureTimeoutPEQ: ScalingPEQ;
     private earlySellScalar: number;
     private targetDollars: number;
     private cutoffMinute: number;
@@ -88,6 +93,7 @@ export class NCandle extends QuantBot implements QuantBotRun {
     private buyMatchedAt?: number;            // Timestamp when buy order was matched
     private originalSellPrice?: number;       // Target sell price before any timeout/stoploss adjustments
     private isStoplossOrder: boolean = false; // Whether current sell order is a stoploss order
+    private stoplossCreatedAt?: number;       // Timestamp when stoploss order was created
 
     // --- Constructor ---
 
@@ -96,15 +102,17 @@ export class NCandle extends QuantBot implements QuantBotRun {
 
         this.candleMinutes = props.candleMinutes;
         this.buyPriceBuffer = props.buyPriceBuffer;
-        this.buyPriceBufferScalar = props.buyPriceBufferScalar;
+        this.buyPriceBufferPEQ = props.buyPriceBufferPEQ;
         this.sellPriceBuffer = props.sellPriceBuffer;
         this.minProfitMargin = props.minProfitMargin;
-        this.minProfitMarginScalar = props.minProfitMarginScalar;
+        this.minProfitMarginPEQ = props.minProfitMarginPEQ;
         this.stopLossMultiplier = props.stopLossMultiplier;
         this.stoplossTimeout = props.stoplossTimeout;
-        this.stoplossTimeoutScalar = props.stoplossTimeoutScalar;
+        this.stoplossTimeoutPEQ = props.stoplossTimeoutPEQ;
         this.sellTimeout = props.sellTimeout;
-        this.sellTimeoutScalar = props.sellTimeoutScalar;
+        this.sellTimeoutPEQ = props.sellTimeoutPEQ;
+        this.stoplossFailureTimeout = props.stoplossFailureTimeout ?? 15;
+        this.stoplossFailureTimeoutPEQ = props.stoplossFailureTimeoutPEQ;
         this.earlySellScalar = props.earlySellScalar;
         this.targetDollars = props.targetDollars;
         this.cutoffMinute = props.cutoffMinute;
@@ -147,6 +155,7 @@ export class NCandle extends QuantBot implements QuantBotRun {
         this.buyMatchedAt = undefined;
         this.originalSellPrice = undefined;
         this.isStoplossOrder = false;
+        this.stoplossCreatedAt = undefined;
     }
 
     private resetForNewTrade(): void {
@@ -165,6 +174,7 @@ export class NCandle extends QuantBot implements QuantBotRun {
         this.buyMatchedAt = undefined;
         this.originalSellPrice = undefined;
         this.isStoplossOrder = false;
+        this.stoplossCreatedAt = undefined;
         // Keep previousCandles and lastCandleIndex for continuity
     }
 
@@ -192,7 +202,15 @@ export class NCandle extends QuantBot implements QuantBotRun {
             // Check if we should recover from a stoploss order (price recovered)
             const recovered = await this.checkStoplossRecovery();
             if (recovered) {
-                // Stoploss was cancelled and original sell re-posted, continue
+                // Stoploss was cancelled and original sell re-posted, exit early
+                // to prevent other methods from creating additional sell orders
+                return;
+            }
+
+            // Check if stoploss order needs repricing due to timeout
+            const stoplossRepriced = await this.checkStoplossFailure();
+            if (stoplossRepriced) {
+                return;
             }
 
             // Check for stoploss trigger
@@ -353,9 +371,9 @@ export class NCandle extends QuantBot implements QuantBotRun {
         // Get current best ask price
         const currentAskPrice = await this.marketInfo.getPrice(tokenId, Side.BUY, this.targetedMarket);
 
-        // Calculate effective buy price buffer (more aggressive as time runs out)
+        // Calculate effective buy price buffer using polynomial scaling
         const timeLeftRatio = this.getTimeLeftRatio();
-        const effectiveBuyBuffer = this.buyPriceBuffer * (1 + this.buyPriceBufferScalar * (1 - timeLeftRatio));
+        const effectiveBuyBuffer = this.buyPriceBufferPEQ.scale(this.buyPriceBuffer, timeLeftRatio);
 
         // Calculate dynamic buy price
         const dynamicBuyPrice = Math.round((currentAskPrice + effectiveBuyBuffer) * 100) / 100;
@@ -414,9 +432,9 @@ export class NCandle extends QuantBot implements QuantBotRun {
         // Get current best bid price
         const currentBidPrice = await this.marketInfo.getPrice(tokenId, Side.SELL, this.targetedMarket);
 
-        // Calculate effective min profit margin (accept lower margins as time runs out)
+        // Calculate effective min profit margin using polynomial scaling
         const timeLeftRatio = this.getTimeLeftRatio();
-        const effectiveMinProfitMargin = this.minProfitMargin * (1 - this.minProfitMarginScalar * (1 - timeLeftRatio));
+        const effectiveMinProfitMargin = this.minProfitMarginPEQ.scale(this.minProfitMargin, timeLeftRatio);
 
         // Calculate dynamic sell price
         const marketSellPrice = Math.round((currentBidPrice - this.sellPriceBuffer) * 100) / 100;
@@ -476,9 +494,9 @@ export class NCandle extends QuantBot implements QuantBotRun {
                     return false;
                 }
 
-                // Calculate effective stoploss timeout (shorter as time runs out)
+                // Calculate effective stoploss timeout using polynomial scaling
                 const timeLeftRatio = this.getTimeLeftRatio();
-                const effectiveTimeout = this.stoplossTimeout * (1 - this.stoplossTimeoutScalar * (1 - timeLeftRatio));
+                const effectiveTimeout = this.stoplossTimeoutPEQ.scale(this.stoplossTimeout, timeLeftRatio);
                 const elapsedSeconds = (now - this.stoplossBelowSince) / 1000;
 
                 if (elapsedSeconds >= effectiveTimeout) {
@@ -503,6 +521,7 @@ export class NCandle extends QuantBot implements QuantBotRun {
                         Side.SELL
                     );
                     this.isStoplossOrder = true;
+                    this.stoplossCreatedAt = this.clock.now();
 
                     return true;
                 }
@@ -560,6 +579,62 @@ export class NCandle extends QuantBot implements QuantBotRun {
         return false;
     }
 
+    /**
+     * Checks if a stoploss order has been unfilled for too long and reprices it.
+     * This ensures stoploss orders get filled even in fast-moving markets.
+     */
+    private async checkStoplossFailure(): Promise<boolean> {
+        if (!this.isStoplossOrder || !this.sellOrder || !this.entryTokenId || !this.buyOrder) return false;
+        if (this.sellOrder.status !== TradeStatus.LIVE) return false;
+        if (!this.stoplossCreatedAt) return false;
+
+        const now = this.clock.now();
+        const timeLeftRatio = this.getTimeLeftRatio();
+
+        // Calculate effective stoploss failure timeout using polynomial scaling
+        const effectiveTimeout = this.stoplossFailureTimeoutPEQ.scale(this.stoplossFailureTimeout, timeLeftRatio) * 1000;
+        const elapsedMs = now - this.stoplossCreatedAt;
+
+        if (elapsedMs < effectiveTimeout) {
+            return false; // Not yet timed out
+        }
+
+        try {
+            const currentBidPrice = await this.marketInfo.getPrice(this.entryTokenId, Side.SELL, this.targetedMarket);
+
+            // Calculate new stoploss price: below current market to encourage fill
+            const newStoplossPrice = Math.max(0.01, currentBidPrice - 0.02);
+
+            this.writeLog(
+                `STOPLOSS FAILURE: Order unfilled for ${(elapsedMs / 1000).toFixed(1)}s ` +
+                `(timeout: ${(effectiveTimeout / 1000).toFixed(1)}s), ` +
+                `repricing from ${this.sellOrder.targetSellPrice?.toFixed(2)} to ${newStoplossPrice.toFixed(2)} ` +
+                `(bid=${currentBidPrice.toFixed(2)})`
+            );
+
+            // Cancel current stoploss order
+            await this.cancelTrade(this.sellOrder);
+
+            // Create new stoploss order at updated price
+            this.sellOrder = await this.makeOrder(
+                'ncandle-stoploss-repriced',
+                this.entryTokenId,
+                newStoplossPrice,
+                this.buyOrder.amount,
+                Side.SELL
+            );
+
+            // Reset stoploss timestamp for the new order
+            this.stoplossCreatedAt = this.clock.now();
+
+            return true;
+        } catch (error) {
+            this.writeError(`Error in stoploss failure check: ${error}`);
+        }
+
+        return false;
+    }
+
     private async checkSellTimeout(): Promise<boolean> {
         if (!this.buyMatchedAt || !this.sellOrder || !this.entryTokenId || !this.buyOrder) return false;
         if (this.sellOrder.status !== TradeStatus.LIVE) return false;
@@ -567,9 +642,9 @@ export class NCandle extends QuantBot implements QuantBotRun {
         const now = this.clock.now();
         const elapsedSeconds = (now - this.buyMatchedAt) / 1000;
 
-        // Calculate effective sell timeout (shorter as time runs out)
+        // Calculate effective sell timeout using polynomial scaling
         const timeLeftRatio = this.getTimeLeftRatio();
-        const effectiveTimeout = this.sellTimeout * (1 - this.sellTimeoutScalar * (1 - timeLeftRatio));
+        const effectiveTimeout = this.sellTimeoutPEQ.scale(this.sellTimeout, timeLeftRatio);
 
         if (elapsedSeconds >= effectiveTimeout) {
             try {
@@ -622,8 +697,9 @@ export class NCandle extends QuantBot implements QuantBotRun {
             // Only consider early sell if:
             // 1. We're in profit (even small)
             // 2. Time pressure is high enough
-            // 3. Combined with sellTimeoutScalar for additional pressure
-            const combinedPressure = urgency * (1 + this.sellTimeoutScalar);
+            // 3. Combined with sellTimeoutPEQ compute for additional pressure
+            const sellPressureMultiplier = this.sellTimeoutPEQ.compute(timeLeftRatio);
+            const combinedPressure = urgency * sellPressureMultiplier;
             const shouldSellEarly = pnlRatio > 0 && combinedPressure > 0.5 && pnlPerToken >= profitThreshold;
 
             if (shouldSellEarly) {

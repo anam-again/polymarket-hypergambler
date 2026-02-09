@@ -58,7 +58,8 @@ export interface GeneticYamlConfig {
     targetedMarket: string;  // TargetedMarket enum value as string
 
     optimization: GeneticYamlOptimization;
-    params: Record<string, number>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    params: Record<string, any>;  // Supports numbers and nested objects (e.g., PEQ coefficients)
     runtime: GeneticYamlRuntime;
 }
 
