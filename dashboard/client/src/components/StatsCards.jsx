@@ -16,7 +16,7 @@ function StatsCards({ stats }) {
         <div className="value">{stats.expiredTrades}</div>
       </div>
 
-      <div className="stat-card">
+      <div className={`stat-card pnl-card ${parseFloat(stats.totalPnl) >= 0 ? 'pnl-positive' : 'pnl-negative'}`}>
         <h3>Total PnL</h3>
         <div className={`value ${parseFloat(stats.totalPnl) >= 0 ? 'positive' : 'negative'}`}>
           ${stats.totalPnl}

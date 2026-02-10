@@ -681,5 +681,31 @@ function startAllServices(): void {
   }
 }
 
+// Handle graceful shutdown on Ctrl+C (SIGINT) and SIGTERM
+let isShuttingDown = false;
+
+async function gracefulShutdown(signal: string): Promise<void> {
+  if (isShuttingDown) {
+    console.log('[SYSTEM] Shutdown already in progress...');
+    return;
+  }
+  isShuttingDown = true;
+
+  console.log(`\n[SYSTEM] Received ${signal}. Initiating graceful shutdown...`);
+  console.log('[SYSTEM] Stopping all bots and cancelling active trades...');
+
+  stopAllServices();
+
+  // Give some time for trade cancellations to complete
+  console.log('[SYSTEM] Waiting for trade cancellations to complete...');
+  await new Promise(resolve => setTimeout(resolve, 3000));
+
+  console.log('[SYSTEM] Shutdown complete. Exiting.');
+  process.exit(0);
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
 // Start all services
 startAllServices();

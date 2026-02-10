@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Side } from '@polymarket/clob-client';
 import { QuantBot, TradeOrder, TradeStatus, QuantBotProps } from '../src/bots/QuantBot.js';
+import { TargetedMarket } from '../src/types/interfaces.js';
 
 // Mock node-cron
 vi.mock('node-cron', () => ({
@@ -12,6 +13,8 @@ vi.mock('node-cron', () => ({
 // Mock fs
 vi.mock('fs', () => ({
     appendFileSync: vi.fn(),
+    existsSync: vi.fn().mockReturnValue(true),
+    mkdirSync: vi.fn(),
 }));
 
 // ============================================================================
@@ -58,6 +61,7 @@ function createQuantBotProps(overrides?: Partial<QuantBotProps>): QuantBotProps 
         client: createMockClobClient() as any,
         marketInfo: createMockMarketInfo() as any,
         PROD_MODE: false,
+        targetedMarket: TargetedMarket.BITCOIN_QUARTERLY,
         ...overrides,
     };
 }
@@ -73,6 +77,10 @@ class TestableQuantBot extends QuantBot {
 
     public setSpentThisHour(amount: number): void {
         (this as any).spentThisHour = amount;
+    }
+
+    public setTokenHoldings(clobTokenId: string, amount: number): void {
+        (this as any).tokenHoldings.set(clobTokenId, amount);
     }
 }
 
@@ -287,6 +295,8 @@ describe('QuantBot', () => {
 
         it('should not check budget for SELL orders', async () => {
             bot.setSpentThisHour(10);
+            // Must have tokens to sell
+            bot.setTokenHoldings('token-123', 10);
             const order = await bot.makeOrder('test-sell', 'token-123', 0.5, 10, Side.SELL);
 
             expect(order).toBeDefined();

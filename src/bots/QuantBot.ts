@@ -740,6 +740,27 @@ export class QuantBot {
         this.emit('reset');
       }
     });
+
+    // Capture initial period start price for first period validation
+    this.initializePeriodStartPrice();
+  }
+
+  /**
+   * Captures the initial period start price asynchronously.
+   * This ensures validation works from the first period, not just after the first reset.
+   */
+  private initializePeriodStartPrice(): void {
+    // Use setTimeout to avoid blocking constructor
+    setTimeout(async () => {
+      if (this.isStopped) return;
+      try {
+        const marketData = this.getCdMarketData();
+        this.periodStartPrice = await marketData.getCurrentPriceByMarket(this.targetedMarket);
+        this.writeLog(`Initial period start price captured: $${this.periodStartPrice.toFixed(2)}`);
+      } catch (e) {
+        this.writeLog(`Failed to capture initial period start price: ${e}`, LogLevel.ERROR);
+      }
+    }, 1000); // Small delay to ensure dependencies are ready
   }
 
   // -------------------------------------------------------------------------
@@ -799,6 +820,8 @@ export class QuantBot {
         )
       ).then(() => {
         this.writeLog('All live trades canceled', LogLevel.INFO);
+      }).catch(e => {
+        this.writeLog(`Error during trade cancellation: ${e}`, LogLevel.ERROR);
       });
     }
 
@@ -1124,20 +1147,35 @@ export class QuantBot {
       }
     }
 
-    // Determine winning clob from two mins ago
+    // Determine winning clob from previous period (use 5 min offset to ensure we're in previous period)
     const previousHourUrl = this.marketInfo.getUrl(
-      this.marketInfo.getCurrentEstTimestamp() - (60 * 2 * 1000),
+      this.marketInfo.getCurrentEstTimestamp() - (5 * 60 * 1000),
       this.targetedMarket,
     );
+    this.writeLog(`Checking winner from URL: ${previousHourUrl}`);
+
     const previousMarket = await this.marketInfo.getMarketInfo(previousHourUrl);
     if (previousMarket.error) {
       this.writeLog(`Warning: Unable to find winning previous market: ${previousMarket.error}`);
     } else {
+      this.writeLog(`Previous market prices: ${JSON.stringify(previousMarket.outcomePrices)}, closed: ${previousMarket.closed}`);
+
+      // Warn if market doesn't appear to be resolved (prices not at 0/1)
+      const prices = previousMarket.outcomePrices.map(p => parseFloat(p));
+      const hasResolvedPrice = prices.some(p => p >= 0.99 || p <= 0.01);
+      if (!hasResolvedPrice) {
+        this.writeLog(`WARNING: Previous market may not be resolved yet! Prices: ${JSON.stringify(prices)}`);
+      }
+      if (!previousMarket.closed) {
+        this.writeLog(`WARNING: Previous market 'closed' flag is false - market may not be resolved!`);
+      }
+
       const winningIndex = previousMarket.outcomePrices.reduce(
         (maxIdx, curr, idx, arr) => (parseFloat(curr) > parseFloat(arr[maxIdx]) ? idx : maxIdx),
         0
       );
       const winningClob = previousMarket.clobTokenIds[winningIndex];
+      this.writeLog(`Winner determination: index=${winningIndex}, clobId=${winningClob}`);
 
       // Determine asset price winner (if we have period start price)
       let assetPriceWinner: 'UP' | 'DOWN' | null = null;
@@ -1246,21 +1284,41 @@ export class QuantBot {
         }
       }
 
-      // Determine winning clob from two mins ago
+      // Wait for settlement - API may not have updated winner immediately at period boundary
+      const SETTLEMENT_DELAY_MS = 5 * 1000;
+      await new Promise(resolve => setTimeout(resolve, SETTLEMENT_DELAY_MS));
+
+      // Determine winning clob from previous period (use 5 min offset to ensure we're in previous period)
       const previousHourUrl = this.marketInfo.getUrl(
-        this.marketInfo.getCurrentEstTimestamp() - (60 * 2 * 1000),
+        this.marketInfo.getCurrentEstTimestamp() - (5 * 60 * 1000),
         this.targetedMarket,
       );
+      this.writeLog(`Checking winner from URL: ${previousHourUrl}`);
+
       const previousMarket = await this.marketInfo.getMarketInfo(previousHourUrl);
       if(previousMarket.error) {
         // todo
         throw Error(`Unable to find winning previous market: ${previousMarket.error}`)
       }
+
+      this.writeLog(`Previous market prices: ${JSON.stringify(previousMarket.outcomePrices)}, closed: ${previousMarket.closed}`);
+
+      // Warn if market doesn't appear to be resolved (prices not at 0/1)
+      const prices = previousMarket.outcomePrices.map(p => parseFloat(p));
+      const hasResolvedPrice = prices.some(p => p >= 0.99 || p <= 0.01);
+      if (!hasResolvedPrice) {
+        this.writeLog(`WARNING: Previous market may not be resolved yet! Prices: ${JSON.stringify(prices)}`);
+      }
+      if (!previousMarket.closed) {
+        this.writeLog(`WARNING: Previous market 'closed' flag is false - market may not be resolved!`);
+      }
+
       const winningIndex = previousMarket.outcomePrices.reduce(
         (maxIdx, curr, idx, arr) => (parseFloat(curr) > parseFloat(arr[maxIdx]) ? idx : maxIdx),
         0
       );
       const winningClob = previousMarket.clobTokenIds[winningIndex];
+      this.writeLog(`Winner determination: index=${winningIndex}, clobId=${winningClob}`);
 
       // Determine asset price winner (if we have period start price)
       let assetPriceWinner: 'UP' | 'DOWN' | null = null;

@@ -10,6 +10,7 @@ import TimeRangeSelector from './components/TimeRangeSelector';
 import LiveLogs from './components/LiveLogs';
 import LiveTrades from './components/LiveTrades';
 import SimulatorDashboard from './components/SimulatorDashboard';
+import DancingStickFigure from './components/DancingStickFigure';
 
 const WS_URL = 'ws://localhost:3001/ws';
 const ONE_WEEK = 7 * 24 * 60 * 60 * 1000;
@@ -317,6 +318,7 @@ function App() {
   return (
     <div className="dashboard">
       <div className="dashboard-header">
+        <DancingStickFigure />
         <h1>Dashboard</h1>
         <div className="dashboard-controls">
           <div className="view-toggle">
@@ -449,6 +451,10 @@ function App() {
           )}
         </>
       )}
+
+      <div className="happen-image-container">
+        <img src="/happen.jpg" alt="Happen" className="happen-image" />
+      </div>
     </div>
   );
 }

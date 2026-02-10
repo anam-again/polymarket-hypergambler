@@ -41,6 +41,50 @@ body {
   margin: 0;
 }
 
+/* Dancing Stick Figures */
+.dancing-stick-figures {
+  width: 200px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: #21262d;
+  border-radius: 8px;
+  border: 1px solid #30363d;
+  cursor: default;
+  flex-shrink: 0;
+  padding: 0 8px;
+}
+
+.dancing-stick-figures pre {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 8px;
+  line-height: 1.0;
+  color: #1da1f2;
+  margin: 0;
+  text-align: center;
+  white-space: pre;
+  width: 32px;
+  overflow: hidden;
+}
+
+/* Happen Image */
+.happen-image-container {
+  margin-top: 200px;
+  margin-bottom: 80vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.happen-image {
+  max-width: 90%;
+  width: 1200px;
+  height: auto;
+  border-radius: 16px;
+}
+
 .dashboard-controls {
   display: flex;
   align-items: center;
@@ -160,6 +204,29 @@ body {
 
 .stat-card .value.negative {
   color: #f85149;
+}
+
+/* PnL Card Background Images */
+.stat-card.pnl-card {
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  position: relative;
+}
+
+.stat-card.pnl-card h3,
+.stat-card.pnl-card .value {
+  position: relative;
+  z-index: 1;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+.stat-card.pnl-positive {
+  background-image: url('/awyeah.png');
+}
+
+.stat-card.pnl-negative {
+  background-image: url('/ohwow.png');
 }
 
 .charts-grid {
