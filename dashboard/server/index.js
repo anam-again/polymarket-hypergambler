@@ -12,6 +12,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = 3001;
 
+// Path validation helper to prevent path traversal attacks
+function isPathSafe(basePath, userPath) {
+  const resolved = path.resolve(basePath, userPath);
+  return resolved.startsWith(path.resolve(basePath) + path.sep) || resolved === path.resolve(basePath);
+}
+
 app.use(cors());
 app.use(express.json());
 
@@ -863,6 +869,11 @@ app.get('/api/logs/:source', (req, res) => {
   const botsDir = path.join(__dirname, '../../logs/bots');
   const filePath = path.join(botsDir, `${req.params.source}.log`);
 
+  // Validate path to prevent path traversal attacks
+  if (!isPathSafe(botsDir, `${req.params.source}.log`)) {
+    return res.status(400).json({ error: 'Invalid path' });
+  }
+
   if (!fs.existsSync(filePath)) {
     return res.json([]);
   }
@@ -1111,6 +1122,10 @@ app.get('/api/simulator/files', (req, res) => {
 
 // Get trades from a specific simulator audit file
 app.get('/api/simulator/file/:filename/trades', (req, res) => {
+  // Validate path to prevent path traversal attacks
+  if (!isPathSafe(simulatorLogsDir, req.params.filename)) {
+    return res.status(400).json({ error: 'Invalid path' });
+  }
   const filePath = path.join(simulatorLogsDir, req.params.filename);
   const trades = parseSimulatorAuditFile(filePath);
   res.json(trades);
@@ -1118,6 +1133,10 @@ app.get('/api/simulator/file/:filename/trades', (req, res) => {
 
 // Get stats from a specific simulator audit file
 app.get('/api/simulator/file/:filename/stats', (req, res) => {
+  // Validate path to prevent path traversal attacks
+  if (!isPathSafe(simulatorLogsDir, req.params.filename)) {
+    return res.status(400).json({ error: 'Invalid path' });
+  }
   const filePath = path.join(simulatorLogsDir, req.params.filename);
   const trades = parseSimulatorAuditFile(filePath);
 
@@ -1170,6 +1189,10 @@ app.get('/api/simulator/file/:filename/stats', (req, res) => {
 
 // Get cumulative PnL for a simulator audit file
 app.get('/api/simulator/file/:filename/cumulative-pnl', (req, res) => {
+  // Validate path to prevent path traversal attacks
+  if (!isPathSafe(simulatorLogsDir, req.params.filename)) {
+    return res.status(400).json({ error: 'Invalid path' });
+  }
   const filePath = path.join(simulatorLogsDir, req.params.filename);
   const trades = parseSimulatorAuditFile(filePath);
 
@@ -1196,6 +1219,10 @@ app.get('/api/simulator/file/:filename/cumulative-pnl', (req, res) => {
 
 // Get PnL distribution for a simulator audit file
 app.get('/api/simulator/file/:filename/pnl-distribution', (req, res) => {
+  // Validate path to prevent path traversal attacks
+  if (!isPathSafe(simulatorLogsDir, req.params.filename)) {
+    return res.status(400).json({ error: 'Invalid path' });
+  }
   const filePath = path.join(simulatorLogsDir, req.params.filename);
   const trades = parseSimulatorAuditFile(filePath);
 
@@ -1217,6 +1244,10 @@ app.get('/api/simulator/file/:filename/pnl-distribution', (req, res) => {
 
 // Get top trades and parameters from a simulator audit file
 app.get('/api/simulator/file/:filename/top-trades', (req, res) => {
+  // Validate path to prevent path traversal attacks
+  if (!isPathSafe(simulatorLogsDir, req.params.filename)) {
+    return res.status(400).json({ error: 'Invalid path' });
+  }
   const filePath = path.join(simulatorLogsDir, req.params.filename);
   const parsed = parseSimulatorAuditFileExtended(filePath);
 
@@ -1234,6 +1265,10 @@ app.get('/api/simulator/file/:filename/top-trades', (req, res) => {
 
 // Get average trade statistics and parameters from a simulator audit file
 app.get('/api/simulator/file/:filename/avg-stats', (req, res) => {
+  // Validate path to prevent path traversal attacks
+  if (!isPathSafe(simulatorLogsDir, req.params.filename)) {
+    return res.status(400).json({ error: 'Invalid path' });
+  }
   const filePath = path.join(simulatorLogsDir, req.params.filename);
   const parsed = parseSimulatorAuditFileExtended(filePath);
 
@@ -1249,6 +1284,10 @@ app.get('/api/simulator/file/:filename/avg-stats', (req, res) => {
 
 // Get full extended data from a simulator audit file (includes all sections)
 app.get('/api/simulator/file/:filename/extended', (req, res) => {
+  // Validate path to prevent path traversal attacks
+  if (!isPathSafe(simulatorLogsDir, req.params.filename)) {
+    return res.status(400).json({ error: 'Invalid path' });
+  }
   const filePath = path.join(simulatorLogsDir, req.params.filename);
   const parsed = parseSimulatorAuditFileExtended(filePath);
 

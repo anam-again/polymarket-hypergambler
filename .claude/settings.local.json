@@ -19,7 +19,9 @@
       "Bash(bash scripts/analyze-ncandle-trades.sh:*)",
       "Bash(wc:*)",
       "Bash(sqlite3:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(npm run test:run:*)",
+      "Bash(npm test:*)"
     ]
   }
 }

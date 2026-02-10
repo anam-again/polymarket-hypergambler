@@ -192,11 +192,11 @@ export function getPnlByStrategy(filters = {}) {
 
     return database.prepare(sql).all(...params).map(row => ({
         strategy: row.strategy,
-        pnl: parseFloat(row.pnl.toFixed(2)),
+        pnl: parseFloat((row.pnl ?? 0).toFixed(2)),
         trades: row.trades,
         wins: row.wins,
         losses: row.losses,
-        winRate: ((row.wins / row.trades) * 100).toFixed(1)
+        winRate: row.trades > 0 ? ((row.wins / row.trades) * 100).toFixed(1) : '0.0'
     }));
 }
 
@@ -272,8 +272,8 @@ export function getCumulativePnl(filters = {}) {
     const rows = database.prepare(sql).all(...params).map(row => ({
         timestamp: row.timestamp,
         date: new Date(row.timestamp).toLocaleString(),
-        pnl: row.pnl,
-        cumulative: parseFloat(row.cumulative.toFixed(2)),
+        pnl: row.pnl ?? 0,
+        cumulative: parseFloat((row.cumulative ?? 0).toFixed(2)),
         strategy: row.strategy,
         status: row.status
     }));
@@ -448,7 +448,7 @@ export function getTradesBySide(filters = {}) {
     return database.prepare(sql).all(...params).map(row => ({
         side: row.side,
         count: row.count,
-        pnl: parseFloat(row.pnl.toFixed(2))
+        pnl: parseFloat((row.pnl ?? 0).toFixed(2))
     }));
 }
 
