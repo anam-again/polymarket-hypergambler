@@ -10,6 +10,7 @@ import { CDMarketData } from "../nonBots/CDMarketData.js";
 import { IClock, IMarketData, IMarketInfo, MarketSchedule, TargetedMarket, TradeStatus, TradeOrderProps } from "../types/interfaces.js";
 import { RealClock } from "../utils/RealClock.js";
 import { error } from "console";
+import { TradingDatabase } from "../db/TradingDatabase.js";
 
 // ============================================================================
 // Order Batcher Types
@@ -1419,14 +1420,57 @@ export class QuantBot {
   public writeLog(message: string, logLevel = LogLevel.INFO): void {
     if (!this.shouldWriteLogs) return;
 
-    const timestamp = new Date(this.clock.now()).toISOString();
+    const timestampMs = this.clock.now();
+    const timestamp = new Date(timestampMs).toISOString();
     const logLine = `[${logLevel}] ${timestamp}\t ${message}\n`;
     const prodTest = this.PROD_MODE ? 'prod' : 'test';
-    // Ensure log directory exists
-    if (!existsSync(this.logDirectory)) {
-      mkdirSync(this.logDirectory, { recursive: true });
+
+    // Write to log file (if WRITE_LOGS env is not explicitly false)
+    if (process.env.WRITE_LOGS !== 'false') {
+      // Ensure log directory exists
+      if (!existsSync(this.logDirectory)) {
+        mkdirSync(this.logDirectory, { recursive: true });
+      }
+      appendFileSync(`${this.logDirectory}/${prodTest}-${this.name}.log`, logLine);
     }
-    appendFileSync(`${this.logDirectory}/${prodTest}-${this.name}.log`, logLine);
+
+    // Write ORDER/UPDATE/COMPLETED logs to database for live trades tracking
+    // Skip simulation mode logs
+    const isSimulationMode = this.logDirectory.includes('logs/simulator');
+    if (!isSimulationMode && (logLevel === LogLevel.ORDER || logLevel === LogLevel.UPDATE)) {
+      try {
+        const db = TradingDatabase.getInstance();
+        // Parse ORDER log: orderId, name, side, clobTokenId, orderID, amount, price, marketUrl
+        let orderId: string | null = null;
+        let orderSide: string | null = null;
+        let orderAmount: number | null = null;
+        let orderPrice: number | null = null;
+
+        if (logLevel === LogLevel.ORDER) {
+          const parts = message.split(', ').map(p => p.trim());
+          if (parts.length >= 7) {
+            orderId = parts[0];
+            orderSide = parts[2];
+            orderAmount = parseFloat(parts[5]) || null;
+            orderPrice = parseFloat(parts[6]) || null;
+          }
+        }
+
+        db.insertBotLog({
+          timestamp: timestampMs,
+          level: logLevel,
+          source: `${prodTest}-${this.name}`,
+          message: message.trim(),
+          orderId,
+          orderSide,
+          orderAmount,
+          orderPrice,
+        });
+      } catch (e) {
+        // Don't let DB errors stop the bot
+        console.error(`[DB ERROR] Failed to write bot log: ${e}`);
+      }
+    }
   }
 
   public writeError(e: unknown): void {
@@ -1440,8 +1484,11 @@ export class QuantBot {
   }
 
   public writeCompletedTrade(trade: TradeOrder): void {
+    const timestamp = this.clock.now();
+    const mode = trade.isProd ? 'PROD' : 'TEST';
+
     const message = [
-      this.clock.now(),
+      timestamp,
       this.name,
       trade.orderId,
       trade.status,
@@ -1451,7 +1498,7 @@ export class QuantBot {
       trade.targetSellPrice || -1,
       trade.totalCost,
       trade.finalValue ?? 0,
-      trade.isProd ? 'PROD' : 'TEST',
+      mode,
       trade.clobTokenId,
       trade.side,
     ].join(', ') + "\n";
@@ -1460,7 +1507,33 @@ export class QuantBot {
     // (detected by logDirectory being in logs/simulator folder)
     const isSimulationMode = this.logDirectory.includes('logs/simulator');
     if (!isSimulationMode) {
-      appendFileSync(`./logs/audits/tradeAudit.log`, message);
+      // Write to log file (if WRITE_LOGS env is not explicitly false)
+      if (process.env.WRITE_LOGS !== 'false') {
+        appendFileSync(`./logs/audits/tradeAudit.log`, message);
+      }
+
+      // Write to database
+      try {
+        const db = TradingDatabase.getInstance();
+        db.insertTradeAudit({
+          timestamp,
+          strategy: this.name,
+          tradeId: trade.orderId,
+          status: trade.status,
+          entryTimestamp: trade.createdAt,
+          size: trade.amount,
+          buyPrice: trade.targetBuyPrice ?? null,
+          sellPrice: trade.targetSellPrice ?? null,
+          gross: trade.totalCost,
+          pnl: trade.finalValue ?? 0,
+          mode,
+          marketHash: trade.clobTokenId,
+          side: trade.side,
+        });
+      } catch (e) {
+        // Don't let DB errors stop the bot - log and continue
+        console.error(`[DB ERROR] Failed to write trade audit: ${e}`);
+      }
     }
     this.writeLog(message, LogLevel.COMPLETED);
   }

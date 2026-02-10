@@ -17,7 +17,9 @@
       "Bash(npx tsx:*)",
       "Bash(./analyze-mmaker-trades.sh:*)",
       "Bash(bash scripts/analyze-ncandle-trades.sh:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(sqlite3:*)",
+      "Bash(curl:*)"
     ]
   }
 }

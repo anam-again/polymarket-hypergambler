@@ -13,6 +13,8 @@
     "mspeq": "tsx src/simulation/index.ts --two-stage",
     "mspeq:stage2": "tsx src/simulation/index.ts --base-params",
     "goptimizer": "tsx src/genetic/runGeneticWriter.ts",
+    "migrate-logs": "tsx scripts/migrate-logs.ts",
+    "migrate-logs:reset": "tsx scripts/migrate-logs.ts --reset",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "test": "vitest",
@@ -24,6 +26,7 @@
   "license": "ISC",
   "devDependencies": {
     "@eslint/js": "^9.17.0",
+    "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^22.10.2",
     "@types/node-cron": "^3.0.11",
     "@vitest/coverage-v8": "^4.0.16",
@@ -35,6 +38,7 @@
   },
   "dependencies": {
     "@polymarket/clob-client": "^5.1.3",
+    "better-sqlite3": "^11.0.0",
     "dotenv": "^17.2.3",
     "ethers": "^6.16.0",
     "node-cron": "^4.2.1",

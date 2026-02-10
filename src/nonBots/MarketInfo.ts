@@ -5,6 +5,7 @@ import { appendFileSync, existsSync, mkdirSync } from "fs";
 import { retryWrapper } from "../utils/networking.js";
 import { MarketSchedule, TargetedMarket } from "../types/interfaces.js";
 import { QuantBot } from "../bots/QuantBot.js";
+import { TradingDatabase } from "../db/TradingDatabase.js";
 
 interface ParsedDate {
     year: number;
@@ -544,11 +545,55 @@ export class MarketInfo {
                 : 1;
 
             const timestamp = new Date().toISOString();
+            const timestampMs = Date.now();
             const logLine = `${timestamp},${upBid},${upAsk},${downBid},${downAsk}\n`;
-            const logFile = this.getLogFromMarket(targetedMarket);
-            appendFileSync(logFile, logLine);
+
+            // Write to log file (if WRITE_LOGS env is not explicitly false)
+            if (process.env.WRITE_LOGS !== 'false') {
+                const logFile = this.getLogFromMarket(targetedMarket);
+                appendFileSync(logFile, logLine);
+            }
+
+            // Write to database
+            try {
+                const db = TradingDatabase.getInstance();
+                const market = this.targetedMarketToDbMarket(targetedMarket);
+                db.insertPmarketPrice({
+                    timestamp: timestampMs,
+                    market,
+                    upBid,
+                    upAsk,
+                    downBid,
+                    downAsk,
+                });
+            } catch (e) {
+                // Don't let DB errors stop price logging
+                console.error(`[DB ERROR] Failed to write pmarket price: ${e}`);
+            }
         } catch (error) {
             this.writeLog(`[ERROR] Failed to log prices: ${error}`);
+        }
+    }
+
+    /**
+     * Convert targeted market to database market name.
+     */
+    private targetedMarketToDbMarket(targetedMarket: TargetedMarket): string {
+        switch (targetedMarket) {
+            case TargetedMarket.BITCOIN_HOURLY:
+            case TargetedMarket.BITCOIN_QUARTERLY:
+                return 'btc';
+            case TargetedMarket.ETHEREUM_HOURLY:
+            case TargetedMarket.ETHEREUM_QUARTERLY:
+                return 'eth';
+            case TargetedMarket.SOLANA_HOURLY:
+            case TargetedMarket.SOLANA_QUARTERLY:
+                return 'sol';
+            case TargetedMarket.XRP_HOURLY:
+            case TargetedMarket.XRP_QUARTERLY:
+                return 'xrp';
+            default:
+                return 'unknown';
         }
     }
 }

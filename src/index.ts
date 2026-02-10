@@ -28,6 +28,14 @@ import { GeneticBotManager } from "./genetic/GeneticBotManager.js";
 import { YOLOMLBot } from "./bots/YOLOMLBot.js";
 import { PredictionStyle } from "./ml/types.js";
 import { ScalingPEQ, ScalingPEQCoefficients } from "./utils/ScalingPEQ.js";
+import { TradingDatabase } from "./db/TradingDatabase.js";
+import { FirstCandleMSPEQ } from "./bots/FirstCandleMSPEQ.js";
+import { loadBotsFromYamlDir } from "./adapters/SimulatorParamsAdapter.js";
+
+// Initialize database on startup
+console.log('[SYSTEM] Initializing database...');
+const tradingDb = TradingDatabase.getInstance();
+console.log(`[SYSTEM] Database initialized at ${process.env.DB_PATH || './data/trading.db'}`);
 
 
 const credentials = new Credentials();
@@ -122,6 +130,11 @@ const prodBots: QuantBotRun[] = [
 ]
 
 const testBots: QuantBotRun[] = [
+  ...loadBotsFromYamlDir('./MSPEQSYamls', {
+    ...commonTestProps,
+  }, {
+    pattern: /\.yaml$/,
+  }),
   ...([
     { targetedMarket: TargetedMarket.BITCOIN_HOURLY },
   ]).map((v) => {
@@ -546,6 +559,14 @@ function stopAllServices(): void {
       // Ignore stop errors
     }
   });
+
+  // Close database connection
+  try {
+    tradingDb.close();
+    console.log('[SYSTEM] Database closed');
+  } catch (e) {
+    console.error('[SYSTEM] Error closing database:', e);
+  }
 }
 
 /**

@@ -4,6 +4,7 @@ import { appendFileSync, readFileSync, existsSync } from 'fs';
 
 import { QuantBotRun } from "./../bots/QuantBot.js";
 import { TargetedMarket } from '../types/interfaces.js';
+import { TradingDatabase } from '../db/TradingDatabase.js';
 
 // ============================================================================
 // Types & Interfaces
@@ -461,6 +462,7 @@ export class CDMarketData implements QuantBotRun {
         if (!data) return;
 
         const timestamp = this.getHourStartTimestamp();
+        const timestampMs = new Date(timestamp).getTime();
 
         const line = [
             timestamp,
@@ -472,8 +474,31 @@ export class CDMarketData implements QuantBotRun {
             data.averageFlops,
             data.totalChange,
         ].join(',');
-        const logFile = this.symbolToHourlyLogFile(symbol);
-        appendFileSync(logFile, `${line}\n`);
+
+        // Write to log file (if WRITE_LOGS env is not explicitly false)
+        if (process.env.WRITE_LOGS !== 'false') {
+            const logFile = this.symbolToHourlyLogFile(symbol);
+            appendFileSync(logFile, `${line}\n`);
+        }
+
+        // Write to database
+        try {
+            const db = TradingDatabase.getInstance();
+            db.insertBinanceHourly({
+                timestamp: timestampMs,
+                symbol,
+                hourlyOpen: data.hourlyOpen,
+                averagePrice: data.averagePrice,
+                hourlyMin: data.hourlyMin,
+                hourlyMax: data.hourlyMax,
+                openFlops: data.openFlops,
+                averageFlops: data.averageFlops,
+                totalChange: data.totalChange,
+            });
+        } catch (e) {
+            // Don't let DB errors stop the data collection
+            console.error(`[DB ERROR] Failed to write binance hourly: ${e}`);
+        }
     }
 
     private writeMinuteLogEntry(symbol: BinanceSymbol): void {
@@ -481,13 +506,31 @@ export class CDMarketData implements QuantBotRun {
         if (!data) return;
 
         const timestamp = new Date().toISOString();
+        const timestampMs = Date.now();
 
         const line = [
             timestamp,
             data.previousPrice,
         ].join(',');
-        const logFile = this.symbolToMinutelyLogFile(symbol);
-        appendFileSync(logFile, `${line}\n`);
+
+        // Write to log file (if WRITE_LOGS env is not explicitly false)
+        if (process.env.WRITE_LOGS !== 'false') {
+            const logFile = this.symbolToMinutelyLogFile(symbol);
+            appendFileSync(logFile, `${line}\n`);
+        }
+
+        // Write to database
+        try {
+            const db = TradingDatabase.getInstance();
+            db.insertBinanceMinute({
+                timestamp: timestampMs,
+                symbol,
+                price: data.previousPrice,
+            });
+        } catch (e) {
+            // Don't let DB errors stop the data collection
+            console.error(`[DB ERROR] Failed to write binance minute: ${e}`);
+        }
     }
 
     private logError(message: string, symbol: BinanceSymbol): void {

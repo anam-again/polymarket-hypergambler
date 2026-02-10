@@ -28,8 +28,8 @@ function TradesTable({ trades }) {
               <td className={trade.status === 'EXPIRED' ? 'expired' : 'matched'}>{trade.status}</td>
               <td className={trade.side === 'BUY' ? 'buy' : 'sell'}>{trade.side}</td>
               <td>{trade.size}</td>
-              <td>{trade.buyPrice === -1 ? '-' : trade.buyPrice.toFixed(2)}</td>
-              <td>{trade.sellPrice === -1 ? '-' : trade.sellPrice.toFixed(2)}</td>
+              <td>{trade.buyPrice == null || trade.buyPrice === -1 ? '-' : trade.buyPrice.toFixed(2)}</td>
+              <td>{trade.sellPrice == null || trade.sellPrice === -1 ? '-' : trade.sellPrice.toFixed(2)}</td>
               <td className={trade.pnl >= 0 ? 'positive' : 'negative'}>
                 ${trade.pnl.toFixed(2)}
               </td>

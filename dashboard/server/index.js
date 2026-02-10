@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import chokidar from 'chokidar';
+import * as db from './db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -13,6 +14,19 @@ const PORT = 3001;
 
 app.use(cors());
 app.use(express.json());
+
+// Check if database is available
+let useDatabase = false;
+try {
+  useDatabase = db.isDatabaseReady();
+  if (useDatabase) {
+    console.log('[DB] Database available - using database queries');
+  } else {
+    console.log('[DB] Database not ready - falling back to file parsing');
+  }
+} catch (e) {
+  console.log('[DB] Database not available - falling back to file parsing:', e.message);
+}
 
 // Create HTTP server from Express app
 const server = createServer(app);
@@ -290,6 +304,17 @@ function parseTradeLog() {
 // Get all trades
 app.get('/api/trades', (req, res) => {
   const { startTime, endTime, mode } = getFilters(req);
+
+  if (useDatabase) {
+    try {
+      const trades = db.getTrades({ startTime, endTime, mode });
+      return res.json(trades);
+    } catch (e) {
+      console.error('[DB] Error fetching trades:', e.message);
+      // Fall through to file-based parsing
+    }
+  }
+
   let trades = parseTradeLog();
   trades = filterByTimeRange(trades, startTime, endTime);
   trades = filterByMode(trades, mode);
@@ -299,6 +324,17 @@ app.get('/api/trades', (req, res) => {
 // Get summary stats
 app.get('/api/stats', (req, res) => {
   const { startTime, endTime, mode } = getFilters(req);
+
+  if (useDatabase) {
+    try {
+      const stats = db.getStats({ startTime, endTime, mode });
+      return res.json(stats);
+    } catch (e) {
+      console.error('[DB] Error fetching stats:', e.message);
+      // Fall through to file-based parsing
+    }
+  }
+
   let trades = parseTradeLog();
   trades = filterByTimeRange(trades, startTime, endTime);
   trades = filterByMode(trades, mode);
@@ -326,6 +362,16 @@ app.get('/api/stats', (req, res) => {
 // Get PnL by strategy
 app.get('/api/pnl-by-strategy', (req, res) => {
   const { startTime, endTime, mode } = getFilters(req);
+
+  if (useDatabase) {
+    try {
+      const result = db.getPnlByStrategy({ startTime, endTime, mode });
+      return res.json(result);
+    } catch (e) {
+      console.error('[DB] Error fetching pnl-by-strategy:', e.message);
+    }
+  }
+
   let trades = parseTradeLog();
   trades = filterByTimeRange(trades, startTime, endTime);
   trades = filterByMode(trades, mode);
@@ -357,13 +403,23 @@ app.get('/api/pnl-by-strategy', (req, res) => {
 // Get cumulative PnL over time
 app.get('/api/cumulative-pnl', (req, res) => {
   const { startTime, endTime, mode } = getFilters(req);
+
+  if (useDatabase) {
+    try {
+      const result = db.getCumulativePnl({ startTime, endTime, mode });
+      return res.json(result);
+    } catch (e) {
+      console.error('[DB] Error fetching cumulative-pnl:', e.message);
+    }
+  }
+
   let trades = parseTradeLog();
   trades = filterByTimeRange(trades, startTime, endTime);
   trades = filterByMode(trades, mode);
   const completedTrades = trades.filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED').sort((a, b) => a.timestamp - b.timestamp);
 
   let cumulative = 0;
-  const result = completedTrades.map(trade => {
+  const allPoints = completedTrades.map(trade => {
     cumulative += trade.pnl;
     return {
       timestamp: trade.timestamp,
@@ -375,7 +431,8 @@ app.get('/api/cumulative-pnl', (req, res) => {
     };
   });
 
-  res.json(result);
+  // Downsample to max 2000 points
+  res.json(downsamplePoints(allPoints, 2000));
 });
 
 // Extract tags from strategy name by splitting on '-'
@@ -388,9 +445,32 @@ function extractTags(strategy) {
     .filter(s => s.length > 0);
 }
 
+// Downsample helper function
+function downsamplePoints(points, maxPoints) {
+  if (points.length <= maxPoints) return points;
+
+  const result = [points[0]]; // Always include first
+  const step = (points.length - 1) / (maxPoints - 1);
+  for (let i = 1; i < maxPoints - 1; i++) {
+    result.push(points[Math.floor(i * step)]);
+  }
+  result.push(points[points.length - 1]); // Always include last
+  return result;
+}
+
 // Get cumulative PnL with per-strategy breakdown (pre-computed for frontend)
 app.get('/api/cumulative-pnl-by-strategy', (req, res) => {
   const { startTime, endTime, mode } = getFilters(req);
+
+  if (useDatabase) {
+    try {
+      const result = db.getCumulativePnlByStrategy({ startTime, endTime, mode });
+      return res.json(result);
+    } catch (e) {
+      console.error('[DB] Error fetching cumulative-pnl-by-strategy:', e.message);
+    }
+  }
+
   let trades = parseTradeLog();
   trades = filterByTimeRange(trades, startTime, endTime);
   trades = filterByMode(trades, mode);
@@ -409,16 +489,19 @@ app.get('/api/cumulative-pnl-by-strategy', (req, res) => {
   strategies.forEach(s => { cumulativeByStrategy[s] = 0; });
 
   // Build chart data points with all strategy values at each timestamp
-  const points = completedTrades.filter(trade => trade.strategy).map(trade => {
+  const allPoints = completedTrades.filter(trade => trade.strategy).map(trade => {
     cumulativeByStrategy[trade.strategy] += trade.pnl;
 
     // Calculate total
     const total = Object.values(cumulativeByStrategy).reduce((a, b) => a + b, 0);
 
-    // Create point with strategy breakdown
+    // Only include strategies with non-zero values
     const strategyValues = {};
     strategies.forEach(s => {
-      strategyValues[s] = parseFloat(cumulativeByStrategy[s].toFixed(2));
+      const val = cumulativeByStrategy[s];
+      if (Math.abs(val) > 0.001) {
+        strategyValues[s] = parseFloat(val.toFixed(2));
+      }
     });
 
     return {
@@ -428,10 +511,12 @@ app.get('/api/cumulative-pnl-by-strategy', (req, res) => {
     };
   });
 
+  // Downsample to max 1000 points
+  const points = downsamplePoints(allPoints, 1000);
+
   // Add starting point at 0 if we have a time range
   if (startTime && points.length > 0) {
     const startPoint = { timestamp: startTime, total: 0, strategies: {} };
-    strategies.forEach(s => { startPoint.strategies[s] = 0; });
     points.unshift(startPoint);
   }
 
@@ -445,6 +530,16 @@ app.get('/api/cumulative-pnl-by-strategy', (req, res) => {
 // Get trades by side (BUY/SELL)
 app.get('/api/trades-by-side', (req, res) => {
   const { startTime, endTime, mode } = getFilters(req);
+
+  if (useDatabase) {
+    try {
+      const result = db.getTradesBySide({ startTime, endTime, mode });
+      return res.json(result);
+    } catch (e) {
+      console.error('[DB] Error fetching trades-by-side:', e.message);
+    }
+  }
+
   let trades = parseTradeLog();
   trades = filterByTimeRange(trades, startTime, endTime);
   trades = filterByMode(trades, mode);
@@ -470,6 +565,16 @@ app.get('/api/trades-by-side', (req, res) => {
 // Get list of all strategies with extracted tags
 app.get('/api/strategies', (req, res) => {
   const { startTime, endTime, mode } = getFilters(req);
+
+  if (useDatabase) {
+    try {
+      const result = db.getStrategies({ startTime, endTime, mode });
+      return res.json(result);
+    } catch (e) {
+      console.error('[DB] Error fetching strategies:', e.message);
+    }
+  }
+
   let trades = parseTradeLog();
   trades = filterByTimeRange(trades, startTime, endTime);
   trades = filterByMode(trades, mode);
@@ -489,18 +594,40 @@ app.get('/api/strategies', (req, res) => {
 // Get trades for a specific strategy
 app.get('/api/strategy/:name/trades', (req, res) => {
   const { startTime, endTime, mode } = getFilters(req);
+  const limit = parseInt(req.query.limit) || 500;
+
+  if (useDatabase) {
+    try {
+      const trades = db.getStrategyTrades(req.params.name, { startTime, endTime, mode }, limit);
+      return res.json(trades);
+    } catch (e) {
+      console.error('[DB] Error fetching strategy trades:', e.message);
+    }
+  }
+
   let trades = parseTradeLog();
   trades = filterByTimeRange(trades, startTime, endTime);
   trades = filterByMode(trades, mode);
   const strategyTrades = trades
     .filter(t => t.strategy === req.params.name)
-    .sort((a, b) => b.timestamp - a.timestamp);
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, limit);
   res.json(strategyTrades);
 });
 
 // Get stats for a specific strategy
 app.get('/api/strategy/:name/stats', (req, res) => {
   const { startTime, endTime, mode } = getFilters(req);
+
+  if (useDatabase) {
+    try {
+      const stats = db.getStrategyStats(req.params.name, { startTime, endTime, mode });
+      return res.json(stats);
+    } catch (e) {
+      console.error('[DB] Error fetching strategy stats:', e.message);
+    }
+  }
+
   let trades = parseTradeLog();
   trades = filterByTimeRange(trades, startTime, endTime);
   trades = filterByMode(trades, mode);
@@ -540,6 +667,16 @@ app.get('/api/strategy/:name/stats', (req, res) => {
 // Get cumulative PnL for a specific strategy
 app.get('/api/strategy/:name/cumulative-pnl', (req, res) => {
   const { startTime, endTime, mode } = getFilters(req);
+
+  if (useDatabase) {
+    try {
+      const result = db.getCumulativePnl({ startTime, endTime, mode, strategy: req.params.name });
+      return res.json(result);
+    } catch (e) {
+      console.error('[DB] Error fetching strategy cumulative-pnl:', e.message);
+    }
+  }
+
   let trades = parseTradeLog();
   trades = filterByTimeRange(trades, startTime, endTime);
   trades = filterByMode(trades, mode);
@@ -548,7 +685,7 @@ app.get('/api/strategy/:name/cumulative-pnl', (req, res) => {
     .sort((a, b) => a.timestamp - b.timestamp);
 
   let cumulative = 0;
-  const result = completedTrades.map(trade => {
+  const allPoints = completedTrades.map(trade => {
     cumulative += trade.pnl;
     return {
       timestamp: trade.timestamp,
@@ -562,12 +699,23 @@ app.get('/api/strategy/:name/cumulative-pnl', (req, res) => {
     };
   });
 
-  res.json(result);
+  // Downsample to max 1000 points
+  res.json(downsamplePoints(allPoints, 1000));
 });
 
 // Get PnL distribution for a strategy
 app.get('/api/strategy/:name/pnl-distribution', (req, res) => {
   const { startTime, endTime, mode } = getFilters(req);
+
+  if (useDatabase) {
+    try {
+      const result = db.getStrategyPnlDistribution(req.params.name, { startTime, endTime, mode });
+      return res.json(result);
+    } catch (e) {
+      console.error('[DB] Error fetching strategy pnl-distribution:', e.message);
+    }
+  }
+
   let trades = parseTradeLog();
   trades = filterByTimeRange(trades, startTime, endTime);
   trades = filterByMode(trades, mode);
@@ -600,9 +748,22 @@ function filterLogFilesByMode(files, mode) {
 
 // Get live trading logs from all bot log files
 app.get('/api/live-logs', (req, res) => {
-  const botsDir = path.join(__dirname, '../../logs/bots');
   const limit = parseInt(req.query.limit) || 50;
   const mode = req.query.mode || 'all';
+
+  if (useDatabase) {
+    try {
+      const logs = db.getLiveLogs({ limit, mode });
+      if (logs.length > 0) {
+        return res.json(logs);
+      }
+      // Fall through if no logs in DB yet
+    } catch (e) {
+      console.error('[DB] Error fetching live-logs:', e.message);
+    }
+  }
+
+  const botsDir = path.join(__dirname, '../../logs/bots');
 
   if (!fs.existsSync(botsDir)) {
     return res.json([]);
@@ -652,8 +813,21 @@ app.get('/api/live-logs', (req, res) => {
 
 // Get list of available log files
 app.get('/api/log-files', (req, res) => {
-  const botsDir = path.join(__dirname, '../../logs/bots');
   const mode = req.query.mode || 'all';
+
+  if (useDatabase) {
+    try {
+      const sources = db.getLogSources(mode);
+      if (sources.length > 0) {
+        return res.json(sources);
+      }
+      // Fall through if no sources in DB yet
+    } catch (e) {
+      console.error('[DB] Error fetching log-files:', e.message);
+    }
+  }
+
+  const botsDir = path.join(__dirname, '../../logs/bots');
 
   if (!fs.existsSync(botsDir)) {
     return res.json([]);
@@ -672,8 +846,21 @@ app.get('/api/log-files', (req, res) => {
 
 // Get logs for a specific bot/file
 app.get('/api/logs/:source', (req, res) => {
-  const botsDir = path.join(__dirname, '../../logs/bots');
   const limit = parseInt(req.query.limit) || 100;
+
+  if (useDatabase) {
+    try {
+      const logs = db.getLogsBySource(req.params.source, limit);
+      if (logs.length > 0) {
+        return res.json(logs);
+      }
+      // Fall through if no logs in DB yet
+    } catch (e) {
+      console.error('[DB] Error fetching logs for source:', e.message);
+    }
+  }
+
+  const botsDir = path.join(__dirname, '../../logs/bots');
   const filePath = path.join(botsDir, `${req.params.source}.log`);
 
   if (!fs.existsSync(filePath)) {

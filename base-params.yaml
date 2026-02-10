@@ -34,8 +34,8 @@ params:
   targetDollars: 10
   candleMinutes: 10
   breakoutBuffer: 50
-  pullbackBuffer: 310
+  pullbackBuffer: 10
   cutoffMinute: 12
   candleSizeReference: 1000
-  baseBuyPrice: 0.52
-  minProfitMargin: 0.38
+  baseBuyPrice: 0.65
+  minProfitMargin: 0.20
