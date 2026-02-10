@@ -15,6 +15,7 @@ export type BotStyle =
     | 'TrendFollowing'
     | 'FirstCandle'
     | 'FirstCandleV2'
+    | 'FirstCandleMSPEQ'
     | 'EveningStar'
     | 'MorningStar'
     | 'MeanReversion'
@@ -23,6 +24,7 @@ export type BotStyle =
     | 'EsotericNormalization'
     | 'MarketMaker'
     | 'QuarterlyFirstCandle'
+    | 'QuarterlyFirstCandleMSPEQ'
     | 'QuarterlyMeanReversion'
     | 'QuarterlyTrendFollowing'
     | 'QuarterlyNCandle'
@@ -145,6 +147,7 @@ export const validBotStyles: BotStyle[] = [
     'TrendFollowing',
     'FirstCandle',
     'FirstCandleV2',
+    'FirstCandleMSPEQ',
     'EveningStar',
     'MorningStar',
     'MeanReversion',
@@ -153,6 +156,7 @@ export const validBotStyles: BotStyle[] = [
     'EsotericNormalization',
     'MarketMaker',
     'QuarterlyFirstCandle',
+    'QuarterlyFirstCandleMSPEQ',
     'QuarterlyMeanReversion',
     'QuarterlyTrendFollowing',
     'QuarterlyNCandle',

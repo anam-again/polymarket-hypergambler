@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 
 const WS_URL = 'ws://localhost:3001/ws';
 const MAX_LOGS = 200;
@@ -192,25 +192,27 @@ function LiveLogs({ mode = 'all' }) {
     };
   }, [isRunning]);
 
-  // Filter logs by level, mode, and source
-  const filteredLogs = logs.filter(log => {
-    // Filter by mode based on source name (PROD = 'prod' in name, TEST = no 'prod')
-    if (mode === 'PROD' && !log.source.toLowerCase().includes('prod')) {
-      return false;
-    }
-    if (mode === 'TEST' && log.source.toLowerCase().includes('prod')) {
-      return false;
-    }
-    // Also exclude TEST level logs when in PROD mode
-    if (mode === 'PROD' && log.level === 'TEST') {
-      return false;
-    }
-    // Apply level filter
-    if (levelFilter !== 'all' && log.level !== levelFilter) {
-      return false;
-    }
-    return true;
-  });
+  // Filter logs by level, mode, and source - memoized to prevent recalculation on every render
+  const filteredLogs = useMemo(() => {
+    return logs.filter(log => {
+      // Filter by mode based on source name (PROD = 'prod' in name, TEST = no 'prod')
+      if (mode === 'PROD' && !log.source.toLowerCase().includes('prod')) {
+        return false;
+      }
+      if (mode === 'TEST' && log.source.toLowerCase().includes('prod')) {
+        return false;
+      }
+      // Also exclude TEST level logs when in PROD mode
+      if (mode === 'PROD' && log.level === 'TEST') {
+        return false;
+      }
+      // Apply level filter
+      if (levelFilter !== 'all' && log.level !== levelFilter) {
+        return false;
+      }
+      return true;
+    });
+  }, [logs, mode, levelFilter]);
 
   const getLevelClass = (level) => {
     switch (level) {

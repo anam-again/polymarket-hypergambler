@@ -304,7 +304,8 @@ const testBots: QuantBotRun[] = [
     })
   }),
   ...([
-    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, lookbackPeriods: 15, entryThreshold: 2, exitThreshold: .5, targetBuyPrice: .55, targetSellPrice: .85, cutoffMinute: 45 },
+    { targetedMarket: TargetedMarket.BITCOIN_HOURLY, lookbackPeriods: 15, entryThreshold: 2, targetBuyPrice: .55, targetSellPrice: .85, cutoffMinute: 45 },
+    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, lookbackPeriods: 8, entryThreshold: 2.45, targetBuyPrice: .07, targetSellPrice: .75, cutoffMinute: 10 },
     // { targetedMarket: TargetedMarket.BITCOIN_HOURLY, lookbackPeriods: 30, entryThreshold: 1.0, exitThreshold: 2.5, targetBuyPrice: .50, targetSellPrice: .89, cutoffMinute: 45 },
     // { targetedMarket: TargetedMarket.BITCOIN_HOURLY, lookbackPeriods: 60, entryThreshold: 2.0, exitThreshold: 0.5, targetBuyPrice: .55, targetSellPrice: .85, cutoffMinute: 45 },
     // { targetedMarket: TargetedMarket.BITCOIN_HOURLY, lookbackPeriods: 60, entryThreshold: 2.5, exitThreshold: 1, targetBuyPrice: .26, targetSellPrice: .95, cutoffMinute: 50 },

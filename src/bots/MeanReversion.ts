@@ -10,7 +10,6 @@ import { MarketSchedule } from "../types/interfaces.js";
 interface MeanReversionProps extends QuantBotProps {
     lookbackPeriods: number;        // Number of price points for rolling calculations
     entryThreshold: number;         // Z-score threshold for entry (e.g., 2.0)
-    exitThreshold: number;          // Z-score level to track exit condition (e.g., 0.5)
     targetBuyPrice: number;
     targetSellPrice: number;
     targetDollars: number;
@@ -45,7 +44,6 @@ export class MeanReversion extends QuantBot implements QuantBotRun {
 
     private lookbackPeriods: number;
     private entryThreshold: number;
-    private exitThreshold: number;
     private targetBuyPrice: number;
     private targetSellPrice: number;
     private targetDollars: number;
@@ -56,7 +54,6 @@ export class MeanReversion extends QuantBot implements QuantBotRun {
 
     private state: TradingState = 'WAITING_DATA';
     private tradeDirection?: TradeDirection;
-    private entryZScore?: number;
 
     // --- Constructor ---
 
@@ -65,7 +62,6 @@ export class MeanReversion extends QuantBot implements QuantBotRun {
 
         this.lookbackPeriods = props.lookbackPeriods;
         this.entryThreshold = props.entryThreshold;
-        this.exitThreshold = props.exitThreshold;
         this.targetBuyPrice = props.targetBuyPrice;
         this.targetSellPrice = props.targetSellPrice;
         this.targetDollars = props.targetDollars;
@@ -96,7 +92,6 @@ export class MeanReversion extends QuantBot implements QuantBotRun {
         this.sellOrder = undefined;
         this.state = 'WAITING_DATA';
         this.tradeDirection = undefined;
-        this.entryZScore = undefined;
     }
 
     // -------------------------------------------------------------------------
@@ -161,7 +156,6 @@ export class MeanReversion extends QuantBot implements QuantBotRun {
                 break;
 
             case 'POSITION_OPEN':
-                this.handlePositionOpen(stats);
                 break;
         }
     }
@@ -173,29 +167,16 @@ export class MeanReversion extends QuantBot implements QuantBotRun {
         if (zScore <= -this.entryThreshold) {
             // Price is significantly below mean - expect reversion UP
             this.tradeDirection = 'UP';
-            this.entryZScore = zScore;
             this.logStats(stats, `Entry signal: Z-score ${zScore.toFixed(2)} <= -${this.entryThreshold}, betting UP`);
             await this.createBuyOrder();
         } else if (zScore >= this.entryThreshold) {
             // Price is significantly above mean - expect reversion DOWN
             this.tradeDirection = 'DOWN';
-            this.entryZScore = zScore;
             this.logStats(stats, `Entry signal: Z-score ${zScore.toFixed(2)} >= ${this.entryThreshold}, betting DOWN`);
             await this.createBuyOrder();
         } else {
             // Log periodic stats without entry
             // this.logStats(stats, 'No entry signal');
-        }
-    }
-
-    private handlePositionOpen(stats: RollingStats): void {
-        const { zScore } = stats;
-
-        // Track if mean reversion is occurring
-        if (this.tradeDirection === 'UP' && zScore >= -this.exitThreshold) {
-            // this.logStats(stats, `Mean reversion progressing: Z-score ${zScore.toFixed(2)} approaching mean`);
-        } else if (this.tradeDirection === 'DOWN' && zScore <= this.exitThreshold) {
-            // this.logStats(stats, `Mean reversion progressing: Z-score ${zScore.toFixed(2)} approaching mean`);
         }
     }
 

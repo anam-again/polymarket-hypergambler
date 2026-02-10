@@ -92,7 +92,7 @@ const strategyMatchesTag = (strategy, tag) => {
   return tags.includes(tag.toLowerCase());
 };
 
-function CumulativePnLChart({ data, startTime, endTime }) {
+function CumulativePnLChart({ data, precomputedData, startTime, endTime }) {
   // Applied state (what the chart shows)
   const [visibleStrategies, setVisibleStrategies] = useState(new Set());
   const [showTotal, setShowTotal] = useState(false);
@@ -122,8 +122,13 @@ function CumulativePnLChart({ data, startTime, endTime }) {
     return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   };
 
-  // Extract all unique tags from strategy names
+  // Extract all unique tags from strategy names - use precomputed if available
   const allTags = useMemo(() => {
+    // Use precomputed tags if available
+    if (precomputedData && precomputedData.tags) {
+      return precomputedData.tags;
+    }
+
     if (!data || data.length === 0) return [];
 
     const tagSet = new Set();
@@ -132,7 +137,7 @@ function CumulativePnLChart({ data, startTime, endTime }) {
     });
 
     return [...tagSet].sort();
-  }, [data]);
+  }, [data, precomputedData]);
 
   // Filter data based on selected tags (strategy must match ALL selected tags)
   const filteredData = useMemo(() => {
@@ -162,7 +167,29 @@ function CumulativePnLChart({ data, startTime, endTime }) {
   };
 
   // Get unique strategies and build chart data with per-strategy cumulative values
+  // Uses precomputed data from backend when available (much faster)
   const { chartData, strategies } = useMemo(() => {
+    // Use precomputed data if available and no tag filters applied
+    if (precomputedData && precomputedData.points && selectedTags.length === 0) {
+      const uniqueStrategies = precomputedData.strategies || [];
+
+      // Transform precomputed points to chart format
+      const points = precomputedData.points.map(point => {
+        const chartPoint = {
+          timestamp: point.timestamp,
+          totalCumulative: point.total,
+        };
+        // Add each strategy's value
+        uniqueStrategies.forEach(s => {
+          chartPoint[s] = point.strategies[s] || 0;
+        });
+        return chartPoint;
+      });
+
+      return { chartData: points, strategies: uniqueStrategies };
+    }
+
+    // Fallback: compute from raw data (when tags are applied or precomputed not available)
     if (!filteredData || filteredData.length === 0) {
       return { chartData: [], strategies: [] };
     }
@@ -204,7 +231,7 @@ function CumulativePnLChart({ data, startTime, endTime }) {
     }
 
     return { chartData: points, strategies: uniqueStrategies };
-  }, [filteredData, startTime]);
+  }, [filteredData, startTime, precomputedData, selectedTags.length]);
 
   // Filter strategies based on search term
   const filteredStrategies = useMemo(() => {

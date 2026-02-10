@@ -894,12 +894,20 @@ export class QuantBot {
       if (this.orderOperationPending) {
         // Escape if our subclass entered into makeOrder, but there was a racecondition with clobIds, can often happen if we
         // try to place an order during an audit reset (the tickwrapper was running, and slowly progressing past the 'do nothing' due to awaits)
+        // Return reserved tokens on SELL order escape
+        if (side === Side.SELL) {
+          this.returnTokens(clobTokenId, amount);
+        }
         return;
       }
 
       // Final check before creating order
       if (this.currentPeriodId !== orderPeriodId || this.isResetting) {
         this.writeLog(`Order aborted: period changed before order creation for ${name}`);
+        // Return reserved tokens on SELL order abort
+        if (side === Side.SELL) {
+          this.returnTokens(clobTokenId, amount);
+        }
         return undefined;
       }
       try {
@@ -915,6 +923,10 @@ export class QuantBot {
         const errRes = result as unknown as { error: string; status: number };
         if ((result.errorMsg && result.errorMsg.length > 0) || result.success === false || result.status === '400' || errRes.error || errRes.status === 400) {
           this.writeError(`Order error: ${JSON.stringify(result)}`);
+          // Return reserved tokens on SELL order failure
+          if (side === Side.SELL) {
+            this.returnTokens(clobTokenId, amount);
+          }
           return undefined;
         }
 
@@ -948,6 +960,10 @@ export class QuantBot {
       } catch (e) {
         this.writeError(e instanceof Error ? e.message : JSON.stringify(e));
         this.writeError(`Errored amount: ${amount}`)
+        // Return reserved tokens on SELL order failure
+        if (side === Side.SELL) {
+          this.returnTokens(clobTokenId, amount);
+        }
         return undefined;
       }
     })();

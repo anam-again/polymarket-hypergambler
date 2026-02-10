@@ -24,7 +24,9 @@ import { NCandle } from '../bots/NCandle.js';
 import { EarlyBuyerV2 } from '../bots/EarlyBuyerV2.js';
 import { EsotericNormalization } from '../bots/EsotericNormalization.js';
 import { MarketMaker } from '../bots/MarketMaker.js';
+import { FirstCandleMSPEQ } from '../bots/FirstCandleMSPEQ.js';
 import { ScalingPEQ } from '../utils/ScalingPEQ.js';
+import { MultiSignalPEQ, generateMSPEQBounds, SIGNAL_NAMES, STANDARD_NORMALIZATIONS } from '../utils/MultiSignalPEQ.js';
 
 // Re-export adapter utilities for external use
 export { createSimulatedBot, createMockClobClient, QuantBotSimulationAdapter } from './QuantBotSimulationAdapter.js';
@@ -343,6 +345,99 @@ const quarterlyMarketMakerBounds: ParameterBounds = {
 };
 
 // ============================================================================
+// Multi-Signal PEQ Bounds (Phase 1)
+// ============================================================================
+
+// Signal names for MSPEQ: candleSize, volatility, momentum (3 signals per MSPEQ)
+const MSPEQ_SIGNAL_NAMES = ['candleSize', 'volatility', 'momentum'] as const;
+
+// FirstCandleMSPEQ bounds with multi-signal PEQs for dynamic decision making
+const firstCandleMSPEQBounds: ParameterBounds = {
+    // Base parameters (static, genetically optimized)
+    targetDollars: { min: 5, max: 20, step: 1 },
+    candleMinutes: { min: 5, max: 30, step: 2 },
+    breakoutBuffer: { min: 10, max: 300 },
+    pullbackBuffer: { min: 0, max: 500 },
+    cutoffMinute: { min: 5, max: 55, step: 5 },
+
+    // Reference values
+    candleSizeReference: { min: 500, max: 2000, step: 100 },
+    baseBuyPrice: { min: 0.30, max: 0.70, step: 0.02 },
+    minProfitMargin: { min: 0.05, max: 0.40, step: 0.02 },
+
+    // TargetBuyPrice MSPEQ: 3 signals × 5 params = 15
+    ...generateMSPEQBounds('buyPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
+
+    // TargetSellPrice MSPEQ: 3 signals × 5 params = 15
+    ...generateMSPEQBounds('sellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+
+    // EarlySellTime MSPEQ: 3 signals × 5 params = 15
+    ...generateMSPEQBounds('earlySellTime', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
+
+    // EarlySellPrice MSPEQ: 3 signals × 5 params = 15
+    ...generateMSPEQBounds('earlySellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+};
+
+// Quarterly version with adjusted bounds for 15-minute periods
+const quarterlyFirstCandleMSPEQBounds: ParameterBounds = {
+    // Base parameters
+    targetDollars: { min: 5, max: 20, step: 1 },
+    candleMinutes: { min: 1, max: 7, step: 1 },
+    breakoutBuffer: { min: 10, max: 200 },
+    pullbackBuffer: { min: 0, max: 300 },
+    cutoffMinute: { min: 5, max: 14, step: 1 },
+
+    // Reference values
+    candleSizeReference: { min: 500, max: 2000, step: 100 },
+    baseBuyPrice: { min: 0.30, max: 0.70, step: 0.02 },
+    minProfitMargin: { min: 0.05, max: 0.40, step: 0.02 },
+
+    // MSPEQs (same structure as hourly)
+    ...generateMSPEQBounds('buyPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
+    ...generateMSPEQBounds('sellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('earlySellTime', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
+    ...generateMSPEQBounds('earlySellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+};
+
+// ============================================================================
+// Two-Stage Optimization Bounds (Stage 2: MSPEQ-only, base params frozen)
+// ============================================================================
+
+// Stage 2 bounds - only MSPEQ parameters, base params will be injected from Stage 1
+const firstCandleMSPEQStage2Bounds: ParameterBounds = {
+    // TargetBuyPrice MSPEQ: 3 signals × 5 params = 15
+    ...generateMSPEQBounds('buyPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
+
+    // TargetSellPrice MSPEQ: 3 signals × 5 params = 15
+    ...generateMSPEQBounds('sellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+
+    // EarlySellTime MSPEQ: 3 signals × 5 params = 15
+    ...generateMSPEQBounds('earlySellTime', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
+
+    // EarlySellPrice MSPEQ: 3 signals × 5 params = 15
+    ...generateMSPEQBounds('earlySellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+};
+
+const quarterlyFirstCandleMSPEQStage2Bounds: ParameterBounds = {
+    ...generateMSPEQBounds('buyPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
+    ...generateMSPEQBounds('sellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('earlySellTime', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
+    ...generateMSPEQBounds('earlySellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+};
+
+/** Base parameter names that get frozen in Stage 2 */
+const MSPEQ_BASE_PARAM_NAMES = [
+    'targetDollars',
+    'candleMinutes',
+    'breakoutBuffer',
+    'pullbackBuffer',
+    'cutoffMinute',
+    'candleSizeReference',
+    'baseBuyPrice',
+    'minProfitMargin',
+] as const;
+
+// ============================================================================
 // Factory Functions - Using Real Bot Classes
 // ============================================================================
 
@@ -530,7 +625,6 @@ function createMeanReversionBot(botParams: BotParams): SimulatedBot {
         shouldWriteLogs: shouldWriteLogs ?? false,
         lookbackPeriods: params.lookbackPeriods as number ?? 20,
         entryThreshold: params.entryThreshold as number ?? 2.0,
-        exitThreshold: params.exitThreshold as number ?? 0.5,
         targetBuyPrice: params.targetBuyPrice as number ?? 0.50,
         targetSellPrice: params.targetSellPrice as number ?? 0.60,
         targetDollars: params.targetDollars as number ?? 10,
@@ -709,7 +803,6 @@ function createQuarterlyMeanReversionBot(botParams: BotParams): SimulatedBot {
         shouldWriteLogs: shouldWriteLogs ?? false,
         lookbackPeriods: params.lookbackPeriods as number ?? 10,
         entryThreshold: params.entryThreshold as number ?? 1.5,
-        exitThreshold: params.exitThreshold as number ?? 0.5,
         targetBuyPrice: params.targetBuyPrice as number ?? 0.50,
         targetSellPrice: params.targetSellPrice as number ?? 0.60,
         targetDollars: params.targetDollars as number ?? 10,
@@ -974,6 +1067,98 @@ function createQuarterlyMarketMakerBot(botParams: BotParams): SimulatedBot {
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
 }
 
+// ============================================================================
+// FirstCandleMSPEQ Factory Functions
+// ============================================================================
+
+/**
+ * Helper to build MSPEQ config from flat params
+ */
+function buildMSPEQConfig(
+    prefix: string,
+    params: Record<string, unknown>,
+    signalNames: readonly string[]
+): { signals: Array<{ name: string; weight: number; coefficients: { c0: number; c1: number; c2: number; c3: number }; normalize?: { min: number; max: number } }> } {
+    const signals = signalNames.map(name => ({
+        name,
+        weight: params[`${prefix}_${name}_w`] as number ?? 1.0,
+        coefficients: {
+            c0: params[`${prefix}_${name}_c0`] as number ?? 1.0,
+            c1: params[`${prefix}_${name}_c1`] as number ?? 0,
+            c2: params[`${prefix}_${name}_c2`] as number ?? 0,
+            c3: params[`${prefix}_${name}_c3`] as number ?? 0,
+        },
+        normalize: STANDARD_NORMALIZATIONS[name as keyof typeof STANDARD_NORMALIZATIONS],
+    }));
+    return { signals };
+}
+
+function createFirstCandleMSPEQBot(botParams: BotParams): SimulatedBot {
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory } = botParams;
+
+    const bot = new FirstCandleMSPEQ({
+        name,
+        hourlyDollarLimit: 10000,
+        client: createMockClobClient(),
+        marketInfo,
+        cdMarketData,
+        PROD_MODE: false,
+        targetedMarket,
+        clock,
+        logDirectory: logDirectory ?? SIM_LOG_DIR,
+        shouldWriteLogs: shouldWriteLogs ?? false,
+        // Base parameters
+        candleMinutes: params.candleMinutes as number ?? 15,
+        breakoutBuffer: params.breakoutBuffer as number ?? 50,
+        pullbackBuffer: params.pullbackBuffer as number ?? 100,
+        targetDollars: params.targetDollars as number ?? 10,
+        cutoffMinute: params.cutoffMinute as number ?? 45,
+        candleSizeReference: params.candleSizeReference as number ?? 1000,
+        baseBuyPrice: params.baseBuyPrice as number ?? 0.50,
+        minProfitMargin: params.minProfitMargin as number ?? 0.10,
+        // Multi-Signal PEQ configs
+        targetBuyPriceMSPEQ: buildMSPEQConfig('buyPrice', params, MSPEQ_SIGNAL_NAMES),
+        targetSellPriceMSPEQ: buildMSPEQConfig('sellPrice', params, MSPEQ_SIGNAL_NAMES),
+        earlySellTimeMSPEQ: buildMSPEQConfig('earlySellTime', params, MSPEQ_SIGNAL_NAMES),
+        earlySellPriceMSPEQ: buildMSPEQConfig('earlySellPrice', params, MSPEQ_SIGNAL_NAMES),
+    });
+
+    return new QuantBotSimulationAdapter(bot, clock, marketInfo);
+}
+
+function createQuarterlyFirstCandleMSPEQBot(botParams: BotParams): SimulatedBot {
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory } = botParams;
+
+    const bot = new FirstCandleMSPEQ({
+        name,
+        hourlyDollarLimit: 10000,
+        client: createMockClobClient(),
+        marketInfo,
+        cdMarketData,
+        PROD_MODE: false,
+        targetedMarket,
+        clock,
+        logDirectory: logDirectory ?? SIM_LOG_DIR,
+        shouldWriteLogs: shouldWriteLogs ?? false,
+        // Base parameters
+        candleMinutes: params.candleMinutes as number ?? 5,
+        breakoutBuffer: params.breakoutBuffer as number ?? 50,
+        pullbackBuffer: params.pullbackBuffer as number ?? 100,
+        targetDollars: params.targetDollars as number ?? 10,
+        cutoffMinute: params.cutoffMinute as number ?? 12,
+        candleSizeReference: params.candleSizeReference as number ?? 1000,
+        baseBuyPrice: params.baseBuyPrice as number ?? 0.50,
+        minProfitMargin: params.minProfitMargin as number ?? 0.10,
+        // Multi-Signal PEQ configs
+        targetBuyPriceMSPEQ: buildMSPEQConfig('buyPrice', params, MSPEQ_SIGNAL_NAMES),
+        targetSellPriceMSPEQ: buildMSPEQConfig('sellPrice', params, MSPEQ_SIGNAL_NAMES),
+        earlySellTimeMSPEQ: buildMSPEQConfig('earlySellTime', params, MSPEQ_SIGNAL_NAMES),
+        earlySellPriceMSPEQ: buildMSPEQConfig('earlySellPrice', params, MSPEQ_SIGNAL_NAMES),
+    });
+
+    return new QuantBotSimulationAdapter(bot, clock, marketInfo);
+}
+
 export const geneticStrategies = [
     { name: 'Contrarian', factory: createContrarianBot, bounds: contrarianBounds },
     { name: 'TrendFollowing', factory: createTrendFollowingBot, bounds: trendFollowingBounds },
@@ -997,6 +1182,9 @@ export const geneticStrategies = [
     // Market Maker Strategies
     { name: 'MarketMaker', factory: createMarketMakerBot, bounds: marketMakerBounds },
     { name: 'QuarterlyMarketMaker', factory: createQuarterlyMarketMakerBot, bounds: quarterlyMarketMakerBounds },
+    // Multi-Signal PEQ Strategies (Phase 1)
+    { name: 'FirstCandleMSPEQ', factory: createFirstCandleMSPEQBot, bounds: firstCandleMSPEQBounds },
+    { name: 'QuarterlyFirstCandleMSPEQ', factory: createQuarterlyFirstCandleMSPEQBot, bounds: quarterlyFirstCandleMSPEQBounds },
 ];
 
 // ============================================================================
@@ -1165,6 +1353,398 @@ async function runYamlSimulation(yamlPath: string): Promise<void> {
 }
 
 // ============================================================================
+// Two-Stage Optimization for MSPEQ Strategies
+// ============================================================================
+
+interface TwoStageConfig {
+    lookbackDays: number;
+    populationSize: number;
+    maxGenerations: number;
+    convergenceThreshold: number;
+    coinType: CoinType;
+    targetedMarket: TargetedMarket;
+    auditTradesCount: number;
+    isQuarterly: boolean;
+}
+
+/**
+ * Runs two-stage optimization for MSPEQ strategies:
+ * Stage 1: Optimize base parameters using FirstCandle (fast, ~12 params)
+ * Stage 2: Freeze base params, optimize only MSPEQ coefficients (~60 params)
+ */
+async function runTwoStageOptimization(config: TwoStageConfig): Promise<void> {
+    const logger = new SimulatorLogger(`two-stage-${config.coinType}`);
+
+    logger.log('');
+    logger.log('╔════════════════════════════════════════════════════════════╗');
+    logger.log('║     TWO-STAGE MSPEQ OPTIMIZATION - Historical Sim          ║');
+    logger.log('╚════════════════════════════════════════════════════════════╝');
+    logger.log('');
+    logger.log('Stage 1: Optimize base parameters with FirstCandle');
+    logger.log('Stage 2: Freeze base params, optimize MSPEQ coefficients');
+    logger.log('');
+
+    // ========== STAGE 1: Optimize base parameters ==========
+    logger.log('═══════════════════════════════════════════════════════════════');
+    logger.log('STAGE 1: Base Parameter Optimization (FirstCandle)');
+    logger.log('═══════════════════════════════════════════════════════════════');
+
+    const stage1Simulator = new HistoricalSimulator({
+        lookbackDays: config.lookbackDays,
+        tickIntervalMs: 5 * 1000,
+        coinType: config.coinType,
+        targetedMarket: config.targetedMarket,
+        auditTradesCount: 0, // No audit in Stage 1
+    });
+
+    // Use FirstCandle or QuarterlyFirstCandle based on market type
+    const stage1Strategy = config.isQuarterly
+        ? geneticStrategies.find(s => s.name === 'QuarterlyFirstCandle')!
+        : geneticStrategies.find(s => s.name === 'FirstCandle')!;
+
+    const stage1GeneticConfig = {
+        populationSize: Math.min(config.populationSize, 100), // Cap Stage 1 population
+        maxGenerations: Math.min(config.maxGenerations, 50),  // Cap Stage 1 generations
+        convergenceThreshold: config.convergenceThreshold,
+        convergenceGenerations: 5,
+        mutationRate: 0.25,
+        mutationStrength: 0.3,
+        eliteCount: 2,
+        crossoverRate: 0.7,
+    };
+
+    logger.log(`\nConfiguration:`);
+    logger.log(`  Strategy: ${stage1Strategy.name}`);
+    logger.log(`  Population: ${stage1GeneticConfig.populationSize}`);
+    logger.log(`  Max Generations: ${stage1GeneticConfig.maxGenerations}`);
+    logger.log(`  Parameters: ~12 (base only)`);
+
+    const stage1Result = await stage1Simulator.runGeneticOptimization(
+        stage1Strategy.name,
+        stage1Strategy.factory,
+        stage1Strategy.bounds,
+        stage1GeneticConfig
+    );
+
+    const stage1BestParams = stage1Result.bestIndividual.params;
+    const stage1Fitness = stage1Result.bestIndividual.fitness;
+
+    logger.log(`\nStage 1 Complete!`);
+    logger.log(`  Best Fitness: $${stage1Fitness.toFixed(2)}`);
+    logger.log(`  Generations: ${stage1Result.totalGenerations}`);
+    logger.log(`  Converged: ${stage1Result.converged} (${stage1Result.convergenceReason})`);
+    logger.log(`\nFrozen Base Parameters:`);
+    for (const paramName of MSPEQ_BASE_PARAM_NAMES) {
+        if (stage1BestParams[paramName] !== undefined) {
+            logger.log(`  ${paramName}: ${stage1BestParams[paramName]}`);
+        }
+    }
+
+    // ========== STAGE 2: Optimize MSPEQ coefficients ==========
+    logger.log('\n═══════════════════════════════════════════════════════════════');
+    logger.log('STAGE 2: MSPEQ Coefficient Optimization (base params frozen)');
+    logger.log('═══════════════════════════════════════════════════════════════');
+
+    const stage2Simulator = new HistoricalSimulator({
+        lookbackDays: config.lookbackDays,
+        tickIntervalMs: 5 * 1000,
+        coinType: config.coinType,
+        targetedMarket: config.targetedMarket,
+        auditTradesCount: config.auditTradesCount,
+    });
+
+    // Get Stage 2 bounds (MSPEQ only)
+    const stage2Bounds = config.isQuarterly
+        ? quarterlyFirstCandleMSPEQStage2Bounds
+        : firstCandleMSPEQStage2Bounds;
+
+    // Create a factory that injects frozen base params
+    const stage2StrategyName = config.isQuarterly ? 'QuarterlyFirstCandleMSPEQ' : 'FirstCandleMSPEQ';
+    const stage2Factory = config.isQuarterly ? createQuarterlyFirstCandleMSPEQBot : createFirstCandleMSPEQBot;
+
+    // Create wrapper factory that merges frozen base params with MSPEQ params
+    const stage2FactoryWithFrozenParams = (botParams: BotParams): SimulatedBot => {
+        // Merge frozen base params from Stage 1 with MSPEQ params from Stage 2
+        const mergedParams = {
+            ...botParams,
+            params: {
+                ...stage1BestParams,  // Frozen base params
+                ...botParams.params,   // MSPEQ params being optimized
+            }
+        };
+        return stage2Factory(mergedParams);
+    };
+
+    const stage2GeneticConfig = {
+        populationSize: config.populationSize,
+        maxGenerations: config.maxGenerations,
+        convergenceThreshold: config.convergenceThreshold,
+        convergenceGenerations: 5,
+        mutationRate: 0.25,
+        mutationStrength: 0.3,
+        eliteCount: 2,
+        crossoverRate: 0.7,
+    };
+
+    const stage2ParamCount = Object.keys(stage2Bounds).length;
+    logger.log(`\nConfiguration:`);
+    logger.log(`  Strategy: ${stage2StrategyName}`);
+    logger.log(`  Population: ${stage2GeneticConfig.populationSize}`);
+    logger.log(`  Max Generations: ${stage2GeneticConfig.maxGenerations}`);
+    logger.log(`  Parameters: ${stage2ParamCount} (MSPEQ only)`);
+
+    const stage2Result = await stage2Simulator.runGeneticOptimization(
+        stage2StrategyName + '-Stage2',
+        stage2FactoryWithFrozenParams,
+        stage2Bounds,
+        stage2GeneticConfig
+    );
+
+    const stage2BestParams = stage2Result.bestIndividual.params;
+    const stage2Fitness = stage2Result.bestIndividual.fitness;
+
+    // ========== FINAL RESULTS ==========
+    logger.log('\n═══════════════════════════════════════════════════════════════');
+    logger.log('TWO-STAGE OPTIMIZATION COMPLETE');
+    logger.log('═══════════════════════════════════════════════════════════════');
+
+    logger.log(`\nPerformance Comparison:`);
+    logger.log(`  Stage 1 (FirstCandle base):     $${stage1Fitness.toFixed(2)}`);
+    logger.log(`  Stage 2 (with MSPEQ):           $${stage2Fitness.toFixed(2)}`);
+    logger.log(`  Improvement:                    $${(stage2Fitness - stage1Fitness).toFixed(2)} (${((stage2Fitness / stage1Fitness - 1) * 100).toFixed(1)}%)`);
+
+    // Combine all params for final output
+    const finalParams = {
+        ...stage1BestParams,
+        ...stage2BestParams,
+    };
+
+    logger.log(`\nFinal Combined Parameters:`);
+    logger.log('--- Base Parameters (from Stage 1) ---');
+    for (const paramName of MSPEQ_BASE_PARAM_NAMES) {
+        if (finalParams[paramName] !== undefined) {
+            logger.log(`  ${paramName}: ${finalParams[paramName]}`);
+        }
+    }
+
+    logger.log('\n--- MSPEQ Parameters (from Stage 2) ---');
+    for (const [key, value] of Object.entries(stage2BestParams)) {
+        logger.log(`  ${key}: ${value}`);
+    }
+
+    // Save combined params to YAML
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const yamlOutput = {
+        strategy: stage2StrategyName,
+        market: config.isQuarterly ? 'btc-quarterly' : 'btc-hourly',
+        coin: config.coinType,
+        days: config.lookbackDays,
+        twoStageOptimization: {
+            stage1Fitness: stage1Fitness,
+            stage2Fitness: stage2Fitness,
+            improvement: stage2Fitness - stage1Fitness,
+        },
+        params: finalParams,
+    };
+
+    const yamlPath = `./logs/simulator/two-stage-${stage2StrategyName.toLowerCase()}-${timestamp}.yaml`;
+    fs.writeFileSync(yamlPath, YAML.stringify(yamlOutput));
+    logger.log(`\nParameters saved to: ${yamlPath}`);
+
+    // Copy logs to audit directory if audit mode was used
+    const auditLogDir = stage2Simulator.getLastAuditLogDir();
+    if (auditLogDir) {
+        logger.copyLogsToDirectory(auditLogDir);
+        logger.log(`\nAll logs consolidated to: ${auditLogDir}`);
+    }
+
+    logger.log('\n✓ Two-stage optimization complete\n');
+    logger.log(`Results saved to: ${logger.getLogFilePath()}`);
+}
+
+// ============================================================================
+// Stage 2 Only Optimization (with user-supplied base params)
+// ============================================================================
+
+interface Stage2OnlyConfig {
+    lookbackDays: number;
+    populationSize: number;
+    maxGenerations: number;
+    convergenceThreshold: number;
+    coinType: CoinType;
+    targetedMarket: TargetedMarket;
+    auditTradesCount: number;
+    isQuarterly: boolean;
+    baseParamsFile: string;
+}
+
+/**
+ * Runs Stage 2 only optimization using user-supplied base parameters.
+ * Useful for experimenting with MSPEQ coefficients after finding good base params.
+ */
+async function runStage2OnlyOptimization(config: Stage2OnlyConfig): Promise<void> {
+    const logger = new SimulatorLogger(`stage2-only-${config.coinType}`);
+
+    logger.log('');
+    logger.log('╔════════════════════════════════════════════════════════════╗');
+    logger.log('║     STAGE 2 ONLY - MSPEQ Coefficient Optimization          ║');
+    logger.log('╚════════════════════════════════════════════════════════════╝');
+    logger.log('');
+
+    // Load base params from YAML file
+    let baseParams: Record<string, number>;
+    try {
+        const yamlContent = fs.readFileSync(config.baseParamsFile, 'utf-8');
+        const parsed = YAML.parse(yamlContent) as { params?: Record<string, number> } | Record<string, number>;
+
+        // Support both flat format and nested { params: {...} } format
+        if (parsed.params && typeof parsed.params === 'object') {
+            baseParams = parsed.params as Record<string, number>;
+        } else {
+            baseParams = parsed as Record<string, number>;
+        }
+
+        logger.log(`Loaded base parameters from: ${config.baseParamsFile}`);
+    } catch (error) {
+        logger.error(`Failed to load base params from ${config.baseParamsFile}: ${error}`);
+        process.exit(1);
+    }
+
+    // Extract and validate base params
+    const frozenBaseParams: Record<string, number> = {};
+    logger.log('\nFrozen Base Parameters:');
+    for (const paramName of MSPEQ_BASE_PARAM_NAMES) {
+        if (baseParams[paramName] !== undefined) {
+            frozenBaseParams[paramName] = baseParams[paramName];
+            logger.log(`  ${paramName}: ${baseParams[paramName]}`);
+        }
+    }
+
+    if (Object.keys(frozenBaseParams).length === 0) {
+        logger.error('\nNo valid base parameters found in file!');
+        logger.log('Expected parameters: ' + MSPEQ_BASE_PARAM_NAMES.join(', '));
+        process.exit(1);
+    }
+
+    // ========== STAGE 2: Optimize MSPEQ coefficients ==========
+    logger.log('\n═══════════════════════════════════════════════════════════════');
+    logger.log('STAGE 2: MSPEQ Coefficient Optimization (base params frozen)');
+    logger.log('═══════════════════════════════════════════════════════════════');
+
+    const simulator = new HistoricalSimulator({
+        lookbackDays: config.lookbackDays,
+        tickIntervalMs: 5 * 1000,
+        coinType: config.coinType,
+        targetedMarket: config.targetedMarket,
+        auditTradesCount: config.auditTradesCount,
+    });
+
+    // Get Stage 2 bounds (MSPEQ only)
+    const stage2Bounds = config.isQuarterly
+        ? quarterlyFirstCandleMSPEQStage2Bounds
+        : firstCandleMSPEQStage2Bounds;
+
+    const stage2StrategyName = config.isQuarterly ? 'QuarterlyFirstCandleMSPEQ' : 'FirstCandleMSPEQ';
+    const stage2Factory = config.isQuarterly ? createQuarterlyFirstCandleMSPEQBot : createFirstCandleMSPEQBot;
+
+    // Create wrapper factory that merges frozen base params with MSPEQ params
+    const stage2FactoryWithFrozenParams = (botParams: BotParams): SimulatedBot => {
+        const mergedParams = {
+            ...botParams,
+            params: {
+                ...frozenBaseParams,
+                ...botParams.params,
+            }
+        };
+        return stage2Factory(mergedParams);
+    };
+
+    const geneticConfig = {
+        populationSize: config.populationSize,
+        maxGenerations: config.maxGenerations,
+        convergenceThreshold: config.convergenceThreshold,
+        convergenceGenerations: 5,
+        mutationRate: 0.25,
+        mutationStrength: 0.3,
+        eliteCount: 2,
+        crossoverRate: 0.7,
+    };
+
+    const paramCount = Object.keys(stage2Bounds).length;
+    logger.log(`\nConfiguration:`);
+    logger.log(`  Strategy: ${stage2StrategyName}`);
+    logger.log(`  Population: ${geneticConfig.populationSize}`);
+    logger.log(`  Max Generations: ${geneticConfig.maxGenerations}`);
+    logger.log(`  Parameters: ${paramCount} (MSPEQ only)`);
+
+    const result = await simulator.runGeneticOptimization(
+        stage2StrategyName + '-Stage2Only',
+        stage2FactoryWithFrozenParams,
+        stage2Bounds,
+        geneticConfig
+    );
+
+    const bestMSPEQParams = result.bestIndividual.params;
+    const bestFitness = result.bestIndividual.fitness;
+
+    // ========== RESULTS ==========
+    logger.log('\n═══════════════════════════════════════════════════════════════');
+    logger.log('STAGE 2 OPTIMIZATION COMPLETE');
+    logger.log('═══════════════════════════════════════════════════════════════');
+
+    logger.log(`\nBest Fitness: $${bestFitness.toFixed(2)}`);
+    logger.log(`Generations: ${result.totalGenerations}`);
+    logger.log(`Converged: ${result.converged} (${result.convergenceReason})`);
+
+    // Combine all params for final output
+    const finalParams = {
+        ...frozenBaseParams,
+        ...bestMSPEQParams,
+    };
+
+    logger.log(`\nFinal Combined Parameters:`);
+    logger.log('--- Base Parameters (frozen from input) ---');
+    for (const paramName of MSPEQ_BASE_PARAM_NAMES) {
+        if (finalParams[paramName] !== undefined) {
+            logger.log(`  ${paramName}: ${finalParams[paramName]}`);
+        }
+    }
+
+    logger.log('\n--- MSPEQ Parameters (optimized) ---');
+    for (const [key, value] of Object.entries(bestMSPEQParams)) {
+        logger.log(`  ${key}: ${value}`);
+    }
+
+    // Save combined params to YAML
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const yamlOutput = {
+        strategy: stage2StrategyName,
+        market: config.isQuarterly ? 'btc-quarterly' : 'btc-hourly',
+        coin: config.coinType,
+        days: config.lookbackDays,
+        stage2Only: {
+            baseParamsFile: config.baseParamsFile,
+            fitness: bestFitness,
+        },
+        params: finalParams,
+    };
+
+    const yamlPath = `./logs/simulator/stage2-${stage2StrategyName.toLowerCase()}-${timestamp}.yaml`;
+    fs.writeFileSync(yamlPath, YAML.stringify(yamlOutput));
+    logger.log(`\nParameters saved to: ${yamlPath}`);
+
+    // Copy logs to audit directory if audit mode was used
+    const auditLogDir = simulator.getLastAuditLogDir();
+    if (auditLogDir) {
+        logger.copyLogsToDirectory(auditLogDir);
+        logger.log(`\nAll logs consolidated to: ${auditLogDir}`);
+    }
+
+    logger.log('\n✓ Stage 2 optimization complete\n');
+    logger.log(`Results saved to: ${logger.getLogFilePath()}`);
+}
+
+// ============================================================================
 // Main Entry Point
 // ============================================================================
 
@@ -1177,6 +1757,8 @@ async function main() {
     let populationSize = 15;
     let strategyFilter: string | null = null;
     let coinType: CoinType = CoinType.BTC;
+    let twoStageMode = false;
+    let baseParamsFile: string | null = null;
     let auditTradesCount = 0; // Number of top trades to audit (0 = disabled)
     let targetedMarket: TargetedMarket = TargetedMarket.BITCOIN_HOURLY;
     let yamlFilePath: string | null = null;
@@ -1251,11 +1833,56 @@ async function main() {
                     }
                     break;
                 }
+            case '--base-params':
+            case '-b':
+                baseParamsFile = args[i + 1] || null;
+                break;
+            case '--two-stage':
+            case '-2':
+                twoStageMode = true;
+                break;
             case '--help':
             case '-h':
                 printHelp();
                 process.exit(0);
         }
+    }
+
+    // Check for Stage 2 only mode (with user-supplied base params)
+    if (baseParamsFile) {
+        const isQuarterly = targetedMarket.includes('QUARTERLY') ||
+            (strategyFilter?.toLowerCase().includes('quarterly') ?? false);
+
+        await runStage2OnlyOptimization({
+            lookbackDays,
+            populationSize,
+            maxGenerations,
+            convergenceThreshold,
+            coinType,
+            targetedMarket,
+            auditTradesCount,
+            isQuarterly,
+            baseParamsFile,
+        });
+        return;
+    }
+
+    // Check for two-stage MSPEQ optimization mode
+    if (twoStageMode) {
+        const isQuarterly = targetedMarket.includes('QUARTERLY') ||
+            (strategyFilter?.toLowerCase().includes('quarterly') ?? false);
+
+        await runTwoStageOptimization({
+            lookbackDays,
+            populationSize,
+            maxGenerations,
+            convergenceThreshold,
+            coinType,
+            targetedMarket,
+            auditTradesCount,
+            isQuarterly,
+        });
+        return;
     }
 
     // Check for YAML mode first
@@ -1349,6 +1976,9 @@ Options:
   -p, --population <n>  Population size per generation (default: 15)
   -s, --strategy <name> Only optimize specific strategy (e.g., "FirstCandle", "QuarterlyFirstCandle")
   -a, --audit-trades <n> Write top N and avg trades with parameters to audit file (default: 10 when enabled)
+  -2, --two-stage       Two-stage MSPEQ optimization: Stage 1 optimizes base params with FirstCandle,
+                        Stage 2 freezes base params and optimizes MSPEQ coefficients (much faster)
+  -b, --base-params <file> Stage 2 only: Load base params from YAML file and optimize only MSPEQ coefficients
   -h, --help            Show this help message
 
 Available Strategies:
@@ -1379,6 +2009,14 @@ Examples:
   npm run histSim -- -g -s FirstCandle --max-gen 50
   npm run histSim -- -g -s QuarterlyFirstCandle --max-gen 30
   npm run histSim -- -y params.yaml
+
+Two-Stage MSPEQ Optimization:
+  npm run histSim -- --two-stage -p 100 -m 50 -c btc
+  npm run histSim -- -2 -M btc-quarterly -p 75 -m 40 -c btc
+
+Stage 2 Only (with pre-optimized base params):
+  npm run histSim -- --base-params ./logs/simulator/firstcandle-params.yaml -p 150 -m 75
+  npm run histSim -- -b base-params.yaml -M btc-quarterly -p 100 -m 50
 `);
 }
 

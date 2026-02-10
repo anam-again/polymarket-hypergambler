@@ -7,8 +7,10 @@ function LiveTrades({ mode }) {
   const [trades, setTrades] = useState({ orders: [], positions: [], lastUpdated: null });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [wsConnected, setWsConnected] = useState(false);
   const wsRef = useRef(null);
   const pollIntervalRef = useRef(null);
+  const wsConnectedRef = useRef(false);
 
   const fetchLiveTrades = useCallback(async () => {
     try {
@@ -27,15 +29,28 @@ function LiveTrades({ mode }) {
     }
   }, [mode]);
 
+  // Start/stop polling based on WebSocket connection status
+  const updatePolling = useCallback(() => {
+    if (wsConnectedRef.current) {
+      // WebSocket connected - stop polling
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    } else {
+      // WebSocket disconnected - start polling as fallback
+      if (!pollIntervalRef.current) {
+        pollIntervalRef.current = setInterval(fetchLiveTrades, 5000);
+      }
+    }
+  }, [fetchLiveTrades]);
+
   const startTracking = useCallback(() => {
     setLoading(true);
     setIsActive(true);
 
     // Initial fetch
     fetchLiveTrades().finally(() => setLoading(false));
-
-    // Set up polling interval (every 5 seconds)
-    pollIntervalRef.current = setInterval(fetchLiveTrades, 5000);
 
     // Connect WebSocket for real-time updates
     try {
@@ -44,6 +59,9 @@ function LiveTrades({ mode }) {
 
       ws.onopen = () => {
         ws.send(JSON.stringify({ type: 'subscribe-live-trades' }));
+        wsConnectedRef.current = true;
+        setWsConnected(true);
+        updatePolling();
       };
 
       ws.onmessage = (event) => {
@@ -60,6 +78,9 @@ function LiveTrades({ mode }) {
 
       ws.onclose = () => {
         wsRef.current = null;
+        wsConnectedRef.current = false;
+        setWsConnected(false);
+        updatePolling();
       };
 
       ws.onerror = () => {
@@ -67,8 +88,10 @@ function LiveTrades({ mode }) {
       };
     } catch (err) {
       console.error('WebSocket connection failed:', err);
+      // Start polling as fallback when WS fails
+      updatePolling();
     }
-  }, [fetchLiveTrades]);
+  }, [fetchLiveTrades, updatePolling]);
 
   const stopTracking = useCallback(() => {
     setIsActive(false);

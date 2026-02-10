@@ -17,6 +17,7 @@ const ONE_WEEK = 7 * 24 * 60 * 60 * 1000;
 function App() {
   const [stats, setStats] = useState(null);
   const [cumulativePnl, setCumulativePnl] = useState([]);
+  const [cumulativePnlByStrategy, setCumulativePnlByStrategy] = useState(null);
   const [strategyPnl, setStrategyPnl] = useState([]);
   const [sideData, setSideData] = useState([]);
   const [strategies, setStrategies] = useState([]);
@@ -41,6 +42,7 @@ function App() {
 
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
+  const debounceTimeoutRef = useRef(null);
   const startTimeRef = useRef(startTime);
   const endTimeRef = useRef(endTime);
   const modeRef = useRef(mode);
@@ -87,9 +89,10 @@ function App() {
         return query ? `${endpoint}?${query}` : endpoint;
       };
 
-      const [statsRes, cumulativeRes, strategyRes, sideRes, strategiesRes] = await Promise.all([
+      const [statsRes, cumulativeRes, cumulativeByStrategyRes, strategyRes, sideRes, strategiesRes] = await Promise.all([
         fetch(buildUrlWithCurrentTime('/api/stats')),
         fetch(buildUrlWithCurrentTime('/api/cumulative-pnl')),
+        fetch(buildUrlWithCurrentTime('/api/cumulative-pnl-by-strategy')),
         fetch(buildUrlWithCurrentTime('/api/pnl-by-strategy')),
         fetch(buildUrlWithCurrentTime('/api/trades-by-side')),
         fetch(buildUrlWithCurrentTime('/api/strategies'))
@@ -97,9 +100,12 @@ function App() {
 
       setStats(await statsRes.json());
       setCumulativePnl(await cumulativeRes.json());
+      setCumulativePnlByStrategy(await cumulativeByStrategyRes.json());
       setStrategyPnl(await strategyRes.json());
       setSideData(await sideRes.json());
-      setStrategies(await strategiesRes.json());
+      const strategiesData = await strategiesRes.json();
+      // Handle both old format (array) and new format (object with strategies/tags)
+      setStrategies(Array.isArray(strategiesData) ? strategiesData : strategiesData.strategies);
       setLastUpdate(new Date());
     } catch (error) {
       console.error('Failed to fetch data:', error);
@@ -107,6 +113,120 @@ function App() {
       setLoading(false);
       setRefreshing(false);
     }
+  }, []);
+
+  // Debounced version of fetchData for WebSocket updates (fallback when incremental update not possible)
+  const debouncedFetchData = useCallback((isRefresh = false) => {
+    if (debounceTimeoutRef.current) {
+      clearTimeout(debounceTimeoutRef.current);
+    }
+    debounceTimeoutRef.current = setTimeout(() => {
+      fetchData(isRefresh);
+    }, 500);
+  }, [fetchData]);
+
+  // Handle incremental trade update from WebSocket
+  const handleIncrementalUpdate = useCallback((data) => {
+    const { trades: newTrades, stats: newStats } = data;
+
+    if (!newTrades || newTrades.length === 0) return;
+
+    // Filter trades by current time range and mode
+    const filteredTrades = newTrades.filter(trade => {
+      if (startTimeRef.current && trade.timestamp < startTimeRef.current) return false;
+      if (endTimeRef.current && trade.timestamp > endTimeRef.current) return false;
+      if (modeRef.current && modeRef.current !== 'all') {
+        if (modeRef.current === 'PROD') {
+          if (trade.mode !== 'PROD' && trade.mode !== 'ORDER') return false;
+        } else if (trade.mode !== modeRef.current) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    if (filteredTrades.length === 0) return;
+
+    // Update stats if provided
+    if (newStats) {
+      setStats(newStats);
+    }
+
+    // Append new trades to cumulative PnL data
+    setCumulativePnl(prev => {
+      const completedTrades = filteredTrades.filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED');
+      if (completedTrades.length === 0) return prev;
+
+      let lastCumulative = prev.length > 0 ? prev[prev.length - 1].cumulative : 0;
+      const newPoints = completedTrades.map(trade => {
+        lastCumulative += trade.pnl;
+        return {
+          timestamp: trade.timestamp,
+          date: new Date(trade.timestamp).toLocaleString(),
+          pnl: trade.pnl,
+          cumulative: parseFloat(lastCumulative.toFixed(2)),
+          strategy: trade.strategy,
+          status: trade.status
+        };
+      });
+
+      return [...prev, ...newPoints];
+    });
+
+    // Update strategy PnL
+    setStrategyPnl(prev => {
+      const completedTrades = filteredTrades.filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED');
+      if (completedTrades.length === 0) return prev;
+
+      const updated = [...prev];
+      completedTrades.forEach(trade => {
+        const existing = updated.find(s => s.strategy === trade.strategy);
+        if (existing) {
+          existing.pnl = parseFloat((existing.pnl + trade.pnl).toFixed(2));
+          existing.trades++;
+          if (trade.pnl > 0) existing.wins++;
+          else existing.losses++;
+          existing.winRate = ((existing.wins / existing.trades) * 100).toFixed(1);
+        } else {
+          updated.push({
+            strategy: trade.strategy,
+            pnl: parseFloat(trade.pnl.toFixed(2)),
+            trades: 1,
+            wins: trade.pnl > 0 ? 1 : 0,
+            losses: trade.pnl <= 0 ? 1 : 0,
+            winRate: trade.pnl > 0 ? '100.0' : '0.0'
+          });
+        }
+      });
+      return updated;
+    });
+
+    // Update side distribution
+    setSideData(prev => {
+      const completedTrades = filteredTrades.filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED');
+      if (completedTrades.length === 0) return prev;
+
+      const updated = prev.map(s => ({ ...s }));
+      completedTrades.forEach(trade => {
+        const sideEntry = updated.find(s => s.side === trade.side);
+        if (sideEntry) {
+          sideEntry.count++;
+          sideEntry.pnl = parseFloat((sideEntry.pnl + trade.pnl).toFixed(2));
+        }
+      });
+      return updated;
+    });
+
+    // Update strategies list if new strategy appears
+    setStrategies(prev => {
+      const newStrategies = filteredTrades
+        .map(t => t.strategy)
+        .filter(s => s && !prev.includes(s));
+      if (newStrategies.length === 0) return prev;
+      return [...prev, ...newStrategies].sort();
+    });
+
+    setLastUpdate(new Date());
   }, []);
 
   // Data fetch when isRunning transitions to true or time range/mode changes while running
@@ -132,8 +252,15 @@ function App() {
           try {
             const data = JSON.parse(event.data);
             if (data.type === 'trade-update' && isRunningRef.current) {
-              console.log('Trade update received, refreshing data...');
-              fetchData(true);
+              // Use incremental update if trade data is included
+              if (data.trades && data.trades.length > 0) {
+                console.log(`Trade update received: ${data.trades.length} new trade(s), applying incrementally`);
+                handleIncrementalUpdate(data);
+              } else {
+                // Fallback to full refresh with debounce
+                console.log('Trade update received, debouncing refresh...');
+                debouncedFetchData(true);
+              }
             }
           } catch (err) {
             // Ignore non-trade messages
@@ -163,12 +290,15 @@ function App() {
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
+      if (debounceTimeoutRef.current) {
+        clearTimeout(debounceTimeoutRef.current);
+      }
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
       }
     };
-  }, [fetchData]);
+  }, [debouncedFetchData, handleIncrementalUpdate]);
 
   const handleTimeRangeChange = (newStart, newEnd) => {
     setStartTime(newStart);
@@ -278,7 +408,12 @@ function App() {
               <div className="charts-grid">
                 <div className="chart-card full-width">
                   <h2>Cumulative PnL Over Time</h2>
-                  <CumulativePnLChart data={cumulativePnl} startTime={startTime} endTime={endTime} />
+                  <CumulativePnLChart
+                    data={cumulativePnl}
+                    precomputedData={cumulativePnlByStrategy}
+                    startTime={startTime}
+                    endTime={endTime}
+                  />
                 </div>
 
                 <div className="chart-card">

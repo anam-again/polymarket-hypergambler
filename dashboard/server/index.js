@@ -115,9 +115,90 @@ if (fs.existsSync(botsLogsDir)) {
   console.log(`Watching bot logs directory: ${botsLogsDir}`);
 }
 
+// Track last known audit log size for incremental reads
+let lastAuditLogSize = 0;
+
+// Read only new trades since last check
+function readNewTrades() {
+  const logPath = path.join(__dirname, '../../logs/audits/tradeAudit.log');
+
+  if (!fs.existsSync(logPath)) {
+    return [];
+  }
+
+  try {
+    const stats = fs.statSync(logPath);
+    const currentSize = stats.size;
+
+    if (currentSize <= lastAuditLogSize) {
+      // File was truncated or no new data
+      lastAuditLogSize = currentSize;
+      return [];
+    }
+
+    // Read only the new portion
+    const fd = fs.openSync(logPath, 'r');
+    const buffer = Buffer.alloc(currentSize - lastAuditLogSize);
+    fs.readSync(fd, buffer, 0, buffer.length, lastAuditLogSize);
+    fs.closeSync(fd);
+
+    lastAuditLogSize = currentSize;
+
+    const newContent = buffer.toString('utf-8');
+    const lines = newContent.trim().split('\n').filter(line => line.trim());
+
+    return lines.map(line => {
+      const parts = line.split(', ').map(p => p.trim());
+      if (parts.length < 13) return null;
+
+      return {
+        timestamp: parseInt(parts[0]),
+        strategy: parts[1],
+        tradeId: parts[2],
+        status: parts[3],
+        entryTimestamp: parseInt(parts[4]),
+        size: parseFloat(parts[5]),
+        buyPrice: parseFloat(parts[6]),
+        sellPrice: parseFloat(parts[7]),
+        gross: parseFloat(parts[8]),
+        pnl: parseFloat(parts[9]),
+        mode: parts[10],
+        marketHash: parts[11],
+        side: parts[12]
+      };
+    }).filter(Boolean);
+  } catch (err) {
+    return [];
+  }
+}
+
+// Calculate summary stats from all trades
+function calculateStats(trades) {
+  const completedTrades = trades.filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED');
+  const totalPnl = completedTrades.reduce((sum, t) => sum + t.pnl, 0);
+  const winningTrades = completedTrades.filter(t => t.pnl > 0);
+
+  return {
+    totalTrades: trades.length,
+    soldTrades: trades.filter(t => t.status === 'MATCHED').length,
+    expiredTrades: trades.filter(t => t.status === 'EXPIRED').length,
+    totalPnl: totalPnl.toFixed(2),
+    winRate: completedTrades.length > 0 ? ((winningTrades.length / completedTrades.length) * 100).toFixed(1) : 0,
+    avgPnl: completedTrades.length > 0 ? (totalPnl / completedTrades.length).toFixed(2) : 0,
+    winningTrades: winningTrades.length,
+    losingTrades: completedTrades.length - winningTrades.length
+  };
+}
+
 // Watch audit logs
 if (fs.existsSync(auditsLogsDir)) {
-  const auditsWatcher = chokidar.watch(path.join(auditsLogsDir, 'tradeAudit.log'), {
+  // Initialize last known size
+  const logPath = path.join(auditsLogsDir, 'tradeAudit.log');
+  if (fs.existsSync(logPath)) {
+    lastAuditLogSize = fs.statSync(logPath).size;
+  }
+
+  const auditsWatcher = chokidar.watch(logPath, {
     persistent: true,
     ignoreInitial: true,
     usePolling: true,
@@ -125,10 +206,21 @@ if (fs.existsSync(auditsLogsDir)) {
   });
 
   auditsWatcher.on('change', () => {
-    broadcast({
-      type: 'trade-update',
-      timestamp: Date.now()
-    });
+    // Read only the new trades
+    const newTrades = readNewTrades();
+
+    if (newTrades.length > 0) {
+      // Get all trades for updated stats
+      const allTrades = parseTradeLog();
+      const stats = calculateStats(allTrades);
+
+      broadcast({
+        type: 'trade-update',
+        timestamp: Date.now(),
+        trades: newTrades,
+        stats
+      });
+    }
   });
 
   console.log(`Watching audits directory: ${auditsLogsDir}`);
@@ -286,6 +378,70 @@ app.get('/api/cumulative-pnl', (req, res) => {
   res.json(result);
 });
 
+// Extract tags from strategy name by splitting on '-'
+function extractTags(strategy) {
+  if (!strategy) return [];
+  return strategy
+    .toLowerCase()
+    .split('-')
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+}
+
+// Get cumulative PnL with per-strategy breakdown (pre-computed for frontend)
+app.get('/api/cumulative-pnl-by-strategy', (req, res) => {
+  const { startTime, endTime, mode } = getFilters(req);
+  let trades = parseTradeLog();
+  trades = filterByTimeRange(trades, startTime, endTime);
+  trades = filterByMode(trades, mode);
+  const completedTrades = trades.filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED').sort((a, b) => a.timestamp - b.timestamp);
+
+  // Get unique strategies
+  const strategies = [...new Set(completedTrades.map(t => t.strategy).filter(Boolean))].sort();
+
+  // Extract all unique tags
+  const tagSet = new Set();
+  strategies.forEach(s => extractTags(s).forEach(tag => tagSet.add(tag)));
+  const tags = [...tagSet].sort();
+
+  // Track cumulative PnL per strategy
+  const cumulativeByStrategy = {};
+  strategies.forEach(s => { cumulativeByStrategy[s] = 0; });
+
+  // Build chart data points with all strategy values at each timestamp
+  const points = completedTrades.filter(trade => trade.strategy).map(trade => {
+    cumulativeByStrategy[trade.strategy] += trade.pnl;
+
+    // Calculate total
+    const total = Object.values(cumulativeByStrategy).reduce((a, b) => a + b, 0);
+
+    // Create point with strategy breakdown
+    const strategyValues = {};
+    strategies.forEach(s => {
+      strategyValues[s] = parseFloat(cumulativeByStrategy[s].toFixed(2));
+    });
+
+    return {
+      timestamp: trade.timestamp,
+      total: parseFloat(total.toFixed(2)),
+      strategies: strategyValues
+    };
+  });
+
+  // Add starting point at 0 if we have a time range
+  if (startTime && points.length > 0) {
+    const startPoint = { timestamp: startTime, total: 0, strategies: {} };
+    strategies.forEach(s => { startPoint.strategies[s] = 0; });
+    points.unshift(startPoint);
+  }
+
+  res.json({
+    points,
+    strategies,
+    tags
+  });
+});
+
 // Get trades by side (BUY/SELL)
 app.get('/api/trades-by-side', (req, res) => {
   const { startTime, endTime, mode } = getFilters(req);
@@ -311,14 +467,23 @@ app.get('/api/trades-by-side', (req, res) => {
   ]);
 });
 
-// Get list of all strategies
+// Get list of all strategies with extracted tags
 app.get('/api/strategies', (req, res) => {
   const { startTime, endTime, mode } = getFilters(req);
   let trades = parseTradeLog();
   trades = filterByTimeRange(trades, startTime, endTime);
   trades = filterByMode(trades, mode);
   const strategies = [...new Set(trades.map(t => t.strategy))].sort();
-  res.json(strategies);
+
+  // Extract all unique tags from strategy names
+  const tagSet = new Set();
+  strategies.forEach(s => extractTags(s).forEach(tag => tagSet.add(tag)));
+  const tags = [...tagSet].sort();
+
+  res.json({
+    strategies,
+    tags
+  });
 });
 
 // Get trades for a specific strategy

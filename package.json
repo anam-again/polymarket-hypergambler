@@ -10,6 +10,8 @@
     "tester": "node dist/tester.js",
     "dev": "tsx src/index.ts",
     "histSim": "tsx src/simulation/index.ts",
+    "mspeq": "tsx src/simulation/index.ts --two-stage",
+    "mspeq:stage2": "tsx src/simulation/index.ts --base-params",
     "goptimizer": "tsx src/genetic/runGeneticWriter.ts",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",

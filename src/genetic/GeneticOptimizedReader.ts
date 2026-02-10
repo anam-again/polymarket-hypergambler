@@ -40,7 +40,9 @@ import { MorningStar } from '../bots/MorningStar.js';
 import { NCandle } from '../bots/NCandle.js';
 import { EarlyBuyerV2 } from '../bots/EarlyBuyerV2.js';
 import { EsotericNormalization } from '../bots/EsotericNormalization.js';
+import { FirstCandleMSPEQ } from '../bots/FirstCandleMSPEQ.js';
 import { ScalingPEQ, ScalingPEQCoefficients } from '../utils/ScalingPEQ.js';
+import { MultiSignalPEQConfig, STANDARD_NORMALIZATIONS } from '../utils/MultiSignalPEQ.js';
 
 // ============================================================================
 // Helper Functions
@@ -68,6 +70,33 @@ function extractPEQCoefficients(
         c2: (params[`${prefix}_c2`] as number) ?? defaults.c2,
         c3: (params[`${prefix}_c3`] as number) ?? defaults.c3,
     };
+}
+
+// Signal names for MSPEQ
+const MSPEQ_SIGNAL_NAMES = ['candleSize', 'volatility', 'momentum'] as const;
+
+/**
+ * Extract Multi-Signal PEQ config from merged params.
+ * Looks for flat params like: {prefix}_{signalName}_w, {prefix}_{signalName}_c0, etc.
+ */
+function extractMSPEQConfig(
+    params: Record<string, unknown>,
+    prefix: string,
+    signalNames: readonly string[] = MSPEQ_SIGNAL_NAMES
+): MultiSignalPEQConfig {
+    const signals = signalNames.map(name => ({
+        name,
+        weight: (params[`${prefix}_${name}_w`] as number) ?? 1.0,
+        coefficients: {
+            c0: (params[`${prefix}_${name}_c0`] as number) ?? 1.0,
+            c1: (params[`${prefix}_${name}_c1`] as number) ?? 0,
+            c2: (params[`${prefix}_${name}_c2`] as number) ?? 0,
+            c3: (params[`${prefix}_${name}_c3`] as number) ?? 0,
+        },
+        normalize: STANDARD_NORMALIZATIONS[name as keyof typeof STANDARD_NORMALIZATIONS],
+    }));
+
+    return { signals };
 }
 
 // ============================================================================
@@ -317,6 +346,25 @@ export class GeneticOptimizedReader {
                     earlySellPricePEQ: extractPEQCoefficients(mergedParams, 'earlySellPricePEQ'),
                 });
 
+            case 'FirstCandleMSPEQ':
+            case 'QuarterlyFirstCandleMSPEQ':
+                return new FirstCandleMSPEQ({
+                    ...commonProps,
+                    candleMinutes: mergedParams.candleMinutes ?? 15,
+                    breakoutBuffer: mergedParams.breakoutBuffer ?? 50,
+                    pullbackBuffer: mergedParams.pullbackBuffer ?? 100,
+                    targetDollars: mergedParams.targetDollars ?? 10,
+                    cutoffMinute: mergedParams.cutoffMinute ?? 45,
+                    candleSizeReference: mergedParams.candleSizeReference ?? 1000,
+                    baseBuyPrice: mergedParams.baseBuyPrice ?? 0.50,
+                    minProfitMargin: mergedParams.minProfitMargin ?? 0.10,
+                    // Multi-Signal PEQ configs
+                    targetBuyPriceMSPEQ: extractMSPEQConfig(mergedParams, 'buyPrice'),
+                    targetSellPriceMSPEQ: extractMSPEQConfig(mergedParams, 'sellPrice'),
+                    earlySellTimeMSPEQ: extractMSPEQConfig(mergedParams, 'earlySellTime'),
+                    earlySellPriceMSPEQ: extractMSPEQConfig(mergedParams, 'earlySellPrice'),
+                });
+
             case 'FirstCandleV2':
                 return new FirstCandleV2({
                     ...commonProps,
@@ -336,7 +384,6 @@ export class GeneticOptimizedReader {
                     ...commonProps,
                     lookbackPeriods: mergedParams.lookbackPeriods ?? 20,
                     entryThreshold: mergedParams.entryThreshold ?? 2.0,
-                    exitThreshold: mergedParams.exitThreshold ?? 0.5,
                     targetBuyPrice: mergedParams.targetBuyPrice ?? 0.50,
                     targetSellPrice: mergedParams.targetSellPrice ?? 0.60,
                     targetDollars: mergedParams.targetDollars ?? 10,
@@ -528,6 +575,8 @@ export class GeneticOptimizedReader {
                 break;
             case 'FirstCandle':
             case 'QuarterlyFirstCandle':
+            case 'FirstCandleMSPEQ':
+            case 'QuarterlyFirstCandleMSPEQ':
                 paramSummary = `cm${params.candleMinutes?.toFixed(0) ?? '15'}-bb${params.breakoutBuffer?.toFixed(0) ?? '50'}`;
                 break;
             case 'MarketMaker':
