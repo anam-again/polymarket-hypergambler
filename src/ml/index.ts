@@ -54,30 +54,3 @@ export {
     ModelManager,
 } from './ModelManager.js';
 
-// Decision Network (Phase 3)
-export {
-    DecisionNetwork,
-    type DecisionNetworkConfig,
-    type DecisionTrainingConfig,
-    type DecisionOutputConfig,
-    type FeatureVector,
-    type DecisionOutputs,
-    type LabeledSample,
-    type SerializedDecisionNetwork,
-} from './DecisionNetwork.js';
-
-// Decision Data Collection (Phase 3)
-export {
-    DecisionDataCollector,
-    type TradeOutcome,
-    type DecisionDataStats,
-} from './DecisionDataCollector.js';
-
-// Decision Model Training (Phase 3)
-export {
-    DecisionModelTrainer,
-    DEFAULT_FIRSTCANDLE_NETWORK_CONFIG,
-    DEFAULT_TRAINING_CONFIG,
-    type TrainingPipelineConfig,
-    type TrainingResults,
-} from './DecisionModelTrainer.js';

@@ -1,16 +1,15 @@
 import { Side } from "@polymarket/clob-client";
 
-import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
+import { QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
+import { MSPEQBotBase, MSPEQBotProps } from "./MSPEQBotBase.js";
 import { MarketSchedule } from "../types/interfaces.js";
 import { MultiSignalPEQ, MultiSignalPEQConfig } from "../utils/MultiSignalPEQ.js";
-import { ISignalProvider, SignalSnapshot } from "../signals/SignalProvider.js";
-import { HistoricalSignalProvider } from "../signals/MockSignalProvider.js";
 
 // ============================================================================
 // Types & Interfaces
 // ============================================================================
 
-export interface NCandleMSPEQProps extends QuantBotProps {
+export interface NCandleMSPEQProps extends MSPEQBotProps {
     // Base parameters (static, from NCandle)
     candleMinutes: number;
     buyPriceBuffer: number;
@@ -24,7 +23,6 @@ export interface NCandleMSPEQProps extends QuantBotProps {
     targetDollars: number;
     cutoffMinute: number;
     maxTradesPerHour: number;
-    candleSizeReference: number;
 
     // MSPEQ configs (replace ScalingPEQ)
     buyPriceBufferMSPEQ: MultiSignalPEQConfig;
@@ -32,9 +30,6 @@ export interface NCandleMSPEQProps extends QuantBotProps {
     stoplossTimeoutMSPEQ: MultiSignalPEQConfig;
     sellTimeoutMSPEQ: MultiSignalPEQConfig;
     stoplossFailureTimeoutMSPEQ: MultiSignalPEQConfig;
-
-    // Optional signal provider (for testing)
-    signalProvider?: ISignalProvider;
 }
 
 type TradingState =
@@ -71,7 +66,7 @@ interface Candle {
  * Each MSPEQ combines weighted polynomial outputs from multiple signals,
  * allowing the genetic optimizer to learn complex relationships.
  */
-export class NCandleMSPEQ extends QuantBot implements QuantBotRun {
+export class NCandleMSPEQ extends MSPEQBotBase implements QuantBotRun {
 
     // --- Configuration ---
     private readonly MIN_ORDER_SIZE = 5;
@@ -91,7 +86,6 @@ export class NCandleMSPEQ extends QuantBot implements QuantBotRun {
     private targetDollars: number;
     private cutoffMinute: number;
     private maxTradesPerHour: number;
-    private candleSizeReference: number;
 
     // --- Multi-Signal PEQs ---
     private buyPriceBufferMSPEQ: MultiSignalPEQ;
@@ -99,10 +93,6 @@ export class NCandleMSPEQ extends QuantBot implements QuantBotRun {
     private stoplossTimeoutMSPEQ: MultiSignalPEQ;
     private sellTimeoutMSPEQ: MultiSignalPEQ;
     private stoplossFailureTimeoutMSPEQ: MultiSignalPEQ;
-
-    // --- Signal Provider ---
-    private signalProvider: ISignalProvider;
-    private lastSignals?: SignalSnapshot;
 
     // --- Trade Tracking ---
     private buyOrder?: TradeOrder;
@@ -144,7 +134,6 @@ export class NCandleMSPEQ extends QuantBot implements QuantBotRun {
         this.targetDollars = props.targetDollars;
         this.cutoffMinute = props.cutoffMinute;
         this.maxTradesPerHour = props.maxTradesPerHour;
-        this.candleSizeReference = props.candleSizeReference;
 
         // Multi-Signal PEQs
         this.buyPriceBufferMSPEQ = new MultiSignalPEQ(props.buyPriceBufferMSPEQ);
@@ -152,14 +141,6 @@ export class NCandleMSPEQ extends QuantBot implements QuantBotRun {
         this.stoplossTimeoutMSPEQ = new MultiSignalPEQ(props.stoplossTimeoutMSPEQ);
         this.sellTimeoutMSPEQ = new MultiSignalPEQ(props.sellTimeoutMSPEQ);
         this.stoplossFailureTimeoutMSPEQ = new MultiSignalPEQ(props.stoplossFailureTimeoutMSPEQ);
-
-        // Signal provider (default to HistoricalSignalProvider for simulation)
-        this.signalProvider = props.signalProvider ?? new HistoricalSignalProvider({
-            candleSizeReference: this.candleSizeReference,
-            periodLengthMs: this.marketSchedule === MarketSchedule.QUARTERLY
-                ? 15 * 60 * 1000
-                : 60 * 60 * 1000,
-        });
     }
 
     // --- Main Run Loop ---
@@ -193,7 +174,6 @@ export class NCandleMSPEQ extends QuantBot implements QuantBotRun {
         this.stopLossPrice = undefined;
         this.entryTokenId = undefined;
         this.completedCandle = undefined;
-        this.lastSignals = undefined;
 
         // Timeout tracking
         this.stoplossBelowSince = undefined;
@@ -202,17 +182,8 @@ export class NCandleMSPEQ extends QuantBot implements QuantBotRun {
         this.isStoplossOrder = false;
         this.stoplossCreatedAt = undefined;
 
-        // Reset signal update timestamps to force fresh data on new period
-        this.lastPriceUpdateTime = 0;
-        this.lastOrderBookUpdateTime = 0;
-
-        // Clear signal provider history to avoid carrying stale data across periods
-        if (this.signalProvider instanceof HistoricalSignalProvider) {
-            (this.signalProvider as HistoricalSignalProvider).clearHistory();
-        }
-
-        // Reset signal provider period timing
-        this.updateSignalProviderTiming();
+        // Reset signal state (from base class)
+        this.resetSignalState();
     }
 
     private resetForNewTrade(): void {
@@ -235,100 +206,15 @@ export class NCandleMSPEQ extends QuantBot implements QuantBotRun {
         // Keep previousCandles and lastCandleIndex for continuity
     }
 
-    private updateSignalProviderTiming(): void {
-        const now = Date.now();
-        const periodLength = this.marketSchedule === MarketSchedule.QUARTERLY
-            ? 15 * 60 * 1000
-            : 60 * 60 * 1000;
-
-        // Align to period boundary
-        const periodStart = Math.floor(now / periodLength) * periodLength;
-        const periodEnd = periodStart + periodLength;
-
-        this.signalProvider.setPeriodTiming(periodStart, periodEnd);
-    }
-
-    // -------------------------------------------------------------------------
-    // Signal Management (copied from FirstCandleMSPEQ)
-    // -------------------------------------------------------------------------
-
-    private lastPriceUpdateTime: number = 0;
-    private lastOrderBookUpdateTime: number = 0;
-    private cachedPrice: number | null = null;
-    private cachedUpMid: number = 0.5;
-    private cachedDownMid: number = 0.5;
-
-    // Update intervals (price more often than orderbook)
-    private readonly PRICE_UPDATE_INTERVAL_MS = 5000;      // 5 seconds
-    private readonly ORDERBOOK_UPDATE_INTERVAL_MS = 30000; // 30 seconds
-
-    private async updateSignals(): Promise<SignalSnapshot> {
-        // Update candle data in signal provider
+    /**
+     * Override updateSignals to also update candle data from currentCandle
+     */
+    protected override async updateSignals() {
         if (this.currentCandle) {
-            this.signalProvider.setCandleData(this.currentCandle.high, this.currentCandle.low);
+            this.candleHigh = this.currentCandle.high;
+            this.candleLow = this.currentCandle.low;
         }
-
-        // Update price/orderbook data for HistoricalSignalProvider (throttled)
-        if (this.signalProvider instanceof HistoricalSignalProvider) {
-            const now = this.clock.now();
-
-            // Update price periodically (needed for volatility/momentum signals)
-            if (now - this.lastPriceUpdateTime >= this.PRICE_UPDATE_INTERVAL_MS) {
-                this.lastPriceUpdateTime = now;
-                try {
-                    const cdMarketData = this.getCdMarketData();
-                    this.cachedPrice = await cdMarketData.getCurrentPriceByMarket(this.targetedMarket);
-                    (this.signalProvider as HistoricalSignalProvider).addPricePoint(now, this.cachedPrice);
-                } catch {
-                    // Use cached price on error
-                }
-            }
-
-            // Update order book less frequently (priceImbalance signal is less critical)
-            if (now - this.lastOrderBookUpdateTime >= this.ORDERBOOK_UPDATE_INTERVAL_MS) {
-                this.lastOrderBookUpdateTime = now;
-                try {
-                    const liveData = await this.marketInfo.getLiveData(this.targetedMarket);
-                    const upBids = liveData.BtcUp.bids;
-                    const upAsks = liveData.BtcUp.asks;
-                    const downBids = liveData.BtcDown.bids;
-                    const downAsks = liveData.BtcDown.asks;
-
-                    const upBid = upBids.length > 0 ? parseFloat(upBids[upBids.length - 1].price) : 0;
-                    const upAsk = upAsks.length > 0 ? parseFloat(upAsks[upAsks.length - 1].price) : 1;
-                    const downBid = downBids.length > 0 ? parseFloat(downBids[downBids.length - 1].price) : 0;
-                    const downAsk = downAsks.length > 0 ? parseFloat(downAsks[downAsks.length - 1].price) : 1;
-
-                    this.cachedUpMid = (upBid + upAsk) / 2;
-                    this.cachedDownMid = (downBid + downAsk) / 2;
-                    (this.signalProvider as HistoricalSignalProvider).setOrderBookMids(this.cachedUpMid, this.cachedDownMid);
-                } catch {
-                    // Use cached orderbook on error
-                }
-            }
-        }
-
-        this.lastSignals = await this.signalProvider.getSignals();
-        return this.lastSignals;
-    }
-
-    private getSignalRecord(): Record<string, number> {
-        if (!this.lastSignals) {
-            return {
-                candleSize: 0,
-                timeLeft: 1,
-                volatility: 0.5,
-                momentum: 0,
-                priceImbalance: 0,
-            };
-        }
-        return {
-            candleSize: this.lastSignals.candleSize,
-            timeLeft: this.lastSignals.timeLeft,
-            volatility: this.lastSignals.volatility,
-            momentum: this.lastSignals.momentum,
-            priceImbalance: this.lastSignals.priceImbalance,
-        };
+        return super.updateSignals();
     }
 
     // -------------------------------------------------------------------------

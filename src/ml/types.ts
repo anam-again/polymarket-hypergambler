@@ -1,6 +1,5 @@
 import { CoinType } from '../simulation/GeneticOptimizer.js';
 import { MarketSchedule } from '../types/interfaces.js';
-import { MarketPredictor } from './MarketPredictor.js';
 
 // ============================================================================
 // PredictionStyle Types
@@ -286,15 +285,6 @@ export interface RawFeatures {
     periodProgress: number;     // How far into the period (0-1)
 }
 
-/**
- * Normalized features ready for model input.
- * All features are standardized to have mean ~0 and std ~1.
- */
-export interface NormalizedFeatures {
-    features: number[];         // Flat array of normalized feature values
-    featureNames: string[];     // Names corresponding to each feature
-}
-
 // ============================================================================
 // Price Tracking Types
 // ============================================================================
@@ -340,15 +330,6 @@ export interface TrainingSample {
     timestamp: number;          // For debugging/analysis
     periodKey: string;          // Hour or quarter identifier
     prices?: PeriodPriceSnapshots;  // Optional for backward compatibility
-}
-
-/**
- * Dataset split for training and evaluation.
- */
-export interface DatasetSplit {
-    train: TrainingSample[];
-    test: TrainingSample[];
-    validation?: TrainingSample[];
 }
 
 // ============================================================================
@@ -579,56 +560,6 @@ export interface FeatureImportance {
     weight: number;
     absWeight: number;
     rank: number;
-}
-
-// ============================================================================
-// Backtesting Types
-// ============================================================================
-
-/**
- * Backtest configuration.
- */
-export interface BacktestConfig {
-    model: MarketPredictor;
-    coinType: CoinType;
-    schedule: MarketSchedule;
-    startDate: Date;
-    endDate: Date;
-    confidenceThreshold: number;    // Min confidence to act on prediction
-    tradeSizeUsd: number;           // Amount to trade per prediction
-    trainWindowDays: number;        // Days of data for training
-    retrainFrequencyDays: number;   // How often to retrain
-}
-
-/**
- * Single backtest trade result.
- */
-export interface BacktestTrade {
-    timestamp: number;
-    periodKey: string;
-    prediction: 'UP' | 'DOWN';
-    confidence: number;
-    actual: 'UP' | 'DOWN';
-    correct: boolean;
-    profitLoss: number;             // In USD
-    cumulativePnL: number;
-}
-
-/**
- * Backtest summary statistics.
- */
-export interface BacktestResult {
-    trades: BacktestTrade[];
-    totalTrades: number;
-    winningTrades: number;
-    losingTrades: number;
-    accuracy: number;
-    totalPnL: number;
-    maxDrawdown: number;
-    sharpeRatio: number;
-    profitFactor: number;           // Gross profit / Gross loss
-    averageTradeProfit: number;
-    modelMetrics: ModelMetrics;
 }
 
 // ============================================================================

@@ -153,6 +153,47 @@ export class HistoricalSimulator {
     // Results Calculation
     // -------------------------------------------------------------------------
 
+    /**
+     * Averages multiple simulation results for bootstrap resampling.
+     */
+    private averageSimulationResults(
+        results: SimulationResult[],
+        botName: string,
+        params: Record<string, unknown>
+    ): SimulationResult {
+        const n = results.length;
+        if (n === 0) {
+            return {
+                botName,
+                params,
+                totalTrades: 0,
+                matchedTrades: 0,
+                expiredTrades: 0,
+                totalPnl: 0,
+                winRate: 0,
+                avgPnl: 0,
+                maxDrawdown: 0,
+                sharpeRatio: 0,
+            };
+        }
+
+        const sum = (arr: number[]) => arr.reduce((a, b) => a + b, 0);
+        const avg = (arr: number[]) => sum(arr) / arr.length;
+
+        return {
+            botName,
+            params,
+            totalTrades: Math.round(avg(results.map(r => r.totalTrades))),
+            matchedTrades: Math.round(avg(results.map(r => r.matchedTrades))),
+            expiredTrades: Math.round(avg(results.map(r => r.expiredTrades))),
+            totalPnl: avg(results.map(r => r.totalPnl)),
+            winRate: avg(results.map(r => r.winRate)),
+            avgPnl: avg(results.map(r => r.avgPnl)),
+            maxDrawdown: avg(results.map(r => r.maxDrawdown)),
+            sharpeRatio: avg(results.map(r => r.sharpeRatio)),
+        };
+    }
+
     private calculateResults(
         botName: string,
         params: Record<string, unknown>,
@@ -222,7 +263,8 @@ export class HistoricalSimulator {
         this.logger.log(`Coin: ${this.config.coinType!.toUpperCase()}`);
         this.logger.log(`${'='.repeat(60)}`);
 
-        const optimizer = new GeneticOptimizer(geneticConfig ?? {}, bounds, this.logger);
+        const fullConfig = GeneticOptimizer.createConfig(geneticConfig);
+        const optimizer = new GeneticOptimizer(fullConfig, bounds, this.logger);
 
         // Initialize status bar
         this.logger.initStatusBar();
@@ -267,7 +309,31 @@ export class HistoricalSimulator {
                     currentAvg
                 );
 
-                const { result, trades } = await this.runSingleBotSimulationWithTrades(botName, botFactory, params);
+                // Bootstrap resampling: run multiple times and average if configured
+                const bootstrapRuns = optimizer.getBootstrapRuns();
+                let result: SimulationResult;
+                let trades: SimulatedTrade[];
+
+                if (bootstrapRuns > 1) {
+                    // Run multiple simulations and average the results
+                    const runResults: SimulationResult[] = [];
+                    let lastTrades: SimulatedTrade[] = [];
+
+                    for (let run = 0; run < bootstrapRuns; run++) {
+                        const runOutput = await this.runSingleBotSimulationWithTrades(botName, botFactory, params);
+                        runResults.push(runOutput.result);
+                        lastTrades = runOutput.trades; // Keep last run's trades for audit
+                    }
+
+                    // Average the results across bootstrap runs
+                    result = this.averageSimulationResults(runResults, botName, params);
+                    trades = lastTrades;
+                } else {
+                    const output = await this.runSingleBotSimulationWithTrades(botName, botFactory, params);
+                    result = output.result;
+                    trades = output.trades;
+                }
+
                 results.push(result);
 
                 // Update running sum for average
@@ -315,13 +381,27 @@ export class HistoricalSimulator {
         const bestParams = optimizationResult.bestIndividual.params;
         const trainPnl = optimizationResult.bestIndividual.rawPnl ?? optimizationResult.bestIndividual.fitness;
 
-        // Run validation suite if enabled
-        if (this.config.validationConfig) {
+        // Run validation suite - MANDATORY if requireValidation is true (default)
+        const validationRequired = optimizer.isValidationRequired();
+        if (validationRequired || this.config.validationConfig) {
+            this.logger.log(`\n[VALIDATION] Running mandatory validation suite...`);
             const { validationResult, stabilityResult } = await this.runValidationSuite(
                 botName, botFactory, optimizer, bestParams, trainPnl
             );
             optimizationResult.validationResult = validationResult;
             optimizationResult.stabilityResult = stabilityResult;
+
+            // Warn if overfit detected
+            if (validationResult.overfit) {
+                this.logger.log(`\n⚠️  WARNING: Strategy appears OVERFIT. Validation PnL is significantly lower than training.`);
+                this.logger.log(`   Training PnL: $${trainPnl.toFixed(2)}, Validation PnL: $${validationResult.validationPnl.toFixed(2)}`);
+            }
+            if (!stabilityResult.isStable) {
+                this.logger.log(`\n⚠️  WARNING: Strategy parameters are UNSTABLE. Small changes cause large performance swings.`);
+                this.logger.log(`   Stability Score: ${(stabilityResult.stabilityScore * 100).toFixed(1)}%`);
+            }
+        } else {
+            this.logger.log(`\n[VALIDATION] Skipped (validation not enabled)`);
         }
 
         // Write trade audit file for the best individual

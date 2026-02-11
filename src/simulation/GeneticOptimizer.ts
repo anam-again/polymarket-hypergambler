@@ -30,6 +30,10 @@ export interface GeneticConfig {
     // Relative convergence settings (helps quarterly markets with smaller improvements)
     useRelativeConvergence: boolean; // Use percentage-based convergence (default: true)
     convergenceThresholdPercent: number; // Percentage of fitness for convergence (default: 0.01 = 1%)
+    // Bootstrap resampling settings (reduces overfitting variance)
+    bootstrapRuns: number;           // Number of runs to average per individual (default: 1, recommended: 3-5)
+    // Validation enforcement
+    requireValidation: boolean;      // Require validation before returning results (default: true)
 }
 
 export interface FitnessWeights {
@@ -112,7 +116,17 @@ export class GeneticOptimizer {
     private currentGeneration = 0;
     private logger: SimulatorLogger;
 
-    constructor(config: Partial<GeneticConfig>, bounds: ParameterBounds, logger?: SimulatorLogger) {
+    constructor(config: GeneticConfig, bounds: ParameterBounds, logger: SimulatorLogger) {
+        this.config = config;
+        this.bounds = bounds;
+        this.logger = logger;
+    }
+
+    /**
+     * Creates a GeneticConfig with sensible defaults for any unspecified fields.
+     * Use this helper when you want default values.
+     */
+    public static createConfig(overrides: Partial<GeneticConfig> = {}): GeneticConfig {
         const defaultFitnessWeights: FitnessWeights = {
             pnl: 1.0,
             sharpe: 0.5,
@@ -121,27 +135,25 @@ export class GeneticOptimizer {
             consistency: 0.2,
         };
 
-        this.config = {
-            populationSize: config.populationSize ?? 20,
-            maxGenerations: config.maxGenerations ?? 50,
-            convergenceThreshold: config.convergenceThreshold ?? 1.0,
-            convergenceGenerations: config.convergenceGenerations ?? 5,
-            mutationRate: config.mutationRate ?? 0.2,
-            mutationStrength: config.mutationStrength ?? 0.3,
-            eliteCount: config.eliteCount ?? 2,
-            crossoverRate: config.crossoverRate ?? 0.7,
-            // Anti-overfitting defaults
-            minTradeCount: config.minTradeCount ?? 10,
-            minTradePenalty: config.minTradePenalty ?? 0.5,
-            fitnessWeights: config.fitnessWeights ?? defaultFitnessWeights,
-            diversityThreshold: config.diversityThreshold ?? 0.1,
-            diversityInjectionRate: config.diversityInjectionRate ?? 0.2,
-            // Relative convergence defaults
-            useRelativeConvergence: config.useRelativeConvergence ?? true,
-            convergenceThresholdPercent: config.convergenceThresholdPercent ?? 0.01,
+        return {
+            populationSize: overrides.populationSize ?? 20,
+            maxGenerations: overrides.maxGenerations ?? 50,
+            convergenceThreshold: overrides.convergenceThreshold ?? 1.0,
+            convergenceGenerations: overrides.convergenceGenerations ?? 5,
+            mutationRate: overrides.mutationRate ?? 0.2,
+            mutationStrength: overrides.mutationStrength ?? 0.3,
+            eliteCount: overrides.eliteCount ?? 2,
+            crossoverRate: overrides.crossoverRate ?? 0.7,
+            minTradeCount: overrides.minTradeCount ?? 10,
+            minTradePenalty: overrides.minTradePenalty ?? 0.5,
+            fitnessWeights: overrides.fitnessWeights ?? defaultFitnessWeights,
+            diversityThreshold: overrides.diversityThreshold ?? 0.1,
+            diversityInjectionRate: overrides.diversityInjectionRate ?? 0.2,
+            useRelativeConvergence: overrides.useRelativeConvergence ?? true,
+            convergenceThresholdPercent: overrides.convergenceThresholdPercent ?? 0.01,
+            bootstrapRuns: overrides.bootstrapRuns ?? 1,
+            requireValidation: overrides.requireValidation ?? true,
         };
-        this.bounds = bounds;
-        this.logger = logger ?? new SimulatorLogger('genetic');
     }
 
     // -------------------------------------------------------------------------
@@ -436,6 +448,20 @@ export class GeneticOptimizer {
      */
     public getBest(): Individual | null {
         return this.population.length > 0 ? this.population[0] : null;
+    }
+
+    /**
+     * Gets the number of bootstrap runs per individual.
+     */
+    public getBootstrapRuns(): number {
+        return this.config.bootstrapRuns;
+    }
+
+    /**
+     * Returns whether validation is required before returning results.
+     */
+    public isValidationRequired(): boolean {
+        return this.config.requireValidation;
     }
 
     // -------------------------------------------------------------------------

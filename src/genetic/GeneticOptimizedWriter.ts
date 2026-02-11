@@ -19,8 +19,13 @@ import {
 // Constants
 // ============================================================================
 
-const DEFAULT_CONFIG_PATH = './geneticWriterConfig.yaml';
-const DEFAULT_OUTPUT_DIR = './geneticBotYamls';
+/**
+ * Configuration for GeneticOptimizedWriter.
+ */
+export interface GeneticWriterOptions {
+    configPath: string;
+    outputDir: string;
+}
 
 /**
  * Rounds all numeric values in an object to the nearest 0.01.
@@ -51,9 +56,9 @@ export class GeneticOptimizedWriter {
     private isRunning: boolean = false;
     private intervalTimer: ReturnType<typeof setTimeout> | null = null;
 
-    constructor(options?: { configPath?: string; outputDir?: string }) {
-        this.configPath = options?.configPath ?? DEFAULT_CONFIG_PATH;
-        this.outputDir = options?.outputDir ?? DEFAULT_OUTPUT_DIR;
+    constructor(options: GeneticWriterOptions) {
+        this.configPath = options.configPath;
+        this.outputDir = options.outputDir;
     }
 
     // -------------------------------------------------------------------------

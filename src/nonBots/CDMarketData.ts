@@ -328,8 +328,16 @@ export class CDMarketData implements QuantBotRun {
         this.writeMinuteLogEntry(symbol);
     }
 
+    /**
+     * Calculates a running EMA (Exponential Moving Average).
+     * Formula: newAvg = alpha * newPrice + (1 - alpha) * oldAvg
+     * Using alpha = 2/(N+1) where N is effectively ~60 data points per hour
+     * gives us alpha ≈ 0.033 for smooth hourly averaging.
+     */
+    private static readonly EMA_ALPHA = 0.033;  // ~60-period EMA
+
     private calculateRunningAverage(currentAvg: number, newPrice: number): number {
-        return currentAvg + (currentAvg - (newPrice / 60));
+        return CDMarketData.EMA_ALPHA * newPrice + (1 - CDMarketData.EMA_ALPHA) * currentAvg;
     }
 
     private detectFlop(currentOver: boolean, previousOver: boolean): number {

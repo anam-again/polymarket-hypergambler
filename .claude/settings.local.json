@@ -23,7 +23,11 @@
       "Bash(npm run test:run:*)",
       "Bash(npm test:*)",
       "Bash(cd:*)",
-      "Bash(npx ts-node:*)"
+      "Bash(npx ts-node:*)",
+      "Bash(while read file)",
+      "Bash(do)",
+      "Bash(echo:*)",
+      "Bash(done)"
     ]
   }
 }
