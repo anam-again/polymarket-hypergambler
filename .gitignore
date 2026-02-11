@@ -9,8 +9,4 @@ coverage
 *tmpclaude*
 geneticBotYamls/
 models/
-
-# Database files
-*.db
-*.db-wal
-*.db-shm
+data/

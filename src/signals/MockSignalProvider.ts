@@ -126,9 +126,20 @@ export class HistoricalSignalProvider extends BaseSignalProvider {
 
     /**
      * Clears all historical data.
+     * Should be called on period reset to avoid carrying stale data.
      */
     clearHistory(): void {
         this.priceHistory = [];
+        this.upMidPrice = 0.5;
+        this.downMidPrice = 0.5;
+    }
+
+    /**
+     * Resets the signal provider for a new period.
+     * Clears history and resets mid prices to neutral.
+     */
+    resetForNewPeriod(): void {
+        this.clearHistory();
     }
 
     /**

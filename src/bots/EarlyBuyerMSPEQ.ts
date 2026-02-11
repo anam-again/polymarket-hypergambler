@@ -1,7 +1,7 @@
 import { Side } from "@polymarket/clob-client";
 
 import { QuantBot, QuantBotProps, QuantBotRun, TradeOrder, TradeStatus } from "./QuantBot.js";
-import { MarketSchedule } from "../types/interfaces.js";
+import { BtcDirection, MarketSchedule } from "../types/interfaces.js";
 import { MultiSignalPEQ, MultiSignalPEQConfig } from "../utils/MultiSignalPEQ.js";
 import { ISignalProvider, SignalSnapshot } from "../signals/SignalProvider.js";
 import { HistoricalSignalProvider } from "../signals/MockSignalProvider.js";
@@ -10,72 +10,62 @@ import { HistoricalSignalProvider } from "../signals/MockSignalProvider.js";
 // Types & Interfaces
 // ============================================================================
 
-export interface FirstCandleMSPEQProps extends QuantBotProps {
-    // Base parameters (static, genetically optimized)
-    candleMinutes: number;
-    breakoutBuffer: number;
-    pullbackBuffer: number;
+export interface EarlyBuyerMSPEQProps extends QuantBotProps {
+    // Base parameters (static)
     targetDollars: number;
-    cutoffMinute: number;
+    baseBuyPrice: number;           // e.g., 0.50
+    baseSellPrice: number;          // e.g., 0.80
+    baseCutoffMinute: number;       // e.g., 10
+    candleSizeReference: number;    // e.g., 1000
+    minProfitMargin: number;        // e.g., 0.05
+    directionThreshold: number;     // e.g., 0.5
 
-    // Reference values
-    candleSizeReference: number;
-    baseBuyPrice: number;
-    minProfitMargin: number;
-
-    // Multi-Signal PEQ configs (replace single-signal PEQs)
+    // MSPEQ configs
     targetBuyPriceMSPEQ: MultiSignalPEQConfig;
     targetSellPriceMSPEQ: MultiSignalPEQConfig;
+    cutoffMinuteMSPEQ: MultiSignalPEQConfig;
+    btcDirectionMSPEQ: MultiSignalPEQConfig;
     earlySellTimeMSPEQ: MultiSignalPEQConfig;
     earlySellPriceMSPEQ: MultiSignalPEQConfig;
 
-    // Optional signal provider (injected for testing/simulation)
+    // Optional signal provider (for testing/simulation)
     signalProvider?: ISignalProvider;
 }
 
-type TradingState =
-    | 'FORMING_CANDLE'
-    | 'WAITING_BREAKOUT'
-    | 'WAITING_PULLBACK'
-    | 'TRADE_ENTERED'
-    | 'PAST_CUTOFF';
-
-type BreakoutDirection = 'UP' | 'DOWN';
-
 // ============================================================================
-// FirstCandleMSPEQ Class
+// EarlyBuyerMSPEQ Class
 // ============================================================================
 
 /**
- * FirstCandleMSPEQ - First Candle strategy with Multi-Signal PEQ
+ * EarlyBuyerMSPEQ - EarlyBuyer strategy with Multi-Signal PEQ
  *
- * Extends the basic FirstCandle strategy by using multiple market signals
- * (candleSize, timeLeft, volatility, momentum, priceImbalance) to dynamically
- * compute trading parameters:
+ * Combines EarlyBuyer's simple two-order strategy (BUY then SELL) with
+ * MSPEQ-driven dynamic parameters. Uses multiple market signals
+ * (candleSize, volatility, momentum) to dynamically compute:
  *
- * - targetBuyPrice: Price at which to buy after pullback confirmation
- * - targetSellPrice: Price at which to sell for profit
+ * - targetBuyPrice: Price at which to buy (scales baseBuyPrice)
+ * - targetSellPrice: Price at which to sell (scales baseSellPrice)
+ * - cutoffMinute: Dynamic cutoff time (scales baseCutoffMinute)
+ * - btcDirection: Whether to bet UP or DOWN (threshold on MSPEQ output)
  * - earlySellTime: Time threshold to trigger early sell
  * - earlySellPrice: Price for early sell when time runs low
- *
- * Each MSPEQ combines weighted polynomial outputs from multiple signals,
- * allowing the genetic optimizer to learn complex relationships.
  */
-export class FirstCandleMSPEQ extends QuantBot implements QuantBotRun {
+export class EarlyBuyerMSPEQ extends QuantBot implements QuantBotRun {
 
     // --- Configuration ---
-    private candleMinutes: number;
-    private breakoutBuffer: number;
-    private pullbackBuffer: number;
     private targetDollars: number;
-    private cutoffMinute: number;
-    private candleSizeReference: number;
     private baseBuyPrice: number;
+    private baseSellPrice: number;
+    private baseCutoffMinute: number;
+    private candleSizeReference: number;
     private minProfitMargin: number;
+    private directionThreshold: number;
 
     // --- Multi-Signal PEQs ---
     private targetBuyPriceMSPEQ: MultiSignalPEQ;
     private targetSellPriceMSPEQ: MultiSignalPEQ;
+    private cutoffMinuteMSPEQ: MultiSignalPEQ;
+    private btcDirectionMSPEQ: MultiSignalPEQ;
     private earlySellTimeMSPEQ: MultiSignalPEQ;
     private earlySellPriceMSPEQ: MultiSignalPEQ;
 
@@ -84,34 +74,32 @@ export class FirstCandleMSPEQ extends QuantBot implements QuantBotRun {
     private lastSignals?: SignalSnapshot;
 
     // --- Trading State ---
-    private actualBuyPrice: number = 0;
     private buyOrder?: TradeOrder;
     private sellOrder?: TradeOrder;
     private earlySellOrder?: TradeOrder;
-    private state: TradingState = 'FORMING_CANDLE';
-    private candleHigh: number = 0;
-    private candleLow: number = Infinity;
-    private breakoutDirection?: BreakoutDirection;
-    private breakoutConfirmedPrice?: number;
+    private isPastCutoff: boolean = false;
+    private actualBuyPrice: number = 0;
+    private computedDirection?: BtcDirection;
 
     // --- Constructor ---
 
-    constructor(props: FirstCandleMSPEQProps) {
+    constructor(props: EarlyBuyerMSPEQProps) {
         super(props);
 
         // Base parameters
-        this.candleMinutes = props.candleMinutes;
-        this.breakoutBuffer = props.breakoutBuffer;
-        this.pullbackBuffer = props.pullbackBuffer;
         this.targetDollars = props.targetDollars;
-        this.cutoffMinute = props.cutoffMinute;
-        this.candleSizeReference = props.candleSizeReference;
         this.baseBuyPrice = props.baseBuyPrice;
+        this.baseSellPrice = props.baseSellPrice;
+        this.baseCutoffMinute = props.baseCutoffMinute;
+        this.candleSizeReference = props.candleSizeReference;
         this.minProfitMargin = props.minProfitMargin;
+        this.directionThreshold = props.directionThreshold;
 
         // Multi-Signal PEQs
         this.targetBuyPriceMSPEQ = new MultiSignalPEQ(props.targetBuyPriceMSPEQ);
         this.targetSellPriceMSPEQ = new MultiSignalPEQ(props.targetSellPriceMSPEQ);
+        this.cutoffMinuteMSPEQ = new MultiSignalPEQ(props.cutoffMinuteMSPEQ);
+        this.btcDirectionMSPEQ = new MultiSignalPEQ(props.btcDirectionMSPEQ);
         this.earlySellTimeMSPEQ = new MultiSignalPEQ(props.earlySellTimeMSPEQ);
         this.earlySellPriceMSPEQ = new MultiSignalPEQ(props.earlySellPriceMSPEQ);
 
@@ -147,12 +135,9 @@ export class FirstCandleMSPEQ extends QuantBot implements QuantBotRun {
         this.buyOrder = undefined;
         this.sellOrder = undefined;
         this.earlySellOrder = undefined;
+        this.isPastCutoff = false;
         this.actualBuyPrice = 0;
-        this.state = 'FORMING_CANDLE';
-        this.candleHigh = 0;
-        this.candleLow = Infinity;
-        this.breakoutDirection = undefined;
-        this.breakoutConfirmedPrice = undefined;
+        this.computedDirection = undefined;
         this.lastSignals = undefined;
 
         // Reset signal update timestamps to force fresh data on new period
@@ -182,7 +167,7 @@ export class FirstCandleMSPEQ extends QuantBot implements QuantBotRun {
     }
 
     // -------------------------------------------------------------------------
-    // Signal Management
+    // Signal Management (copied from FirstCandleMSPEQ)
     // -------------------------------------------------------------------------
 
     private lastPriceUpdateTime: number = 0;
@@ -193,12 +178,9 @@ export class FirstCandleMSPEQ extends QuantBot implements QuantBotRun {
 
     // Update intervals (price more often than orderbook)
     private readonly PRICE_UPDATE_INTERVAL_MS = 5000;      // 5 seconds
-    private readonly ORDERBOOK_UPDATE_INTERVAL_MS = 30000; // 30 seconds (orderbook less important)
+    private readonly ORDERBOOK_UPDATE_INTERVAL_MS = 30000; // 30 seconds
 
     private async updateSignals(): Promise<SignalSnapshot> {
-        // Update candle data in signal provider (always - this is fast)
-        this.signalProvider.setCandleData(this.candleHigh, this.candleLow);
-
         // Update price/orderbook data for HistoricalSignalProvider (throttled)
         if (this.signalProvider instanceof HistoricalSignalProvider) {
             const now = this.clock.now();
@@ -263,43 +245,80 @@ export class FirstCandleMSPEQ extends QuantBot implements QuantBotRun {
     }
 
     // -------------------------------------------------------------------------
+    // MSPEQ Parameter Computation
+    // -------------------------------------------------------------------------
+
+    private computeBtcDirection(): BtcDirection {
+        const signals = this.getSignalRecord();
+        const output = this.btcDirectionMSPEQ.compute(signals);
+        return output >= this.directionThreshold ? BtcDirection.UP : BtcDirection.DOWN;
+    }
+
+    private computeDynamicBuyPrice(): number {
+        const signals = this.getSignalRecord();
+        const mspeqOutput = this.targetBuyPriceMSPEQ.compute(signals);
+        const dynamicPrice = Math.round(this.baseBuyPrice * mspeqOutput * 100) / 100;
+        return Math.max(0.01, Math.min(0.99, dynamicPrice));
+    }
+
+    private computeDynamicSellPrice(): number {
+        const signals = this.getSignalRecord();
+        const mspeqOutput = this.targetSellPriceMSPEQ.compute(signals);
+        const dynamicPrice = Math.round(this.baseSellPrice * mspeqOutput * 100) / 100;
+        // Must be above buy price + min profit margin
+        return Math.max(this.actualBuyPrice + this.minProfitMargin, Math.min(0.99, dynamicPrice));
+    }
+
+    private computeDynamicCutoffMinute(): number {
+        const signals = this.getSignalRecord();
+        const mspeqOutput = this.cutoffMinuteMSPEQ.compute(signals);
+        const dynamicCutoff = Math.round(this.baseCutoffMinute * mspeqOutput);
+        // Clamp to valid range based on market schedule
+        const maxCutoff = this.marketSchedule === MarketSchedule.QUARTERLY ? 14 : 59;
+        return Math.max(1, Math.min(maxCutoff, dynamicCutoff));
+    }
+
+    // -------------------------------------------------------------------------
     // Trading Loop
     // -------------------------------------------------------------------------
 
     private startTradingLoop(): void {
-        this.tickWrapper(1000 * 3, 1000 * 3, async () => {
+        this.tickWrapper(1000 * 5, 1000 * 2, async () => {
             await this.executeTradingLogic();
         });
     }
 
     private async executeTradingLogic(): Promise<void> {
-        // Update signals first
+        // 1. Update signals first
         await this.updateSignals();
 
+        // 2. Update orders
         await this.updateOrders();
 
-        // Handle sell order creation if buy matched
+        // 3. Check/create sell order if buy matched
         if (this.shouldCreateSellOrder()) {
             await this.createSellOrder();
         }
 
-        // Check for early sell trigger
+        // 4. Check for early sell trigger
         if (this.shouldTriggerEarlySell()) {
             await this.createEarlySellOrder();
         }
 
-        if (this.state === 'PAST_CUTOFF' || this.state === 'TRADE_ENTERED') {
+        if (this.isPastCutoff) {
             return;
         }
 
-        // Check cutoff
+        // 5. Check cutoff (using dynamic cutoff)
         if (this.isAfterCutoff()) {
             await this.handleCutoff();
             return;
         }
 
-        // Execute state machine
-        await this.executeStateMachine();
+        // 6. Check/create buy order (using dynamic direction and price)
+        if (this.shouldCreateBuyOrder()) {
+            await this.createBuyOrder();
+        }
     }
 
     public override async onSimulationTick(): Promise<void> {
@@ -307,105 +326,25 @@ export class FirstCandleMSPEQ extends QuantBot implements QuantBotRun {
     }
 
     // -------------------------------------------------------------------------
-    // State Machine
+    // Order Logic
     // -------------------------------------------------------------------------
 
-    private async executeStateMachine(): Promise<void> {
-        const currentPrice = await this.getCurrentBtcPrice();
-        if (!currentPrice) return;
+    private shouldCreateBuyOrder(): boolean {
+        if (this.buyOrder) return false;
 
-        switch (this.state) {
-            case 'FORMING_CANDLE':
-                this.handleFormingCandle(currentPrice);
-                break;
-
-            case 'WAITING_BREAKOUT':
-                this.handleWaitingBreakout(currentPrice);
-                break;
-
-            case 'WAITING_PULLBACK':
-                await this.handleWaitingPullback(currentPrice);
-                break;
+        // Compute direction if not yet computed
+        if (!this.computedDirection) {
+            this.computedDirection = this.computeBtcDirection();
+            this.writeLog(`Computed BTC direction: ${this.computedDirection}`);
         }
+
+        const targetBuyPrice = this.computeDynamicBuyPrice();
+        const targetSize = this.dollarToTokens(this.targetDollars, targetBuyPrice);
+        if (targetSize === null) return false;
+        if (!this.checkIfOrderIsValid(targetBuyPrice, targetSize)) return false;
+        if (!this.canSpend(targetBuyPrice * targetSize)) return false;
+        return true;
     }
-
-    private handleFormingCandle(currentPrice: number): void {
-        this.candleHigh = Math.max(this.candleHigh, currentPrice);
-        this.candleLow = Math.min(this.candleLow, currentPrice);
-
-        const minuteInPeriod = this.getMinuteInPeriod();
-
-        if (minuteInPeriod >= this.candleMinutes) {
-            this.state = 'WAITING_BREAKOUT';
-            this.writeLog(
-                `First candle formed: High=${this.candleHigh.toFixed(2)}, ` +
-                `Low=${this.candleLow.toFixed(2)}, Range=${(this.candleHigh - this.candleLow).toFixed(2)}`
-            );
-        }
-    }
-
-    private getMinuteInPeriod(): number {
-        const currentMinute = this.clock.getMinutes();
-        if (this.marketSchedule === MarketSchedule.QUARTERLY) {
-            return currentMinute % 15;
-        }
-        return currentMinute;
-    }
-
-    private handleWaitingBreakout(currentPrice: number): void {
-        const brokeAbove = currentPrice > this.candleHigh + this.breakoutBuffer;
-        const brokeBelow = currentPrice < this.candleLow - this.breakoutBuffer;
-
-        if (brokeAbove) {
-            this.breakoutDirection = 'UP';
-            this.breakoutConfirmedPrice = this.candleHigh;
-            this.state = 'WAITING_PULLBACK';
-            this.writeLog(
-                `Breakout UP detected at ${currentPrice.toFixed(2)}, ` +
-                `waiting for pullback to ${this.candleHigh.toFixed(2)}`
-            );
-        } else if (brokeBelow) {
-            this.breakoutDirection = 'DOWN';
-            this.breakoutConfirmedPrice = this.candleLow;
-            this.state = 'WAITING_PULLBACK';
-            this.writeLog(
-                `Breakout DOWN detected at ${currentPrice.toFixed(2)}, ` +
-                `waiting for pullback to ${this.candleLow.toFixed(2)}`
-            );
-        }
-    }
-
-    private async handleWaitingPullback(currentPrice: number): Promise<void> {
-        if (!this.breakoutDirection || !this.breakoutConfirmedPrice) return;
-
-        const isPullbackConfirmed = this.checkPullbackConfirmation(currentPrice);
-
-        if (isPullbackConfirmed) {
-            this.writeLog(
-                `Pullback confirmed at ${currentPrice.toFixed(2)}, ` +
-                `entering ${this.breakoutDirection} trade`
-            );
-            await this.createBuyOrder();
-        }
-    }
-
-    private checkPullbackConfirmation(currentPrice: number): boolean {
-        if (!this.breakoutDirection || !this.breakoutConfirmedPrice) return false;
-
-        if (this.breakoutDirection === 'UP') {
-            const pullbackToSupport = Math.abs(currentPrice - this.breakoutConfirmedPrice) <= this.pullbackBuffer;
-            const stillAboveSupport = currentPrice >= this.breakoutConfirmedPrice;
-            return pullbackToSupport && stillAboveSupport;
-        } else {
-            const pullbackToResistance = Math.abs(currentPrice - this.breakoutConfirmedPrice) <= this.pullbackBuffer;
-            const stillBelowResistance = currentPrice <= this.breakoutConfirmedPrice;
-            return pullbackToResistance && stillBelowResistance;
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Order Logic with Multi-Signal PEQ
-    // -------------------------------------------------------------------------
 
     private shouldCreateSellOrder(): boolean {
         if (this.sellOrder) return false;
@@ -413,29 +352,36 @@ export class FirstCandleMSPEQ extends QuantBot implements QuantBotRun {
         return this.buyOrder.status === TradeStatus.MATCHED;
     }
 
+    // Minimum MSPEQ output threshold - prevents unrealistic prices from degenerate coefficients
+    private static readonly MIN_MSPEQ_OUTPUT = 0.1;
+
     private async createBuyOrder(): Promise<void> {
-        if (this.buyOrder) {
-            this.writeLog(`createBuyOrder: already have buyOrder, skipping`);
-            return;
-        }
-        if (!this.breakoutDirection) {
-            this.writeLog(`createBuyOrder: no breakoutDirection, skipping`);
-            return;
+        if (this.buyOrder) return;
+
+        // Compute direction if not yet computed
+        if (!this.computedDirection) {
+            this.computedDirection = this.computeBtcDirection();
         }
 
         const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
-        const tokenId = this.breakoutDirection === 'UP'
+        const tokenId = this.computedDirection === BtcDirection.UP
             ? orderBooks.BtcUpTokenId
             : orderBooks.BtcDownTokenId;
 
-        // Calculate dynamic buy price using MSPEQ with multiple signals
+        // Calculate dynamic buy price using MSPEQ
         const signals = this.getSignalRecord();
         const mspeqOutput = this.targetBuyPriceMSPEQ.compute(signals);
 
-        // MSPEQ output scales the base buy price
-        const dynamicBuyPrice = Math.round(this.baseBuyPrice * mspeqOutput * 100) / 100;
+        // Validate MSPEQ output - prevent degenerate coefficients from producing unrealistic prices
+        if (mspeqOutput < EarlyBuyerMSPEQ.MIN_MSPEQ_OUTPUT) {
+            this.writeLog(
+                `createBuyOrder: skipping - MSPEQ output too low (${mspeqOutput.toFixed(4)} < ${EarlyBuyerMSPEQ.MIN_MSPEQ_OUTPUT}). ` +
+                `This suggests degenerate genetic optimization coefficients.`
+            );
+            return;
+        }
 
-        // Clamp to valid range [0.01, 0.99]
+        const dynamicBuyPrice = Math.round(this.baseBuyPrice * mspeqOutput * 100) / 100;
         const targetBuyPrice = Math.max(0.01, Math.min(0.99, dynamicBuyPrice));
         this.actualBuyPrice = targetBuyPrice;
 
@@ -464,7 +410,7 @@ export class FirstCandleMSPEQ extends QuantBot implements QuantBotRun {
         }
 
         this.buyOrder = await this.makeOrder(
-            'firstcandle-mspeq-buy',
+            'earlybuyer-mspeq-buy',
             tokenId,
             targetBuyPrice,
             targetSize,
@@ -474,35 +420,31 @@ export class FirstCandleMSPEQ extends QuantBot implements QuantBotRun {
         if (this.buyOrder) {
             this.writeLog(
                 `createBuyOrder: placed (orderId=${this.buyOrder.orderId}, ` +
-                `price=${targetBuyPrice}, mspeqOut=${mspeqOutput.toFixed(3)}, ` +
-                `vol=${signals.volatility.toFixed(3)}, mom=${signals.momentum.toFixed(3)})`
+                `direction=${this.computedDirection}, price=${targetBuyPrice}, ` +
+                `mspeqOut=${mspeqOutput.toFixed(3)}, vol=${signals.volatility.toFixed(3)}, ` +
+                `mom=${signals.momentum.toFixed(3)})`
             );
         }
-
-        this.state = 'TRADE_ENTERED';
     }
 
     private async createSellOrder(): Promise<void> {
-        if (this.sellOrder || !this.buyOrder || !this.breakoutDirection) return;
+        if (this.sellOrder || !this.buyOrder || !this.computedDirection) return;
 
         const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
-        const tokenId = this.breakoutDirection === 'UP'
+        const tokenId = this.computedDirection === BtcDirection.UP
             ? orderBooks.BtcUpTokenId
             : orderBooks.BtcDownTokenId;
 
         // Calculate dynamic sell price using MSPEQ
         const signals = this.getSignalRecord();
         const mspeqOutput = this.targetSellPriceMSPEQ.compute(signals);
+        const dynamicSellPrice = Math.round(this.baseSellPrice * mspeqOutput * 100) / 100;
 
-        // Base sell price is buyPrice + minProfitMargin
-        const baseValue = this.actualBuyPrice + this.minProfitMargin;
-        const dynamicSellPrice = Math.round(baseValue * mspeqOutput * 100) / 100;
-
-        // Clamp - must be above buy price
-        const targetSellPrice = Math.max(this.actualBuyPrice + 0.01, Math.min(0.99, dynamicSellPrice));
+        // Clamp - must be above buy price + min profit margin
+        const targetSellPrice = Math.max(this.actualBuyPrice + this.minProfitMargin, Math.min(0.99, dynamicSellPrice));
 
         this.sellOrder = await this.makeOrder(
-            'firstcandle-mspeq-sell',
+            'earlybuyer-mspeq-sell',
             tokenId,
             targetSellPrice,
             this.buyOrder.amount,
@@ -517,7 +459,7 @@ export class FirstCandleMSPEQ extends QuantBot implements QuantBotRun {
     }
 
     // -------------------------------------------------------------------------
-    // Early Sell Logic with Multi-Signal PEQ
+    // Early Sell Logic (copied from FirstCandleMSPEQ)
     // -------------------------------------------------------------------------
 
     private shouldTriggerEarlySell(): boolean {
@@ -533,10 +475,10 @@ export class FirstCandleMSPEQ extends QuantBot implements QuantBotRun {
     }
 
     private async createEarlySellOrder(): Promise<void> {
-        if (this.sellOrder || this.earlySellOrder || !this.buyOrder || !this.breakoutDirection) return;
+        if (this.sellOrder || this.earlySellOrder || !this.buyOrder || !this.computedDirection) return;
 
         const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
-        const tokenId = this.breakoutDirection === 'UP'
+        const tokenId = this.computedDirection === BtcDirection.UP
             ? orderBooks.BtcUpTokenId
             : orderBooks.BtcDownTokenId;
 
@@ -556,7 +498,7 @@ export class FirstCandleMSPEQ extends QuantBot implements QuantBotRun {
         );
 
         this.earlySellOrder = await this.makeOrder(
-            'firstcandle-mspeq-early-sell',
+            'earlybuyer-mspeq-early-sell',
             tokenId,
             earlySellPrice,
             this.buyOrder.amount,
@@ -565,34 +507,22 @@ export class FirstCandleMSPEQ extends QuantBot implements QuantBotRun {
     }
 
     // -------------------------------------------------------------------------
-    // Price Data
-    // -------------------------------------------------------------------------
-
-    private async getCurrentBtcPrice(): Promise<number | null> {
-        try {
-            const cdMarketData = this.getCdMarketData();
-            return await cdMarketData.getCurrentPriceByMarket(this.targetedMarket);
-        } catch (error) {
-            this.writeError(error);
-            return null;
-        }
-    }
-
-    // -------------------------------------------------------------------------
     // Cutoff Handling
     // -------------------------------------------------------------------------
 
     private isAfterCutoff(): boolean {
         const currentMinute = this.clock.getMinutes();
+        const dynamicCutoff = this.computeDynamicCutoffMinute();
+
         if (this.marketSchedule === MarketSchedule.QUARTERLY) {
-            return currentMinute % 15 >= this.cutoffMinute;
+            return currentMinute % 15 >= dynamicCutoff;
         } else {
-            return currentMinute >= this.cutoffMinute;
+            return currentMinute >= dynamicCutoff;
         }
     }
 
     private async handleCutoff(): Promise<void> {
-        this.state = 'PAST_CUTOFF';
+        this.isPastCutoff = true;
         await this.cancelLiveBuyOrders();
     }
 
@@ -602,5 +532,20 @@ export class FirstCandleMSPEQ extends QuantBot implements QuantBotRun {
                 await this.cancelTrade(trade);
             }
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    private async getTargetTokenId(): Promise<string> {
+        if (!this.computedDirection) {
+            this.computedDirection = this.computeBtcDirection();
+        }
+
+        const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
+        return this.computedDirection === BtcDirection.UP
+            ? orderBooks.BtcUpTokenId
+            : orderBooks.BtcDownTokenId;
     }
 }

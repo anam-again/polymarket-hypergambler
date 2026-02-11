@@ -240,6 +240,15 @@ export class GeneticOptimizer {
             }
         }
 
+        // Safety: clamp fitness to reasonable bounds and handle invalid values
+        // This prevents extreme values from corrupting the optimization
+        const MAX_REASONABLE_FITNESS = 100000;
+        if (isNaN(fitness) || !isFinite(fitness)) {
+            fitness = -1000;
+        } else {
+            fitness = Math.max(-MAX_REASONABLE_FITNESS, Math.min(MAX_REASONABLE_FITNESS, fitness));
+        }
+
         return fitness;
     }
 

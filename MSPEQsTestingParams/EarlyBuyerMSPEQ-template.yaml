@@ -1,0 +1,36 @@
+# EarlyBuyerMSPEQ Base Parameters Template
+# =========================================
+#
+# Usage:
+#   npm run histSim -- --base-params MSPEQsTestingParams/EarlyBuyerMSPEQ-template.yaml -s EarlyBuyerMSPEQ -p 150 -m 75 -c btc
+#
+# This file contains the base parameters for EarlyBuyerMSPEQ strategy.
+# Stage 2 optimization will freeze these and only optimize the MSPEQ coefficients.
+#
+# EarlyBuyerMSPEQ uses multiple signals (candleSize, volatility, momentum) to
+# dynamically compute: buy price, sell price, cutoff time, BTC direction,
+# early sell timing, and early sell price.
+
+# how 2 run:
+# hourly
+# npm run histSim -- -g -s EarlyBuyerMSPEQ -M btc-hourly -c btc -p 30  -m 50 -d 15 -a 5 --base-params MSPEQsTestingParams/EarlyBuyerMSPEQ-template.yaml
+# quarterly
+# npm run histSim -- -g -s QuarterlyEarlyBuyerMSPEQ -M btc-quarterly -c btc -p 30  -m 50 -d 20 -a 5 --base-params MSPEQsTestingParams/EarlyBuyerMSPEQ-template.yaml
+
+params:
+  # Position sizing
+  targetDollars: 10
+
+  # Base pricing (MSPEQ scales these)
+  baseBuyPrice: 0.15        # Base buy price (MSPEQ output multiplies this)
+  baseSellPrice: 0.30        # Base sell price (MSPEQ output multiplies this)
+  minProfitMargin: 0.05      # Minimum profit margin for sell orders
+
+  # Trading window
+  baseCutoffMinute: 8      # Base cutoff minute (MSPEQ can scale this)
+
+  # Signal configuration
+  candleSizeReference: 150  # Reference value for normalizing candle size
+
+  # Direction determination
+  directionThreshold: 0.5    # MSPEQ output >= this means UP, otherwise DOWN

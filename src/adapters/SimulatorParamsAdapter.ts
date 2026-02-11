@@ -24,6 +24,8 @@ import { parse as parseYaml } from 'yaml';
 import { TargetedMarket } from '../types/interfaces.js';
 import { MultiSignalPEQ, MultiSignalPEQConfig, SIGNAL_NAMES, STANDARD_NORMALIZATIONS } from '../utils/MultiSignalPEQ.js';
 import { FirstCandleMSPEQ, FirstCandleMSPEQProps } from '../bots/FirstCandleMSPEQ.js';
+import { EarlyBuyerMSPEQ, EarlyBuyerMSPEQProps } from '../bots/EarlyBuyerMSPEQ.js';
+import { NCandleMSPEQ, NCandleMSPEQProps } from '../bots/NCandleMSPEQ.js';
 import { QuantBotRun } from '../bots/QuantBot.js';
 import { ClobClient } from '@polymarket/clob-client';
 import { MarketInfo } from '../nonBots/MarketInfo.js';
@@ -64,7 +66,11 @@ export interface CommonBotConfig {
  */
 export type SupportedStrategy =
     | 'QuarterlyFirstCandleMSPEQ'
-    | 'HourlyFirstCandleMSPEQ';
+    | 'HourlyFirstCandleMSPEQ'
+    | 'QuarterlyEarlyBuyerMSPEQ'
+    | 'HourlyEarlyBuyerMSPEQ'
+    | 'QuarterlyNCandleMSPEQ'
+    | 'HourlyNCandleMSPEQ';
 
 // ============================================================================
 // Market Mapping
@@ -111,6 +117,18 @@ export function resolveMarket(marketStr: string): TargetedMarket {
  * (subset of all available signals that the simulator optimizes)
  */
 const FIRSTCANDLE_MSPEQ_SIGNALS = ['candleSize', 'volatility', 'momentum'] as const;
+
+/**
+ * Signal names used in EarlyBuyerMSPEQ
+ * (same 3 signals as FirstCandleMSPEQ)
+ */
+const EARLYBUYER_MSPEQ_SIGNALS = ['candleSize', 'volatility', 'momentum'] as const;
+
+/**
+ * Signal names used in NCandleMSPEQ
+ * (same 3 signals as FirstCandleMSPEQ and EarlyBuyerMSPEQ)
+ */
+const NCANDLE_MSPEQ_SIGNALS = ['candleSize', 'volatility', 'momentum'] as const;
 
 // ============================================================================
 // YAML Parsing
@@ -238,6 +256,215 @@ export function loadFirstCandleMSPEQFromYaml(
 }
 
 // ============================================================================
+// EarlyBuyerMSPEQ Adapter
+// ============================================================================
+
+/**
+ * Converts flat YAML params to MultiSignalPEQConfig for EarlyBuyerMSPEQ
+ */
+function extractEarlyBuyerMSPEQConfig(
+    prefix: string,
+    params: Record<string, number>,
+    signalNames: readonly string[] = EARLYBUYER_MSPEQ_SIGNALS
+): MultiSignalPEQConfig {
+    return MultiSignalPEQ.fromFlatParams(
+        prefix,
+        params,
+        [...signalNames],
+        {
+            normalizations: {
+                candleSize: STANDARD_NORMALIZATIONS.candleSize,
+                volatility: STANDARD_NORMALIZATIONS.volatility,
+                momentum: STANDARD_NORMALIZATIONS.momentum,
+            },
+        }
+    ).getConfig();
+}
+
+/**
+ * Extracts EarlyBuyerMSPEQProps from simulator YAML params
+ */
+export function extractEarlyBuyerMSPEQProps(
+    yaml: SimulatorYamlOutput,
+    config: CommonBotConfig,
+    filePath?: string
+): EarlyBuyerMSPEQProps {
+    const { params } = yaml;
+    const targetedMarket = resolveMarket(yaml.market);
+
+    // Generate bot name from filename + params
+    const shortname = targetMarketToShortname(targetedMarket);
+    const baseFilename = filePath ? getBaseFilename(filePath) : 'ebmspeq';
+    const name = `${baseFilename}-${shortname}`;
+
+    return {
+        // Identity
+        name,
+        targetedMarket,
+
+        // Common config
+        client: config.client,
+        marketInfo: config.marketInfo,
+        PROD_MODE: config.PROD_MODE,
+        hourlyDollarLimit: config.hourlyDollarLimit,
+
+        // Base parameters from YAML
+        targetDollars: config.targetDollars ?? params.targetDollars ?? 10,
+        baseBuyPrice: params.baseBuyPrice,
+        baseSellPrice: params.baseSellPrice,
+        baseCutoffMinute: params.baseCutoffMinute,
+        candleSizeReference: params.candleSizeReference ?? 1000,
+        minProfitMargin: params.minProfitMargin,
+        directionThreshold: params.directionThreshold ?? 0.5,
+
+        // Multi-Signal PEQ configs (converted from flat params)
+        targetBuyPriceMSPEQ: extractEarlyBuyerMSPEQConfig('buyPrice', params),
+        targetSellPriceMSPEQ: extractEarlyBuyerMSPEQConfig('sellPrice', params),
+        cutoffMinuteMSPEQ: extractEarlyBuyerMSPEQConfig('cutoffMinute', params),
+        btcDirectionMSPEQ: extractEarlyBuyerMSPEQConfig('btcDirection', params),
+        earlySellTimeMSPEQ: extractEarlyBuyerMSPEQConfig('earlySellTime', params),
+        earlySellPriceMSPEQ: extractEarlyBuyerMSPEQConfig('earlySellPrice', params),
+    };
+}
+
+/**
+ * Loads an EarlyBuyerMSPEQ bot from a simulator YAML file
+ *
+ * @param filePath - Path to the YAML file
+ * @param config - Common bot configuration
+ * @returns Configured EarlyBuyerMSPEQ bot instance
+ *
+ * @example
+ * const bot = loadEarlyBuyerMSPEQFromYaml(
+ *   './logs/simulator/stage2-quarterlyearlybuyermspeq-2026-02-10T04-09-13.yaml',
+ *   { client: clobClient, marketInfo, PROD_MODE: true, hourlyDollarLimit: 50 }
+ * );
+ */
+export function loadEarlyBuyerMSPEQFromYaml(
+    filePath: string,
+    config: CommonBotConfig
+): EarlyBuyerMSPEQ {
+    const yaml = loadSimulatorYaml(filePath);
+
+    if (!yaml.strategy.includes('EarlyBuyerMSPEQ')) {
+        console.warn(
+            `[SimulatorParamsAdapter] Warning: YAML strategy "${yaml.strategy}" ` +
+            `may not be compatible with EarlyBuyerMSPEQ`
+        );
+    }
+
+    const props = extractEarlyBuyerMSPEQProps(yaml, config, filePath);
+    return new EarlyBuyerMSPEQ(props);
+}
+
+// ============================================================================
+// NCandleMSPEQ Adapter
+// ============================================================================
+
+/**
+ * Converts flat YAML params to MultiSignalPEQConfig for NCandleMSPEQ
+ */
+function extractNCandleMSPEQConfig(
+    prefix: string,
+    params: Record<string, number>,
+    signalNames: readonly string[] = NCANDLE_MSPEQ_SIGNALS
+): MultiSignalPEQConfig {
+    return MultiSignalPEQ.fromFlatParams(
+        prefix,
+        params,
+        [...signalNames],
+        {
+            normalizations: {
+                candleSize: STANDARD_NORMALIZATIONS.candleSize,
+                volatility: STANDARD_NORMALIZATIONS.volatility,
+                momentum: STANDARD_NORMALIZATIONS.momentum,
+            },
+        }
+    ).getConfig();
+}
+
+/**
+ * Extracts NCandleMSPEQProps from simulator YAML params
+ */
+export function extractNCandleMSPEQProps(
+    yaml: SimulatorYamlOutput,
+    config: CommonBotConfig,
+    filePath?: string
+): NCandleMSPEQProps {
+    const { params } = yaml;
+    const targetedMarket = resolveMarket(yaml.market);
+
+    // Generate bot name from filename + params
+    const shortname = targetMarketToShortname(targetedMarket);
+    const baseFilename = filePath ? getBaseFilename(filePath) : 'ncmspeq';
+    const name = `${baseFilename}-${shortname}`;
+
+    return {
+        // Identity
+        name,
+        targetedMarket,
+
+        // Common config
+        client: config.client,
+        marketInfo: config.marketInfo,
+        PROD_MODE: config.PROD_MODE,
+        hourlyDollarLimit: config.hourlyDollarLimit,
+
+        // Base parameters from YAML
+        candleMinutes: params.candleMinutes,
+        buyPriceBuffer: params.buyPriceBuffer,
+        sellPriceBuffer: params.sellPriceBuffer,
+        minProfitMargin: params.minProfitMargin,
+        stopLossMultiplier: params.stopLossMultiplier,
+        stoplossTimeout: params.stoplossTimeout,
+        sellTimeout: params.sellTimeout,
+        stoplossFailureTimeout: params.stoplossFailureTimeout ?? 15,
+        earlySellScalar: params.earlySellScalar,
+        targetDollars: config.targetDollars ?? params.targetDollars ?? 10,
+        cutoffMinute: params.cutoffMinute,
+        maxTradesPerHour: params.maxTradesPerHour ?? 5,
+        candleSizeReference: params.candleSizeReference ?? 1000,
+
+        // Multi-Signal PEQ configs (converted from flat params)
+        buyPriceBufferMSPEQ: extractNCandleMSPEQConfig('buyPriceBuffer', params),
+        minProfitMarginMSPEQ: extractNCandleMSPEQConfig('minProfitMargin', params),
+        stoplossTimeoutMSPEQ: extractNCandleMSPEQConfig('stoplossTimeout', params),
+        sellTimeoutMSPEQ: extractNCandleMSPEQConfig('sellTimeout', params),
+        stoplossFailureTimeoutMSPEQ: extractNCandleMSPEQConfig('stoplossFailureTimeout', params),
+    };
+}
+
+/**
+ * Loads an NCandleMSPEQ bot from a simulator YAML file
+ *
+ * @param filePath - Path to the YAML file
+ * @param config - Common bot configuration
+ * @returns Configured NCandleMSPEQ bot instance
+ *
+ * @example
+ * const bot = loadNCandleMSPEQFromYaml(
+ *   './logs/simulator/stage2-quarterlyncandlemspeq-2026-02-10T04-09-13.yaml',
+ *   { client: clobClient, marketInfo, PROD_MODE: true, hourlyDollarLimit: 50 }
+ * );
+ */
+export function loadNCandleMSPEQFromYaml(
+    filePath: string,
+    config: CommonBotConfig
+): NCandleMSPEQ {
+    const yaml = loadSimulatorYaml(filePath);
+
+    if (!yaml.strategy.includes('NCandleMSPEQ')) {
+        console.warn(
+            `[SimulatorParamsAdapter] Warning: YAML strategy "${yaml.strategy}" ` +
+            `may not be compatible with NCandleMSPEQ`
+        );
+    }
+
+    const props = extractNCandleMSPEQProps(yaml, config, filePath);
+    return new NCandleMSPEQ(props);
+}
+
+// ============================================================================
 // Batch Loading
 // ============================================================================
 
@@ -307,6 +534,14 @@ export function loadBotsFromYamlDir(
             // Determine bot type and load
             if (yaml.strategy.includes('FirstCandleMSPEQ')) {
                 const bot = loadFirstCandleMSPEQFromYaml(filePath, config);
+                bots.push(bot);
+                console.log(`[SimulatorParamsAdapter] Loaded ${bot.name} from ${file}`);
+            } else if (yaml.strategy.includes('EarlyBuyerMSPEQ')) {
+                const bot = loadEarlyBuyerMSPEQFromYaml(filePath, config);
+                bots.push(bot);
+                console.log(`[SimulatorParamsAdapter] Loaded ${bot.name} from ${file}`);
+            } else if (yaml.strategy.includes('NCandleMSPEQ')) {
+                const bot = loadNCandleMSPEQFromYaml(filePath, config);
                 bots.push(bot);
                 console.log(`[SimulatorParamsAdapter] Loaded ${bot.name} from ${file}`);
             } else {
@@ -400,6 +635,14 @@ export function loadLatestBot(
     }
 
     console.log(`[SimulatorParamsAdapter] Loading latest params from: ${yamlPath}`);
+
+    // Determine bot type based on strategy
+    if (strategy.includes('EarlyBuyerMSPEQ')) {
+        return loadEarlyBuyerMSPEQFromYaml(yamlPath, config);
+    }
+    if (strategy.includes('NCandleMSPEQ')) {
+        return loadNCandleMSPEQFromYaml(yamlPath, config);
+    }
     return loadFirstCandleMSPEQFromYaml(yamlPath, config);
 }
 

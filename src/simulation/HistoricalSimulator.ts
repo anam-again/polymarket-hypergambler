@@ -66,6 +66,7 @@ export interface SimulatedBot {
     onHourChange: () => Promise<void>;
     getTrades: () => SimulatedTrade[];
     reset: () => void;
+    dispose?: () => void;  // Optional cleanup method to help GC
 }
 
 export interface SimulatedTrade {
@@ -161,7 +162,12 @@ export class HistoricalSimulator {
         const expiredTrades = trades.filter(t => t.status === 'EXPIRED');
         const completedTrades = [...matchedTrades, ...expiredTrades];
 
-        const pnls = completedTrades.map(t => t.pnl ?? 0);
+        // Filter out trades with invalid/extreme PnL values
+        // Reasonable PnL bounds: max loss per trade is ~$1000, max gain is similar
+        const MAX_REASONABLE_PNL = 10000;
+        const pnls = completedTrades
+            .map(t => t.pnl ?? 0)
+            .filter(pnl => !isNaN(pnl) && isFinite(pnl) && Math.abs(pnl) < MAX_REASONABLE_PNL);
         const totalPnl = pnls.reduce((sum, pnl) => sum + pnl, 0);
         const winningTrades = pnls.filter(pnl => pnl > 0);
 
@@ -244,7 +250,6 @@ export class HistoricalSimulator {
 
             // Run simulations for all individuals in population
             const results: SimulationResult[] = [];
-            const tradesPerIndividual: SimulatedTrade[][] = [];
 
             // Track running totals for average calculation
             let runningPnlSum = 0;
@@ -264,18 +269,18 @@ export class HistoricalSimulator {
 
                 const { result, trades } = await this.runSingleBotSimulationWithTrades(botName, botFactory, params);
                 results.push(result);
-                tradesPerIndividual.push(trades);
 
                 // Update running sum for average
                 runningPnlSum += result.totalPnl;
 
-                // Track best performer for audit
+                // Track best performer for audit (only keep trades for the best one)
                 if (result.totalPnl > bestFitness) {
                     bestFitness = result.totalPnl;
                     bestTrades = trades;
                 }
+                // Note: trades from non-best performers are discarded to save memory
 
-                // Track top N performers for re-run with logging
+                // Track top N performers for re-run with logging (only params, not trades)
                 if (auditCount > 0) {
                     topPerformers.push({ params: { ...params }, fitness: result.totalPnl });
                     topPerformers.sort((a, b) => b.fitness - a.fitness);
@@ -287,6 +292,9 @@ export class HistoricalSimulator {
 
             // Update fitness scores
             optimizer.updateFitness(results);
+
+            // Clear results array to help GC (optimizer has already extracted what it needs)
+            results.length = 0;
 
             // Check stopping criteria
             const stopCheck = optimizer.shouldStop();
@@ -441,10 +449,22 @@ export class HistoricalSimulator {
         const trades = bot.getTrades();
         const result = this.calculateResults(botName, params, trades);
 
-        // Cleanup
-        this.clock.clearListeners();
+        // Copy trades before cleanup (bot.getTrades returns internal array)
+        const tradesCopy = [...trades];
 
-        return { result, trades: [...trades] };
+        // Cleanup - clear listeners and dispose bot to help GC
+        this.clock.clearListeners();
+        bot.reset();
+        if (bot.dispose) {
+            bot.dispose();
+        }
+
+        // Null out references to help GC
+        (this as any).clock = null;
+        (this as any).marketInfo = null;
+        (this as any).cdMarketData = null;
+
+        return { result, trades: tradesCopy };
     }
 
     /**

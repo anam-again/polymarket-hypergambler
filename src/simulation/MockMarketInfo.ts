@@ -353,6 +353,10 @@ export class MockMarketInfo implements IMarketInfo {
      * Gets the UP/DOWN prices at the current simulated time.
      * Uses hourly data by default; pass market parameter for quarterly support.
      * For quarterly markets, uses retry logic to find data within the current 15-minute period.
+     *
+     * IMPORTANT: At period start, if no data exists for the current period yet,
+     * returns neutral prices (0.50) instead of end-of-previous-period prices.
+     * This prevents unrealistic order matching at period boundaries.
      */
     public async getPrice(clobTokenId: string, side: Side, market: TargetedMarket): Promise<number> {
         const now = this.clock.now();
@@ -370,6 +374,16 @@ export class MockMarketInfo implements IMarketInfo {
             entry = this.findPreviousEntry(data, now);
             if (!entry) {
                 throw new Error(`No UP/DOWN data available for timestamp ${new Date(now).toISOString()}`);
+            }
+
+            // Check if the entry is from a different period (cross-period boundary)
+            // At period start, we shouldn't use end-of-previous-period prices
+            const entryPeriodKey = this.getHourKey(entry.timestamp);
+            const currentPeriodKey = this.getHourKey(now);
+            if (entryPeriodKey !== currentPeriodKey) {
+                // Return neutral prices at period start to prevent unrealistic order matching
+                // This simulates the market resetting at the start of each period
+                return 0.50;
             }
         }
 
@@ -389,12 +403,17 @@ export class MockMarketInfo implements IMarketInfo {
      * Gets mock order books for the current simulated time.
      * Supports both hourly and quarterly markets based on market parameter.
      * For quarterly markets, uses retry logic to find data within the current 15-minute period.
+     *
+     * IMPORTANT: At period start, if no data exists for the current period yet,
+     * returns neutral prices (0.50) instead of end-of-previous-period prices.
+     * This prevents unrealistic order matching at period boundaries.
      */
     public async getLiveData(market: TargetedMarket): Promise<BtcOrderBooks> {
         const now = this.clock.now();
         const data = this.getDataForMarket(market);
 
         let entry: UpDownPriceEntry | null;
+        let useNeutralPrices = false;
 
         // For quarterly markets, use retry logic to wait for current period data
         if (market && MockMarketInfo.getMarketSchedule(market) === MarketSchedule.QUARTERLY) {
@@ -407,9 +426,27 @@ export class MockMarketInfo implements IMarketInfo {
             if (!entry) {
                 throw new Error(`No UP/DOWN data available for timestamp ${new Date(now).toISOString()}`);
             }
+
+            // Check if the entry is from a different period (cross-period boundary)
+            // At period start, we shouldn't use end-of-previous-period prices
+            const entryPeriodKey = this.getHourKey(entry.timestamp);
+            const currentPeriodKey = this.getHourKey(now);
+            if (entryPeriodKey !== currentPeriodKey) {
+                useNeutralPrices = true;
+            }
         }
 
         const periodKey = this.getPeriodKey(now, market);
+
+        // At period start, return neutral prices to prevent unrealistic order matching
+        if (useNeutralPrices) {
+            return {
+                BtcUpTokenId: `UP-${periodKey}`,
+                BtcUp: this.createMockOrderBook(0.49, 0.51),
+                BtcDownTokenId: `DOWN-${periodKey}`,
+                BtcDown: this.createMockOrderBook(0.49, 0.51),
+            };
+        }
 
         return {
             BtcUpTokenId: `UP-${periodKey}`,

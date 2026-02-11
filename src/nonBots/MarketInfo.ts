@@ -70,6 +70,14 @@ export class MarketInfo {
     private marketInfoCache: Map<string, { data: MarketInfoSimple; fetchedAt: number; lastAccessedAt: number }> = new Map();
     private marketInfoPending: Map<string, Promise<MarketInfoSimple>> = new Map();
 
+    // Period boundary tracking for sanity checks
+    private lastPeriodKey: Map<TargetedMarket, string> = new Map();
+
+    // Sanity check thresholds
+    private static readonly EXTREME_PRICE_LOW = 0.20;
+    private static readonly EXTREME_PRICE_HIGH = 0.80;
+    private static readonly PERIOD_START_GRACE_SECONDS = 60;
+
     constructor(props: MarketInfoProps) {
         this.client = props.client;
         Object.values(TargetedMarket).forEach((market) => {
@@ -544,9 +552,20 @@ export class MarketInfo {
                 ? parseFloat(liveData.BtcDown.asks[liveData.BtcDown.asks.length - 1].price)
                 : 1;
 
-            const timestamp = new Date().toISOString();
+            const now = new Date();
+            const timestamp = now.toISOString();
             const timestampMs = Date.now();
-            const logLine = `${timestamp},${upBid},${upAsk},${downBid},${downAsk}\n`;
+
+            // Sanity check: reject extreme prices at period start
+            const sanityCheck = this.sanityCheckPrices(upBid, upAsk, downBid, downAsk, targetedMarket, now);
+            if (!sanityCheck.pass) {
+                this.writeLog(`[SANITY] Skipping price write: ${sanityCheck.reason}`);
+                return;
+            }
+
+            const logLine = `${timestamp},${upBid},${downBid}\n`;
+            // Note: Original format was ${timestamp},${upBid},${upAsk},${downBid},${downAsk}
+            // Changed to match existing log file format: ${timestamp},${upBid},${downBid}
 
             // Write to log file (if WRITE_LOGS env is not explicitly false)
             if (process.env.WRITE_LOGS !== 'false') {
@@ -595,5 +614,92 @@ export class MarketInfo {
             default:
                 return 'unknown';
         }
+    }
+
+    /**
+     * Gets the period key for a given timestamp and market schedule.
+     * Hourly markets: "YYYY-MM-DDTHH"
+     * Quarterly markets: "YYYY-MM-DDTHH:QN" where N is 0-3
+     */
+    private getPeriodKey(timestamp: Date, targetedMarket: TargetedMarket): string {
+        const schedule = QuantBot.getMarketSchedule(targetedMarket);
+        const year = timestamp.getUTCFullYear();
+        const month = String(timestamp.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(timestamp.getUTCDate()).padStart(2, '0');
+        const hour = String(timestamp.getUTCHours()).padStart(2, '0');
+
+        if (schedule === MarketSchedule.QUARTERLY) {
+            const quarter = Math.floor(timestamp.getUTCMinutes() / 15);
+            return `${year}-${month}-${day}T${hour}:Q${quarter}`;
+        }
+        return `${year}-${month}-${day}T${hour}`;
+    }
+
+    /**
+     * Gets how many seconds into the current period we are.
+     */
+    private getSecondsIntoPeriod(timestamp: Date, targetedMarket: TargetedMarket): number {
+        const schedule = QuantBot.getMarketSchedule(targetedMarket);
+        const minutes = timestamp.getUTCMinutes();
+        const seconds = timestamp.getUTCSeconds();
+
+        if (schedule === MarketSchedule.QUARTERLY) {
+            const minuteInQuarter = minutes % 15;
+            return minuteInQuarter * 60 + seconds;
+        }
+        return minutes * 60 + seconds;
+    }
+
+    /**
+     * Checks if a price is extreme (near 0 or 1).
+     */
+    private isExtremePrice(price: number): boolean {
+        return price <= MarketInfo.EXTREME_PRICE_LOW || price >= MarketInfo.EXTREME_PRICE_HIGH;
+    }
+
+    /**
+     * Performs sanity checks on price data before writing.
+     * Returns true if the data should be written, false if it should be skipped.
+     *
+     * Checks:
+     * 1. At period start (first 60 seconds), extreme prices (< 0.05 or > 0.95) are rejected
+     *    because they likely indicate stale data from the previous period.
+     */
+    private sanityCheckPrices(
+        upBid: number,
+        upAsk: number,
+        downBid: number,
+        downAsk: number,
+        targetedMarket: TargetedMarket,
+        timestamp: Date
+    ): { pass: boolean; reason?: string } {
+        const currentPeriodKey = this.getPeriodKey(timestamp, targetedMarket);
+        const lastPeriodKey = this.lastPeriodKey.get(targetedMarket);
+        const secondsIntoPeriod = this.getSecondsIntoPeriod(timestamp, targetedMarket);
+
+        // Update period key
+        this.lastPeriodKey.set(targetedMarket, currentPeriodKey);
+
+        // Check if we're at the start of a new period
+        const isNewPeriod = lastPeriodKey !== undefined && lastPeriodKey !== currentPeriodKey;
+        const isAtPeriodStart = secondsIntoPeriod <= MarketInfo.PERIOD_START_GRACE_SECONDS;
+
+        // At period start (or just after period boundary), reject extreme prices
+        if (isAtPeriodStart || isNewPeriod) {
+            // Use mid prices for the check
+            const upMid = (upBid + upAsk) / 2;
+            const downMid = (downBid + downAsk) / 2;
+
+            if (this.isExtremePrice(upMid) || this.isExtremePrice(downMid)) {
+                return {
+                    pass: false,
+                    reason: `Extreme prices at period start rejected: ` +
+                        `upMid=${upMid.toFixed(3)}, downMid=${downMid.toFixed(3)}, ` +
+                        `period=${currentPeriodKey}, secondsIn=${secondsIntoPeriod}`,
+                };
+            }
+        }
+
+        return { pass: true };
     }
 }

@@ -86,6 +86,26 @@ export class QuantBotSimulationAdapter implements SimulatedBot {
     }
 
     /**
+     * Disposes of the adapter and clears all references to help GC.
+     * Call this after the simulation is complete and results have been extracted.
+     */
+    public dispose(): void {
+        // Clear accumulated trades
+        this.accumulatedTrades = [];
+
+        // Stop the bot to clear any pending timers and cleanup
+        if (this.bot) {
+            this.bot.stop();
+            this.bot.trades = [];
+        }
+
+        // Null out references to help GC (cast to any to allow nulling)
+        (this as any).bot = null;
+        (this as any).clock = null;
+        (this as any).marketInfo = null;
+    }
+
+    /**
      * Converts a TradeOrder to SimulatedTrade format.
      */
     private convertToSimulatedTrade(trade: TradeOrder): SimulatedTrade {

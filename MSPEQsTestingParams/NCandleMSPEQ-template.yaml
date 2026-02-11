@@ -1,0 +1,136 @@
+# NCandleMSPEQ Base Parameters Template
+# ======================================
+#
+# Usage:
+#   npm run histSim -- --base-params MSPEQsTestingParams/NCandleMSPEQ-template.yaml -s NCandleMSPEQ -p 150 -m 75 -c btc
+#
+# This file contains the base parameters for NCandleMSPEQ strategy.
+# Stage 2 optimization will freeze these and only optimize the MSPEQ coefficients.
+#
+# NCandleMSPEQ uses multiple signals (candleSize, volatility, momentum) to
+# dynamically compute: buy price buffer, min profit margin, stoploss timeout,
+# sell timeout, and stoploss failure timeout.
+#
+# This strategy trades on candle close direction (UP/DOWN) with sophisticated
+# stop-loss management and multiple trades per period.
+
+# hourly
+# npm run histSim -- -g -s NCandle -M btc-hourly -c btc -p 30  -m 50 -d 20 -a 5 --base-params MSPEQsTestingParams/NCandleMSPEQ-template.yaml
+# quarterly
+# npm run histSim -- -g -s QuarterlyNCandle -M btc-quarterly -c btc -p 30  -m 50 -d 20 -a 5 --base-params MSPEQsTestingParams/NCandleMSPEQ-template.yaml
+strategy: NCandleMSPEQ
+market: btc-hourly
+coin: btc
+days: 15
+params:
+  # Position sizing
+  targetDollars: 10
+
+  # Candle formation
+  candleMinutes: 7          # Duration of each candle (e.g., 3-10 for quarterly, 5-20 for hourly)
+  candleSizeReference: 120    # Reference value for normalizing candle size
+
+  # Order pricing buffers (MSPEQ scales these)
+  buyPriceBuffer: 0.01       # Buffer above ask for buy orders
+  sellPriceBuffer: 0.01      # Buffer below bid for sell orders
+  minProfitMargin: 0.30      # Minimum profit margin for sell orders
+
+  # Stop-loss configuration
+  stopLossMultiplier: 0.5    # Stop-loss as multiplier of candle range
+
+  # Timeout settings (in seconds, MSPEQ scales these)
+  stoplossTimeout: 30        # Seconds price must be below stoploss before triggering
+  sellTimeout: 100           # Seconds after buy match to force sell at market
+  stoplossFailureTimeout: 15 # Seconds before re-adjusting unfilled stoploss order
+
+  # Early sell configuration
+  earlySellScalar: 0.3       # Scalar for early sell based on PnL and time pressure (0-1)
+
+  # Trading window
+  cutoffMinute: 10          # Stop entering new trades after this minute in period
+  maxTradesPerHour: 5        # Maximum number of trades per hour/period
+
+  # BuyPriceBuffer MSPEQ (3 signals × 5 params = 15)
+  buyPriceBuffer_candleSize_w: 1.0
+  buyPriceBuffer_candleSize_c0: 1.0
+  buyPriceBuffer_candleSize_c1: 0.0
+  buyPriceBuffer_candleSize_c2: 0.0
+  buyPriceBuffer_candleSize_c3: 0.0
+  buyPriceBuffer_volatility_w: 1.0
+  buyPriceBuffer_volatility_c0: 1.0
+  buyPriceBuffer_volatility_c1: 0.0
+  buyPriceBuffer_volatility_c2: 0.0
+  buyPriceBuffer_volatility_c3: 0.0
+  buyPriceBuffer_momentum_w: 1.0
+  buyPriceBuffer_momentum_c0: 1.0
+  buyPriceBuffer_momentum_c1: 0.0
+  buyPriceBuffer_momentum_c2: 0.0
+  buyPriceBuffer_momentum_c3: 0.0
+
+  # MinProfitMargin MSPEQ (3 signals × 5 params = 15)
+  minProfitMargin_candleSize_w: 1.0
+  minProfitMargin_candleSize_c0: 1.0
+  minProfitMargin_candleSize_c1: 0.0
+  minProfitMargin_candleSize_c2: 0.0
+  minProfitMargin_candleSize_c3: 0.0
+  minProfitMargin_volatility_w: 1.0
+  minProfitMargin_volatility_c0: 1.0
+  minProfitMargin_volatility_c1: 0.0
+  minProfitMargin_volatility_c2: 0.0
+  minProfitMargin_volatility_c3: 0.0
+  minProfitMargin_momentum_w: 1.0
+  minProfitMargin_momentum_c0: 1.0
+  minProfitMargin_momentum_c1: 0.0
+  minProfitMargin_momentum_c2: 0.0
+  minProfitMargin_momentum_c3: 0.0
+
+  # StoplossTimeout MSPEQ (3 signals × 5 params = 15)
+  stoplossTimeout_candleSize_w: 1.0
+  stoplossTimeout_candleSize_c0: 1.0
+  stoplossTimeout_candleSize_c1: 0.0
+  stoplossTimeout_candleSize_c2: 0.0
+  stoplossTimeout_candleSize_c3: 0.0
+  stoplossTimeout_volatility_w: 1.0
+  stoplossTimeout_volatility_c0: 1.0
+  stoplossTimeout_volatility_c1: 0.0
+  stoplossTimeout_volatility_c2: 0.0
+  stoplossTimeout_volatility_c3: 0.0
+  stoplossTimeout_momentum_w: 1.0
+  stoplossTimeout_momentum_c0: 1.0
+  stoplossTimeout_momentum_c1: 0.0
+  stoplossTimeout_momentum_c2: 0.0
+  stoplossTimeout_momentum_c3: 0.0
+
+  # SellTimeout MSPEQ (3 signals × 5 params = 15)
+  sellTimeout_candleSize_w: 1.0
+  sellTimeout_candleSize_c0: 1.0
+  sellTimeout_candleSize_c1: 0.0
+  sellTimeout_candleSize_c2: 0.0
+  sellTimeout_candleSize_c3: 0.0
+  sellTimeout_volatility_w: 1.0
+  sellTimeout_volatility_c0: 1.0
+  sellTimeout_volatility_c1: 0.0
+  sellTimeout_volatility_c2: 0.0
+  sellTimeout_volatility_c3: 0.0
+  sellTimeout_momentum_w: 1.0
+  sellTimeout_momentum_c0: 1.0
+  sellTimeout_momentum_c1: 0.0
+  sellTimeout_momentum_c2: 0.0
+  sellTimeout_momentum_c3: 0.0
+
+  # StoplossFailureTimeout MSPEQ (3 signals × 5 params = 15)
+  stoplossFailureTimeout_candleSize_w: 1.0
+  stoplossFailureTimeout_candleSize_c0: 1.0
+  stoplossFailureTimeout_candleSize_c1: 0.0
+  stoplossFailureTimeout_candleSize_c2: 0.0
+  stoplossFailureTimeout_candleSize_c3: 0.0
+  stoplossFailureTimeout_volatility_w: 1.0
+  stoplossFailureTimeout_volatility_c0: 1.0
+  stoplossFailureTimeout_volatility_c1: 0.0
+  stoplossFailureTimeout_volatility_c2: 0.0
+  stoplossFailureTimeout_volatility_c3: 0.0
+  stoplossFailureTimeout_momentum_w: 1.0
+  stoplossFailureTimeout_momentum_c0: 1.0
+  stoplossFailureTimeout_momentum_c1: 0.0
+  stoplossFailureTimeout_momentum_c2: 0.0
+  stoplossFailureTimeout_momentum_c3: 0.0

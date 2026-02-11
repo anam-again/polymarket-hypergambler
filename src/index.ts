@@ -30,6 +30,8 @@ import { PredictionStyle } from "./ml/types.js";
 import { ScalingPEQ, ScalingPEQCoefficients } from "./utils/ScalingPEQ.js";
 import { TradingDatabase } from "./db/TradingDatabase.js";
 import { FirstCandleMSPEQ } from "./bots/FirstCandleMSPEQ.js";
+import { EarlyBuyerMSPEQ } from "./bots/EarlyBuyerMSPEQ.js";
+import { NCandleMSPEQ } from "./bots/NCandleMSPEQ.js";
 import { loadBotsFromYamlDir } from "./adapters/SimulatorParamsAdapter.js";
 
 // Initialize database on startup
@@ -83,21 +85,21 @@ OrderBatcher.initialize(clobClient, 200);
 // exit(1);
 
 const prodBots: QuantBotRun[] = [
-  ...([
-    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, candleMinutes: 4, breakoutBuffer: 50, pullbackBuffer: 10, baseBuyPrice: .52, minProfitMargin: .38, cutoffMinute: 12, targetDollars: 5, hourlyDollarLimit: 5 },
-    { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, candleMinutes: 4, breakoutBuffer: 50, pullbackBuffer: 5, baseBuyPrice: .52, minProfitMargin: .38, cutoffMinute: 12, targetDollars: 5, hourlyDollarLimit: 5 },
-  ]).map((v) => {
-    return new FirstCandle({
-      ...v,
-      name: `fcandle-${targetMarketToShortname(v.targetedMarket)}-${v.candleMinutes}m-bb${v.breakoutBuffer}-pp${v.pullbackBuffer}-b${v.baseBuyPrice}-mpm${v.minProfitMargin}-co${v.cutoffMinute}`,
-      ...commonProdProps,
-      candleSizeReference: 1000,
-      targetBuyPricePEQ: { c0: 1, c1: 0, c2: 0, c3: 0 },
-      targetSellPricePEQ: { c0: 1, c1: 0, c2: 0, c3: 0 },
-      earlySellTimePEQ: { c0: 0.2, c1: 0, c2: 0, c3: 0 },
-      earlySellPricePEQ: { c0: 1, c1: 0, c2: 0, c3: 0 },
-    })
-  }),
+  // ...([
+  //   { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, candleMinutes: 4, breakoutBuffer: 50, pullbackBuffer: 10, baseBuyPrice: .52, minProfitMargin: .38, cutoffMinute: 12, targetDollars: 5, hourlyDollarLimit: 5 },
+  //   { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, candleMinutes: 4, breakoutBuffer: 50, pullbackBuffer: 5, baseBuyPrice: .52, minProfitMargin: .38, cutoffMinute: 12, targetDollars: 5, hourlyDollarLimit: 5 },
+  // ]).map((v) => {
+  //   return new FirstCandle({
+  //     ...v,
+  //     name: `fcandle-${targetMarketToShortname(v.targetedMarket)}-${v.candleMinutes}m-bb${v.breakoutBuffer}-pp${v.pullbackBuffer}-b${v.baseBuyPrice}-mpm${v.minProfitMargin}-co${v.cutoffMinute}`,
+  //     ...commonProdProps,
+  //     candleSizeReference: 1000,
+  //     targetBuyPricePEQ: { c0: 1, c1: 0, c2: 0, c3: 0 },
+  //     targetSellPricePEQ: { c0: 1, c1: 0, c2: 0, c3: 0 },
+  //     earlySellTimePEQ: { c0: 0.2, c1: 0, c2: 0, c3: 0 },
+  //     earlySellPricePEQ: { c0: 1, c1: 0, c2: 0, c3: 0 },
+  //   })
+  // }),
   // ...([
   //   { targetedMarket: TargetedMarket.BITCOIN_QUARTERLY, cutoffMinute: 8, spreadSize: 5, minSpreadDistance: .01, profitMargin: .50, minPrice: .45, maxPrice: .86, stopLossAmount: .04, totalActiveTrades: 9, maxVolatility: 5, minVolatility: 0, volatilityLookbackPeriods: 1, buyExpirySeconds: 85, targetDollars: 6,  hourlyDollarLimit: 30 },
   // ]).map((v) => {

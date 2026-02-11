@@ -1,0 +1,132 @@
+strategy: MarketMakerMSPEQ
+market: btc-hourly
+coin: btc
+days: 7
+params:
+  # Base spread configuration
+  spreadSize: 3
+  baseSpreadDistance: 0.03
+  baseProfitMargin: 0.10
+
+  # Base price bounds (dynamically scaled by MSPEQs)
+  baseMinPrice: 0.40
+  baseMaxPrice: 0.60
+
+  # Risk management
+  baseStopLossAmount: 0.10
+  buyExpirySeconds: 60
+
+  # Position limits
+  totalActiveTrades: 6
+
+  # Volatility filter
+  maxVolatility: 500
+  minVolatility: 50
+  volatilityLookbackPeriods: 10
+
+  # Standard parameters
+  targetDollars: 10
+  baseCutoffMinute: 45
+  candleSizeReference: 200
+
+  # ProfitMargin MSPEQ (3 signals × 5 params = 15)
+  profitMargin_candleSize_w: 1.0
+  profitMargin_candleSize_c0: 1.0
+  profitMargin_candleSize_c1: 0.0
+  profitMargin_candleSize_c2: 0.0
+  profitMargin_candleSize_c3: 0.0
+  profitMargin_volatility_w: 1.0
+  profitMargin_volatility_c0: 1.0
+  profitMargin_volatility_c1: 0.0
+  profitMargin_volatility_c2: 0.0
+  profitMargin_volatility_c3: 0.0
+  profitMargin_momentum_w: 1.0
+  profitMargin_momentum_c0: 1.0
+  profitMargin_momentum_c1: 0.0
+  profitMargin_momentum_c2: 0.0
+  profitMargin_momentum_c3: 0.0
+
+  # SpreadDistance MSPEQ (3 signals × 5 params = 15)
+  spreadDistance_candleSize_w: 1.0
+  spreadDistance_candleSize_c0: 1.0
+  spreadDistance_candleSize_c1: 0.0
+  spreadDistance_candleSize_c2: 0.0
+  spreadDistance_candleSize_c3: 0.0
+  spreadDistance_volatility_w: 1.0
+  spreadDistance_volatility_c0: 1.0
+  spreadDistance_volatility_c1: 0.0
+  spreadDistance_volatility_c2: 0.0
+  spreadDistance_volatility_c3: 0.0
+  spreadDistance_momentum_w: 1.0
+  spreadDistance_momentum_c0: 1.0
+  spreadDistance_momentum_c1: 0.0
+  spreadDistance_momentum_c2: 0.0
+  spreadDistance_momentum_c3: 0.0
+
+  # StopLossAmount MSPEQ (3 signals × 5 params = 15)
+  stopLossAmount_candleSize_w: 1.0
+  stopLossAmount_candleSize_c0: 1.0
+  stopLossAmount_candleSize_c1: 0.0
+  stopLossAmount_candleSize_c2: 0.0
+  stopLossAmount_candleSize_c3: 0.0
+  stopLossAmount_volatility_w: 1.0
+  stopLossAmount_volatility_c0: 1.0
+  stopLossAmount_volatility_c1: 0.0
+  stopLossAmount_volatility_c2: 0.0
+  stopLossAmount_volatility_c3: 0.0
+  stopLossAmount_momentum_w: 1.0
+  stopLossAmount_momentum_c0: 1.0
+  stopLossAmount_momentum_c1: 0.0
+  stopLossAmount_momentum_c2: 0.0
+  stopLossAmount_momentum_c3: 0.0
+
+  # CutoffMinute MSPEQ (3 signals × 5 params = 15)
+  cutoffMinute_candleSize_w: 1.0
+  cutoffMinute_candleSize_c0: 1.0
+  cutoffMinute_candleSize_c1: 0.0
+  cutoffMinute_candleSize_c2: 0.0
+  cutoffMinute_candleSize_c3: 0.0
+  cutoffMinute_volatility_w: 1.0
+  cutoffMinute_volatility_c0: 1.0
+  cutoffMinute_volatility_c1: 0.0
+  cutoffMinute_volatility_c2: 0.0
+  cutoffMinute_volatility_c3: 0.0
+  cutoffMinute_momentum_w: 1.0
+  cutoffMinute_momentum_c0: 1.0
+  cutoffMinute_momentum_c1: 0.0
+  cutoffMinute_momentum_c2: 0.0
+  cutoffMinute_momentum_c3: 0.0
+
+  # MinPrice MSPEQ (3 signals × 5 params = 15)
+  minPrice_candleSize_w: 1.0
+  minPrice_candleSize_c0: 1.0
+  minPrice_candleSize_c1: 0.0
+  minPrice_candleSize_c2: 0.0
+  minPrice_candleSize_c3: 0.0
+  minPrice_volatility_w: 1.0
+  minPrice_volatility_c0: 1.0
+  minPrice_volatility_c1: 0.0
+  minPrice_volatility_c2: 0.0
+  minPrice_volatility_c3: 0.0
+  minPrice_momentum_w: 1.0
+  minPrice_momentum_c0: 1.0
+  minPrice_momentum_c1: 0.0
+  minPrice_momentum_c2: 0.0
+  minPrice_momentum_c3: 0.0
+
+  # MaxPrice MSPEQ (3 signals × 5 params = 15)
+  maxPrice_candleSize_w: 1.0
+  maxPrice_candleSize_c0: 1.0
+  maxPrice_candleSize_c1: 0.0
+  maxPrice_candleSize_c2: 0.0
+  maxPrice_candleSize_c3: 0.0
+  maxPrice_volatility_w: 1.0
+  maxPrice_volatility_c0: 1.0
+  maxPrice_volatility_c1: 0.0
+  maxPrice_volatility_c2: 0.0
+  maxPrice_volatility_c3: 0.0
+  maxPrice_momentum_w: 1.0
+  maxPrice_momentum_c0: 1.0
+  maxPrice_momentum_c1: 0.0
+  maxPrice_momentum_c2: 0.0
+  maxPrice_momentum_c3: 0.0

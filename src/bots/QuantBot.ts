@@ -695,6 +695,9 @@ export class QuantBot {
   // Track asset price at period start for settlement validation
   private periodStartPrice: number | null = null;
 
+  // Timer ID for initializePeriodStartPrice - stored so it can be cleared on stop
+  private initPriceTimerId: ReturnType<typeof setTimeout> | null = null;
+
   // --- Constructor ---
 
   constructor(props: QuantBotProps) {
@@ -750,8 +753,16 @@ export class QuantBot {
    * This ensures validation works from the first period, not just after the first reset.
    */
   private initializePeriodStartPrice(): void {
+    // Skip in simulation mode - not needed and avoids timer-related memory leaks
+    const isSimulationMode = this.logDirectory.includes('logs/simulator');
+    if (isSimulationMode) {
+      return;
+    }
+
     // Use setTimeout to avoid blocking constructor
-    setTimeout(async () => {
+    // Store timer ID so it can be cleared on stop to prevent memory leaks
+    this.initPriceTimerId = setTimeout(async () => {
+      this.initPriceTimerId = null; // Clear reference after execution
       if (this.isStopped) return;
       try {
         const marketData = this.getCdMarketData();
@@ -803,6 +814,12 @@ export class QuantBot {
     if (this.tickStopFn) {
       this.tickStopFn();
       this.tickStopFn = null;
+    }
+
+    // Clear any pending initialization timer to prevent memory leaks
+    if (this.initPriceTimerId) {
+      clearTimeout(this.initPriceTimerId);
+      this.initPriceTimerId = null;
     }
 
     // Cancel all live trades
@@ -899,6 +916,12 @@ export class QuantBot {
       });
       if (matchedTrade) {
         return matchedTrade;
+      }
+
+      // Defensive check: reject orders with illegal prices
+      if (price < 0.01 || price > 0.99) {
+        this.writeLog(`Order rejected: price ${price} is outside legal range [0.01, 0.99] for ${name}`);
+        return undefined;
       }
 
       const totalCost = price * amount;
@@ -1226,6 +1249,11 @@ export class QuantBot {
   }
 
   public checkIfOrderIsValid(price: number, amount: number): boolean {
+    // Validate price is within legal range [0.01, 0.99]
+    if (price < 0.01 || price > 0.99) {
+      this.writeLog(`Unable to make order, price ${price} is outside legal range [0.01, 0.99].`);
+      return false;
+    }
     if (amount < 5) {
       this.writeLog(`Unable to make order, order size: ${amount} is too small.`);
       return false;

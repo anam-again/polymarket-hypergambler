@@ -1,0 +1,34 @@
+# FirstCandleMSPEQ Base Parameters Template
+# ==========================================
+#
+# Usage:
+#   npm run histSim -- --base-params MSPEQsTestingParams/FirstCandleMSPEQ-template.yaml -p 150 -m 75 -c btc
+#
+# This file contains the base parameters for FirstCandleMSPEQ strategy.
+# Stage 2 optimization will freeze these and only optimize the MSPEQ coefficients.
+#
+# Workflow:
+#   1. Run FirstCandle to get good base params:
+#      npm run histSim -- -s FirstCandle -p 100 -m 50 -c btc
+#
+#   2. Copy best params here and run Stage 2:
+#      npm run histSim -- -b MSPEQsTestingParams/FirstCandleMSPEQ-template.yaml -p 150 -m 75 -c btc
+
+params:
+  # Position sizing
+  targetDollars: 10
+
+  # Candle formation
+  candleMinutes: 10          # Duration of first candle (e.g., 5-15 for quarterly, 10-30 for hourly)
+  candleSizeReference: 1000  # Reference value for normalizing candle size
+
+  # Entry conditions
+  breakoutBuffer: 50         # Price must exceed candle high/low by this amount to confirm breakout
+  pullbackBuffer: 10         # How close price must return to candle high/low for pullback confirmation
+
+  # Trading window
+  cutoffMinute: 12           # Stop entering new trades after this minute in period
+
+  # Pricing
+  baseBuyPrice: 0.65         # Base buy price (MSPEQ scales this)
+  minProfitMargin: 0.20      # Minimum profit margin for sell orders
