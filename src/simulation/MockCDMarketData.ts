@@ -52,6 +52,9 @@ export class MockCDMarketData implements IMarketData {
         },
     };
 
+    // Static data cache to avoid redundant file I/O across simulation runs
+    private static dataCache: Map<CoinType, { hourlyData: HourlyDataEntry[], minuteData: MinuteDataEntry[] }> = new Map();
+
     private clock: SimulationClock;
     private coinType: CoinType;
     private hourlyData: HourlyDataEntry[] = [];
@@ -66,7 +69,19 @@ export class MockCDMarketData implements IMarketData {
     constructor(clock: SimulationClock, coinType: CoinType) {
         this.clock = clock;
         this.coinType = coinType;
-        this.loadData();
+
+        // Check static cache first to avoid redundant file I/O
+        const cached = MockCDMarketData.dataCache.get(coinType);
+        if (cached) {
+            this.hourlyData = cached.hourlyData;
+            this.minuteData = cached.minuteData;
+        } else {
+            this.loadData();
+            MockCDMarketData.dataCache.set(coinType, {
+                hourlyData: this.hourlyData,
+                minuteData: this.minuteData
+            });
+        }
     }
 
     // -------------------------------------------------------------------------

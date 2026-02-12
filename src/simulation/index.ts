@@ -615,21 +615,73 @@ async function runIterativeOptimization(config: IterativeOptimizationConfig): Pr
             logger.log(`  ${key}: ${typeof value === 'number' ? value.toFixed(4) : value}`);
         }
 
-        // Save to YAML
+        // Create output directory for results
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        const yamlPath = `./logs/simulator/iterative-${strategy.name.toLowerCase()}-${timestamp}.yaml`;
+        const outputDir = `./logs/simulator/${config.optimizerOverride}-${strategy.name.toLowerCase()}-${timestamp}`;
+        if (!fs.existsSync(outputDir)) {
+            fs.mkdirSync(outputDir, { recursive: true });
+        }
+
+        // Run final simulation with best params to generate trade audit
+        logger.log('\n--- Running Final Simulation with Best Params ---');
+        const { result: finalResult, trades: finalTrades } = await simulator.runSingleSimulation(
+            strategy.name,
+            strategy.factory,
+            result.params,
+            { shouldWriteLogs: true, logDirectory: outputDir }
+        );
+
+        logger.log(`Final Simulation Results:`);
+        logger.log(`  Total Trades: ${finalResult.totalTrades}`);
+        logger.log(`  ${CYAN}Total PnL${RESET}: ${colorPnl(finalResult.totalPnl)}`);
+        logger.log(`  ${CYAN}Avg PnL${RESET}: ${colorPnl(finalResult.avgPnl)}`);
+        logger.log(`  Sharpe: ${finalResult.sharpeRatio.toFixed(3)} | Sortino: ${finalResult.sortinoRatio.toFixed(3)}`);
+        logger.log(`  Win Rate: ${finalResult.winRate.toFixed(1)}%`);
+
+        // Write trade audit for dashboard inspection
+        logger.writeSimulatedTradeAudits(strategy.name, finalTrades, outputDir);
+        logger.log(`\nTrade audit written to: ${outputDir}/tradeAudit.log`);
+
+        // Save to YAML in GeneticYamlConfig format (compatible with MSPEQsYamls)
+        const yamlPath = `${outputDir}/params.yaml`;
         const yamlOutput = {
-            strategy: strategy.name,
-            market: config.targetedMarket,
-            coin: config.coinType,
-            days: config.lookbackDays,
-            optimizer: config.optimizerOverride,
-            fitness: result.fitness,
-            iterations: result.iterations,
+            schemaVersion: 1,
+            botStyle: strategy.name,
+            targetedMarket: config.targetedMarket,
+            optimization: {
+                bestPnl: finalResult.totalPnl,
+                avgPnl: finalResult.avgPnl,
+                generations: result.iterations,
+                converged: true,
+                convergenceReason: `${config.optimizerOverride} optimization complete`,
+                timestamp: new Date().toISOString(),
+                lookbackDays: config.lookbackDays,
+                populationSize: config.populationSize,
+                maxGenerations: config.maxGenerations,
+                // Extended metrics
+                fitnessMode: config.fitnessMode ?? 'sortino',
+                optimizationFitness: result.fitness,
+                sharpeRatio: finalResult.sharpeRatio,
+                sortinoRatio: finalResult.sortinoRatio,
+                calmarRatio: finalResult.calmarRatio,
+                winRate: finalResult.winRate,
+                totalTrades: finalResult.totalTrades,
+            },
             params: result.params,
+            runtime: {
+                enabled: false,  // Set to true after review
+                prodMode: false,
+                hourlyDollarLimit: 50,
+            },
         };
         fs.writeFileSync(yamlPath, YAML.stringify(yamlOutput));
-        logger.log(`\nParameters saved to: ${yamlPath}`);
+        logger.log(`Parameters saved to: ${yamlPath}`);
+
+        // Copy main log to output directory
+        logger.copyLogsToDirectory(outputDir);
+
+        logger.log('\n✓ Single-stage optimization complete');
+        logger.log(`\nAll results saved to: ${outputDir}`);
 
         return;
     }
@@ -679,30 +731,80 @@ async function runIterativeOptimization(config: IterativeOptimizationConfig): Pr
         logger.log(`  ${key}: ${typeof value === 'number' ? value.toFixed(4) : value}`);
     }
 
-    // Save combined params to YAML
+    // Create output directory for results
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const yamlPath = `./logs/simulator/iterative-${strategy.name.toLowerCase()}-${timestamp}.yaml`;
+    const outputDir = `./logs/simulator/iterative-${strategy.name.toLowerCase()}-${timestamp}`;
+    if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+    }
+
+    // Run final simulation with best params to generate trade audit
+    logger.log('\n--- Running Final Simulation with Best Params ---');
+    const { result: finalResult, trades: finalTrades } = await simulator.runSingleSimulation(
+        strategy.name,
+        strategy.factory,
+        result.bestParams,
+        { shouldWriteLogs: true, logDirectory: outputDir }
+    );
+
+    logger.log(`Final Simulation Results:`);
+    logger.log(`  Total Trades: ${finalResult.totalTrades}`);
+    logger.log(`  ${CYAN}Total PnL${RESET}: ${colorPnl(finalResult.totalPnl)}`);
+    logger.log(`  ${CYAN}Avg PnL${RESET}: ${colorPnl(finalResult.avgPnl)}`);
+    logger.log(`  Sharpe: ${finalResult.sharpeRatio.toFixed(3)} | Sortino: ${finalResult.sortinoRatio.toFixed(3)}`);
+    logger.log(`  Win Rate: ${finalResult.winRate.toFixed(1)}%`);
+
+    // Write trade audit for dashboard inspection
+    logger.writeSimulatedTradeAudits(strategy.name, finalTrades, outputDir);
+    logger.log(`\nTrade audit written to: ${outputDir}/tradeAudit.log`);
+
+    // Save combined params to YAML in GeneticYamlConfig format (compatible with MSPEQsYamls)
+    const yamlPath = `${outputDir}/params.yaml`;
     const yamlOutput = {
-        strategy: strategy.name,
-        market: config.targetedMarket,
-        coin: config.coinType,
-        days: config.lookbackDays,
-        iterativeRefinement: {
-            stage1Optimizer: config.stage1Optimizer,
-            stage2Optimizer: config.stage2Optimizer,
-            outerIterations: result.outerIterations,
+        schemaVersion: 1,
+        botStyle: strategy.name,
+        targetedMarket: config.targetedMarket,
+        optimization: {
+            bestPnl: finalResult.totalPnl,
+            avgPnl: finalResult.avgPnl,
+            generations: result.outerIterations,
             converged: result.converged,
             convergenceReason: result.convergenceReason,
-            iterationHistory: result.iterationHistory,
+            timestamp: new Date().toISOString(),
+            lookbackDays: config.lookbackDays,
+            populationSize: config.populationSize,
+            maxGenerations: config.maxGenerations,
+            // Extended metrics
+            fitnessMode: config.fitnessMode ?? 'sortino',
+            optimizationFitness: result.bestFitness,
+            sharpeRatio: finalResult.sharpeRatio,
+            sortinoRatio: finalResult.sortinoRatio,
+            calmarRatio: finalResult.calmarRatio,
+            winRate: finalResult.winRate,
+            totalTrades: finalResult.totalTrades,
+            // Iterative refinement details
+            iterativeRefinement: {
+                optimizer: config.optimizerOverride ?? `stage1:${config.stage1Optimizer}, stage2:${config.stage2Optimizer}`,
+                outerIterations: result.outerIterations,
+                iterationHistory: result.iterationHistory,
+            },
         },
-        bestFitness: result.bestFitness,
         params: result.bestParams,
+        runtime: {
+            enabled: false,  // Set to true after review
+            prodMode: false,
+            hourlyDollarLimit: 50,
+        },
     };
 
     fs.writeFileSync(yamlPath, YAML.stringify(yamlOutput));
-    logger.log(`\nParameters saved to: ${yamlPath}`);
-    logger.log('\n✓ Iterative refinement optimization complete\n');
-    logger.log(`Results saved to: ${logger.getLogFilePath()}`);
+    logger.log(`Parameters saved to: ${yamlPath}`);
+
+    // Copy main log to output directory
+    logger.copyLogsToDirectory(outputDir);
+
+    logger.log('\n✓ Iterative refinement optimization complete');
+    logger.log(`\nAll results saved to: ${outputDir}`);
 }
 
 /**

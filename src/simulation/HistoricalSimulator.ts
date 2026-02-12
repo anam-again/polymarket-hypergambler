@@ -1,4 +1,5 @@
 import { Side } from '@polymarket/clob-client';
+import { availableParallelism } from 'os';
 import { SimulationClock } from './SimulationClock.js';
 import { MockCDMarketData } from './MockCDMarketData.js';
 import { MockMarketInfo } from './MockMarketInfo.js';
@@ -6,6 +7,9 @@ import { GeneticOptimizer, CoinType } from './GeneticOptimizer.js';
 import type { GeneticConfig, ParameterBounds, OptimizationResult, ValidationResult, StabilityResult } from './GeneticOptimizer.js';
 import { SimulatorLogger } from './SimulatorLogger.js';
 import { TargetedMarket } from '../types/interfaces.js';
+
+// Default concurrency for parallel simulation
+const DEFAULT_CONCURRENCY = Math.max(1, availableParallelism() - 1);
 
 // Re-export CoinType and TargetedMarket for convenience
 export { CoinType } from './GeneticOptimizer.js';
@@ -36,6 +40,8 @@ export interface SimulationConfig {
     targetedMarket: TargetedMarket; // Market to simulate
     // Anti-overfitting validation settings
     validationConfig?: ValidationConfig;
+    // Parallelization settings
+    concurrentSimulations?: number; // Number of parallel simulations (default: CPU cores - 1)
 }
 
 export interface ValidationConfig {
@@ -221,59 +227,84 @@ export class HistoricalSimulator {
         params: Record<string, unknown>,
         trades: SimulatedTrade[]
     ): SimulationResult {
-        const matchedTrades = trades.filter(t => t.status === 'MATCHED');
-        const expiredTrades = trades.filter(t => t.status === 'EXPIRED');
-        const completedTrades = [...matchedTrades, ...expiredTrades];
-
-        // Filter out trades with invalid/extreme PnL values
-        // Reasonable PnL bounds: max loss per trade is ~$1000, max gain is similar
+        // Single-pass calculation to avoid multiple array iterations
         const MAX_REASONABLE_PNL = 10000;
-        const pnls = completedTrades
-            .map(t => t.pnl ?? 0)
-            .filter(pnl => !isNaN(pnl) && isFinite(pnl) && Math.abs(pnl) < MAX_REASONABLE_PNL);
-        const totalPnl = pnls.reduce((sum, pnl) => sum + pnl, 0);
-        const winningTrades = pnls.filter(pnl => pnl > 0);
 
-        // Calculate max drawdown
+        let matchedCount = 0;
+        let expiredCount = 0;
+        let totalPnl = 0;
+        let wins = 0;
+        let validPnlCount = 0;
         let peak = 0;
         let maxDrawdown = 0;
         let cumulative = 0;
-        for (const pnl of pnls) {
+        let sumSquaredDev = 0;
+        let sumSquaredNeg = 0;
+        let negCount = 0;
+
+        // First pass: calculate totals and collect valid PnLs for variance calculation
+        const validPnls: number[] = [];
+
+        for (const trade of trades) {
+            if (trade.status === 'MATCHED') {
+                matchedCount++;
+            } else if (trade.status === 'EXPIRED') {
+                expiredCount++;
+            } else {
+                continue; // Skip non-completed trades
+            }
+
+            const pnl = trade.pnl ?? 0;
+            if (isNaN(pnl) || !isFinite(pnl) || Math.abs(pnl) >= MAX_REASONABLE_PNL) {
+                continue;
+            }
+
+            validPnls.push(pnl);
+            totalPnl += pnl;
+            validPnlCount++;
+
+            // Drawdown calculation
             cumulative += pnl;
             peak = Math.max(peak, cumulative);
             maxDrawdown = Math.min(maxDrawdown, cumulative - peak);
+
+            if (pnl > 0) {
+                wins++;
+            } else if (pnl < 0) {
+                sumSquaredNeg += pnl * pnl;
+                negCount++;
+            }
         }
 
-        // Calculate Sharpe ratio (simplified, assuming risk-free rate = 0)
-        const avgReturn = pnls.length > 0 ? totalPnl / pnls.length : 0;
-        const variance = pnls.length > 1
-            ? pnls.reduce((sum, pnl) => sum + Math.pow(pnl - avgReturn, 2), 0) / (pnls.length - 1)
-            : 0;
+        const completedCount = matchedCount + expiredCount;
+        const avgReturn = validPnlCount > 0 ? totalPnl / validPnlCount : 0;
+
+        // Second pass for variance (need mean first)
+        for (const pnl of validPnls) {
+            sumSquaredDev += (pnl - avgReturn) ** 2;
+        }
+
+        const variance = validPnlCount > 1 ? sumSquaredDev / (validPnlCount - 1) : 0;
         const stdDev = Math.sqrt(variance);
         const sharpeRatio = stdDev > 0 ? avgReturn / stdDev : 0;
 
-        // Calculate Sortino ratio (only penalizes downside deviation)
-        // Downside deviation = sqrt(mean of squared negative returns)
-        const negativeReturns = pnls.filter(pnl => pnl < 0);
-        const downsideVariance = negativeReturns.length > 0
-            ? negativeReturns.reduce((sum, pnl) => sum + Math.pow(pnl, 2), 0) / negativeReturns.length
-            : 0;
+        // Sortino ratio (downside deviation)
+        const downsideVariance = negCount > 0 ? sumSquaredNeg / negCount : 0;
         const downsideDeviation = Math.sqrt(downsideVariance);
         const sortinoRatio = downsideDeviation > 0 ? avgReturn / downsideDeviation : (avgReturn > 0 ? 10 : 0);
 
-        // Calculate Calmar ratio (return per unit of max drawdown)
-        // Higher is better - means more return for the pain endured
+        // Calmar ratio
         const calmarRatio = maxDrawdown < 0 ? totalPnl / Math.abs(maxDrawdown) : (totalPnl > 0 ? 10 : 0);
 
         return {
             botName,
             params,
             totalTrades: trades.length,
-            matchedTrades: matchedTrades.length,
-            expiredTrades: expiredTrades.length,
+            matchedTrades: matchedCount,
+            expiredTrades: expiredCount,
             totalPnl,
-            winRate: completedTrades.length > 0 ? (winningTrades.length / completedTrades.length) * 100 : 0,
-            avgPnl: completedTrades.length > 0 ? totalPnl / completedTrades.length : 0,
+            winRate: completedCount > 0 ? (wins / completedCount) * 100 : 0,
+            avgPnl: completedCount > 0 ? totalPnl / completedCount : 0,
             maxDrawdown,
             sharpeRatio,
             sortinoRatio,
@@ -323,72 +354,79 @@ export class HistoricalSimulator {
         const topPerformers: Array<{ params: Record<string, number>; fitness: number }> = [];
 
         // Evolution loop
+        const concurrency = this.config.concurrentSimulations ?? DEFAULT_CONCURRENCY;
+        this.logger.log(`Running with concurrency: ${concurrency}`);
+
         while (true) {
             const generation = optimizer.getGeneration();
             this.logger.log(`\n--- Generation ${generation} ---`);
 
-            // Run simulations for all individuals in population
+            // Run simulations for all individuals in population (in parallel batches)
             const results: SimulationResult[] = [];
+            const bootstrapRuns = optimizer.getBootstrapRuns();
 
-            // Track running totals for average calculation
-            let runningPnlSum = 0;
-
-            for (let i = 0; i < paramSets.length; i++) {
-                const params = paramSets[i];
+            // Process in parallel batches
+            for (let i = 0; i < paramSets.length; i += concurrency) {
+                const batch = paramSets.slice(i, Math.min(i + concurrency, paramSets.length));
 
                 // Update status bar
-                const currentAvg = i > 0 ? runningPnlSum / i : 0;
+                const completedCount = results.length;
+                const runningPnlSum = results.reduce((sum, r) => sum + r.totalPnl, 0);
+                const currentAvg = completedCount > 0 ? runningPnlSum / completedCount : 0;
                 this.logger.updateSimulationStatus(
                     generation,
-                    i + 1,
+                    completedCount + batch.length,
                     paramSets.length,
                     bestFitness === -Infinity ? 0 : bestFitness,
                     currentAvg
                 );
 
-                // Bootstrap resampling: run multiple times and average if configured
-                const bootstrapRuns = optimizer.getBootstrapRuns();
-                let result: SimulationResult;
-                let trades: SimulatedTrade[];
+                // Run batch in parallel
+                const batchPromises = batch.map(async (params) => {
+                    if (bootstrapRuns > 1) {
+                        // Run multiple simulations and average the results
+                        const runResults: SimulationResult[] = [];
+                        let lastTrades: SimulatedTrade[] = [];
 
-                if (bootstrapRuns > 1) {
-                    // Run multiple simulations and average the results
-                    const runResults: SimulationResult[] = [];
-                    let lastTrades: SimulatedTrade[] = [];
+                        for (let run = 0; run < bootstrapRuns; run++) {
+                            const runOutput = await this.runSingleBotSimulationWithTrades(botName, botFactory, params);
+                            runResults.push(runOutput.result);
+                            lastTrades = runOutput.trades;
+                        }
 
-                    for (let run = 0; run < bootstrapRuns; run++) {
-                        const runOutput = await this.runSingleBotSimulationWithTrades(botName, botFactory, params);
-                        runResults.push(runOutput.result);
-                        lastTrades = runOutput.trades; // Keep last run's trades for audit
+                        return {
+                            result: this.averageSimulationResults(runResults, botName, params),
+                            trades: lastTrades,
+                            params
+                        };
+                    } else {
+                        const output = await this.runSingleBotSimulationWithTrades(botName, botFactory, params);
+                        return { result: output.result, trades: output.trades, params };
+                    }
+                });
+
+                const batchResults = await Promise.all(batchPromises);
+
+                // Process batch results
+                for (const { result, trades, params } of batchResults) {
+                    results.push(result);
+
+                    // Track best performer for audit (only keep trades for the best one)
+                    if (result.totalPnl > bestFitness) {
+                        bestFitness = result.totalPnl;
+                        bestTrades = trades;
                     }
 
-                    // Average the results across bootstrap runs
-                    result = this.averageSimulationResults(runResults, botName, params);
-                    trades = lastTrades;
-                } else {
-                    const output = await this.runSingleBotSimulationWithTrades(botName, botFactory, params);
-                    result = output.result;
-                    trades = output.trades;
-                }
-
-                results.push(result);
-
-                // Update running sum for average
-                runningPnlSum += result.totalPnl;
-
-                // Track best performer for audit (only keep trades for the best one)
-                if (result.totalPnl > bestFitness) {
-                    bestFitness = result.totalPnl;
-                    bestTrades = trades;
-                }
-                // Note: trades from non-best performers are discarded to save memory
-
-                // Track top N performers for re-run with logging (only params, not trades)
-                if (auditCount > 0) {
-                    topPerformers.push({ params: { ...params }, fitness: result.totalPnl });
-                    topPerformers.sort((a, b) => b.fitness - a.fitness);
-                    if (topPerformers.length > auditCount) {
-                        topPerformers.pop();
+                    // Track top N performers for re-run with logging (only params, not trades)
+                    if (auditCount > 0) {
+                        // Binary insertion for O(n) instead of O(n log n) per insert
+                        const insertIndex = topPerformers.findIndex(p => p.fitness < result.totalPnl);
+                        if (insertIndex !== -1) {
+                            topPerformers.splice(insertIndex, 0, { params: { ...params }, fitness: result.totalPnl });
+                            if (topPerformers.length > auditCount) topPerformers.pop();
+                        } else if (topPerformers.length < auditCount) {
+                            topPerformers.push({ params: { ...params }, fitness: result.totalPnl });
+                        }
                     }
                 }
             }

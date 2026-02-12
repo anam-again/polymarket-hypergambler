@@ -57,6 +57,16 @@ export class MockMarketInfo implements IMarketInfo {
         },
     };
 
+    // Static data cache to avoid redundant file I/O across simulation runs
+    private static dataCache: Map<CoinType, {
+        hourlyData: UpDownPriceEntry[],
+        quarterlyData: UpDownPriceEntry[],
+        hourlyByPeriod: Map<string, UpDownPriceEntry[]>,
+        quarterlyByPeriod: Map<string, UpDownPriceEntry[]>,
+        hourWinners: Map<string, 'UP' | 'DOWN'>,
+        quarterWinners: Map<string, 'UP' | 'DOWN'>
+    }> = new Map();
+
     private clock: SimulationClock;
     private coinType: CoinType;
     private hourlyData: UpDownPriceEntry[] = [];
@@ -77,7 +87,27 @@ export class MockMarketInfo implements IMarketInfo {
     constructor(clock: SimulationClock, coinType: CoinType) {
         this.clock = clock;
         this.coinType = coinType;
-        this.loadData();
+
+        // Check static cache first to avoid redundant file I/O
+        const cached = MockMarketInfo.dataCache.get(coinType);
+        if (cached) {
+            this.hourlyData = cached.hourlyData;
+            this.quarterlyData = cached.quarterlyData;
+            this.hourlyByPeriod = cached.hourlyByPeriod;
+            this.quarterlyByPeriod = cached.quarterlyByPeriod;
+            this.hourWinners = cached.hourWinners;
+            this.quarterWinners = cached.quarterWinners;
+        } else {
+            this.loadData();
+            MockMarketInfo.dataCache.set(coinType, {
+                hourlyData: this.hourlyData,
+                quarterlyData: this.quarterlyData,
+                hourlyByPeriod: this.hourlyByPeriod,
+                quarterlyByPeriod: this.quarterlyByPeriod,
+                hourWinners: this.hourWinners,
+                quarterWinners: this.quarterWinners
+            });
+        }
     }
 
     // -------------------------------------------------------------------------

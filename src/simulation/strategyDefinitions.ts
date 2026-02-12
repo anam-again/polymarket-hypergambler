@@ -38,18 +38,28 @@ import { generateMSPEQBounds, STANDARD_NORMALIZATIONS } from '../utils/MultiSign
 
 const SIM_LOG_DIR = './logs/simulator/bots';
 
-// Signal names for MSPEQ: candleSize, volatility, momentum (3 signals per MSPEQ)
-const MSPEQ_SIGNAL_NAMES = [
+/**
+ * Active signals used for MSPEQ optimization.
+ * This is a subset of all available SIGNAL_NAMES from MultiSignalPEQ.
+ * Using fewer signals = fewer parameters = faster optimization.
+ * Add more signals here as needed, but be aware of parameter explosion.
+ *
+ * Available signals (from SIGNAL_NAMES):
+ *   candleSize, timeLeft, volatility, momentum, priceImbalance,
+ *   rangePosition, trendStrength, volatilityTrend, hourOfDay
+ */
+const ACTIVE_MSPEQ_SIGNALS: readonly string[] = [
     'candleSize',
     'timeLeft',
     'volatility',
     'momentum',
+    // Uncomment to enable more signals (increases parameter count):
     // 'priceImbalance',
     // 'rangePosition',
     // 'trendStrength',
     // 'volatilityTrend',
     // 'hourOfDay',
-] as const;
+];
 
 // ============================================================================
 // Base Parameter Names (frozen in Stage 2 optimization)
@@ -399,12 +409,12 @@ const firstCandleMSPEQBounds: ParameterBounds = {
     candleSizeReference: { min: 0, max: 1000},
     baseBuyPrice: { min: 0.10, max: 0.90, step: 0.01 },
     minProfitMargin: { min: 0.01, max: 0.50, step: 0.01 },
-    ...generateMSPEQBounds('buyPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
-    ...generateMSPEQBounds('sellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('earlySellTime', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
-    ...generateMSPEQBounds('earlySellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('breakoutBuffer', [...MSPEQ_SIGNAL_NAMES], { min: 0.5, max: 2 }, { min: -0.5, max: 0.5, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('pullbackBuffer', [...MSPEQ_SIGNAL_NAMES], { min: 0.5, max: 2 }, { min: -0.5, max: 0.5, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
+    ...generateMSPEQBounds('sellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('earlySellTime', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
+    ...generateMSPEQBounds('earlySellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('breakoutBuffer', [...ACTIVE_MSPEQ_SIGNALS], { min: 0.5, max: 2 }, { min: -0.5, max: 0.5, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('pullbackBuffer', [...ACTIVE_MSPEQ_SIGNALS], { min: 0.5, max: 2 }, { min: -0.5, max: 0.5, c0Min: 0.8, c0Max: 1.2 }),
 };
 
 const quarterlyFirstCandleMSPEQBounds: ParameterBounds = {
@@ -416,12 +426,12 @@ const quarterlyFirstCandleMSPEQBounds: ParameterBounds = {
     candleSizeReference: { min: 0, max: 2000, step: 100 },
     baseBuyPrice: { min: 0.30, max: 0.70, step: 0.02 },
     minProfitMargin: { min: 0.01, max: 0.50, step: 0.01 },
-    ...generateMSPEQBounds('buyPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
-    ...generateMSPEQBounds('sellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('earlySellTime', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
-    ...generateMSPEQBounds('earlySellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('breakoutBuffer', [...MSPEQ_SIGNAL_NAMES], { min: 0.5, max: 2 }, { min: -0.5, max: 0.5, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('pullbackBuffer', [...MSPEQ_SIGNAL_NAMES], { min: 0.5, max: 2 }, { min: -0.5, max: 0.5, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
+    ...generateMSPEQBounds('sellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('earlySellTime', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
+    ...generateMSPEQBounds('earlySellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('breakoutBuffer', [...ACTIVE_MSPEQ_SIGNALS], { min: 0.5, max: 2 }, { min: -0.5, max: 0.5, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('pullbackBuffer', [...ACTIVE_MSPEQ_SIGNALS], { min: 0.5, max: 2 }, { min: -0.5, max: 0.5, c0Min: 0.8, c0Max: 1.2 }),
 };
 
 
@@ -436,12 +446,12 @@ const earlyBuyerMSPEQBounds: ParameterBounds = {
     minProfitMargin: { min: 0.01, max: 0.50, step: 0.01 },
     directionThreshold: { min: 0.3, max: 0.7, step: 0.02 },
     // MSPEQ coefficients
-    ...generateMSPEQBounds('buyPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
-    ...generateMSPEQBounds('sellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('cutoffMinute', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('btcDirection', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.4, c0Max: 0.6 }),
-    ...generateMSPEQBounds('earlySellTime', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
-    ...generateMSPEQBounds('earlySellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
+    ...generateMSPEQBounds('sellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('cutoffMinute', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('btcDirection', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.4, c0Max: 0.6 }),
+    ...generateMSPEQBounds('earlySellTime', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
+    ...generateMSPEQBounds('earlySellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
 };
 
 const quarterlyEarlyBuyerMSPEQBounds: ParameterBounds = {
@@ -454,12 +464,12 @@ const quarterlyEarlyBuyerMSPEQBounds: ParameterBounds = {
     minProfitMargin: { min: 0.05, max: 0.25, step: 0.02 },
     directionThreshold: { min: 0.3, max: 0.7, step: 0.02 },
     // MSPEQ coefficients
-    ...generateMSPEQBounds('buyPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
-    ...generateMSPEQBounds('sellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('cutoffMinute', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('btcDirection', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.4, c0Max: 0.6 }),
-    ...generateMSPEQBounds('earlySellTime', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
-    ...generateMSPEQBounds('earlySellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
+    ...generateMSPEQBounds('sellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('cutoffMinute', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('btcDirection', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.4, c0Max: 0.6 }),
+    ...generateMSPEQBounds('earlySellTime', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
+    ...generateMSPEQBounds('earlySellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
 };
 
 // MarketMakerMSPEQ Full Bounds (base params + MSPEQ coefficients)
@@ -479,12 +489,12 @@ const marketMakerMSPEQBounds: ParameterBounds = {
     baseCutoffMinute: { min: 5, max: 50, step: 5 },
     candleSizeReference: { min: 0, max: 500, step: 50 },
     // MSPEQ coefficients
-    ...generateMSPEQBounds('profitMargin', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('spreadDistance', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('stopLossAmount', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('cutoffMinute', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('minPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('maxPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('profitMargin', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('spreadDistance', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('stopLossAmount', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('cutoffMinute', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('minPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('maxPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
 };
 
 const quarterlyMarketMakerMSPEQBounds: ParameterBounds = {
@@ -503,12 +513,12 @@ const quarterlyMarketMakerMSPEQBounds: ParameterBounds = {
     baseCutoffMinute: { min: 5, max: 12, step: 1 },
     candleSizeReference: { min: 100, max: 500, step: 50 },
     // MSPEQ coefficients
-    ...generateMSPEQBounds('profitMargin', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('spreadDistance', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('stopLossAmount', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('cutoffMinute', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('minPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('maxPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('profitMargin', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('spreadDistance', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('stopLossAmount', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('cutoffMinute', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('minPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('maxPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
 };
 
 // NCandleMSPEQ Full Bounds (base params + MSPEQ coefficients)
@@ -528,11 +538,11 @@ const nCandleMSPEQBounds: ParameterBounds = {
     maxTradesPerHour: { min: 1, max: 5, step: 1 },
     candleSizeReference: { min: 100, max: 500, step: 50 },
     // MSPEQ coefficients
-    ...generateMSPEQBounds('buyPriceBuffer', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('minProfitMargin', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('stoplossTimeout', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('sellTimeout', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('stoplossFailureTimeout', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('buyPriceBuffer', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('minProfitMargin', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('stoplossTimeout', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('sellTimeout', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('stoplossFailureTimeout', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
 };
 
 const quarterlyNCandleMSPEQBounds: ParameterBounds = {
@@ -551,11 +561,11 @@ const quarterlyNCandleMSPEQBounds: ParameterBounds = {
     maxTradesPerHour: { min: 1, max: 5, step: 1 },
     candleSizeReference: { min: 100, max: 500, step: 50 },
     // MSPEQ coefficients
-    ...generateMSPEQBounds('buyPriceBuffer', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('minProfitMargin', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('stoplossTimeout', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('sellTimeout', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('stoplossFailureTimeout', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('buyPriceBuffer', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('minProfitMargin', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('stoplossTimeout', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('sellTimeout', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('stoplossFailureTimeout', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
 };
 
 // CrossPeriodMomentumMSPEQ Full Bounds (base params + MSPEQ coefficients)
@@ -571,14 +581,14 @@ const crossPeriodMomentumMSPEQBounds: ParameterBounds = {
     baseMomentumThreshold: { min: 0.05, max: 0.30, step: 0.05 },
     baseMinWinStreak: { min: 1, max: 4, step: 1 },
     // MSPEQ coefficients
-    ...generateMSPEQBounds('buyPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
-    ...generateMSPEQBounds('sellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('cutoffMinute', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('btcDirection', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.4, c0Max: 0.6 }),
-    ...generateMSPEQBounds('momentumThreshold', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('winStreakThreshold', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('earlySellTime', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
-    ...generateMSPEQBounds('earlySellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
+    ...generateMSPEQBounds('sellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('cutoffMinute', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('btcDirection', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.4, c0Max: 0.6 }),
+    ...generateMSPEQBounds('momentumThreshold', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('winStreakThreshold', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('earlySellTime', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
+    ...generateMSPEQBounds('earlySellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
 };
 
 const quarterlyCrossPeriodMomentumMSPEQBounds: ParameterBounds = {
@@ -593,14 +603,14 @@ const quarterlyCrossPeriodMomentumMSPEQBounds: ParameterBounds = {
     baseMomentumThreshold: { min: 0.05, max: 0.30, step: 0.05 },
     baseMinWinStreak: { min: 1, max: 4, step: 1 },
     // MSPEQ coefficients
-    ...generateMSPEQBounds('buyPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
-    ...generateMSPEQBounds('sellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('cutoffMinute', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('btcDirection', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.4, c0Max: 0.6 }),
-    ...generateMSPEQBounds('momentumThreshold', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('winStreakThreshold', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('earlySellTime', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
-    ...generateMSPEQBounds('earlySellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
+    ...generateMSPEQBounds('sellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('cutoffMinute', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('btcDirection', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.4, c0Max: 0.6 }),
+    ...generateMSPEQBounds('momentumThreshold', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('winStreakThreshold', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('earlySellTime', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
+    ...generateMSPEQBounds('earlySellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
 };
 
 // ============================================================================
@@ -608,95 +618,95 @@ const quarterlyCrossPeriodMomentumMSPEQBounds: ParameterBounds = {
 // ============================================================================
 
 const firstCandleMSPEQOnlyBounds: ParameterBounds = {
-    ...generateMSPEQBounds('buyPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
-    ...generateMSPEQBounds('sellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('earlySellTime', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
-    ...generateMSPEQBounds('earlySellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('breakoutBuffer', [...MSPEQ_SIGNAL_NAMES], { min: 0.5, max: 2 }, { min: -0.5, max: 0.5, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('pullbackBuffer', [...MSPEQ_SIGNAL_NAMES], { min: 0.5, max: 2 }, { min: -0.5, max: 0.5, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
+    ...generateMSPEQBounds('sellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('earlySellTime', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
+    ...generateMSPEQBounds('earlySellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('breakoutBuffer', [...ACTIVE_MSPEQ_SIGNALS], { min: 0.5, max: 2 }, { min: -0.5, max: 0.5, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('pullbackBuffer', [...ACTIVE_MSPEQ_SIGNALS], { min: 0.5, max: 2 }, { min: -0.5, max: 0.5, c0Min: 0.8, c0Max: 1.2 }),
 };
 
 const quarterlyFirstCandleMSPEQOnlyBounds: ParameterBounds = {
-    ...generateMSPEQBounds('buyPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
-    ...generateMSPEQBounds('sellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('earlySellTime', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
-    ...generateMSPEQBounds('earlySellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('breakoutBuffer', [...MSPEQ_SIGNAL_NAMES], { min: 0.5, max: 2 }, { min: -0.5, max: 0.5, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('pullbackBuffer', [...MSPEQ_SIGNAL_NAMES], { min: 0.5, max: 2 }, { min: -0.5, max: 0.5, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
+    ...generateMSPEQBounds('sellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('earlySellTime', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
+    ...generateMSPEQBounds('earlySellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('breakoutBuffer', [...ACTIVE_MSPEQ_SIGNALS], { min: 0.5, max: 2 }, { min: -0.5, max: 0.5, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('pullbackBuffer', [...ACTIVE_MSPEQ_SIGNALS], { min: 0.5, max: 2 }, { min: -0.5, max: 0.5, c0Min: 0.8, c0Max: 1.2 }),
 };
 
 const earlyBuyerMSPEQOnlyBounds: ParameterBounds = {
-    ...generateMSPEQBounds('buyPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
-    ...generateMSPEQBounds('sellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('cutoffMinute', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('btcDirection', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.4, c0Max: 0.6 }),
-    ...generateMSPEQBounds('earlySellTime', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
-    ...generateMSPEQBounds('earlySellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
+    ...generateMSPEQBounds('sellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('cutoffMinute', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('btcDirection', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.4, c0Max: 0.6 }),
+    ...generateMSPEQBounds('earlySellTime', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
+    ...generateMSPEQBounds('earlySellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
 };
 
 const quarterlyEarlyBuyerMSPEQOnlyBounds: ParameterBounds = {
-    ...generateMSPEQBounds('buyPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
-    ...generateMSPEQBounds('sellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('cutoffMinute', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('btcDirection', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.4, c0Max: 0.6 }),
-    ...generateMSPEQBounds('earlySellTime', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
-    ...generateMSPEQBounds('earlySellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
+    ...generateMSPEQBounds('sellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('cutoffMinute', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('btcDirection', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.4, c0Max: 0.6 }),
+    ...generateMSPEQBounds('earlySellTime', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
+    ...generateMSPEQBounds('earlySellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
 };
 
 const marketMakerMSPEQOnlyBounds: ParameterBounds = {
-    ...generateMSPEQBounds('profitMargin', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('spreadDistance', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('stopLossAmount', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('cutoffMinute', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('minPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('maxPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('profitMargin', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('spreadDistance', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('stopLossAmount', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('cutoffMinute', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('minPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('maxPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
 };
 
 const quarterlyMarketMakerMSPEQOnlyBounds: ParameterBounds = {
-    ...generateMSPEQBounds('profitMargin', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('spreadDistance', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('stopLossAmount', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('cutoffMinute', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('minPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('maxPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('profitMargin', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('spreadDistance', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('stopLossAmount', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('cutoffMinute', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('minPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('maxPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
 };
 
 const nCandleMSPEQOnlyBounds: ParameterBounds = {
-    ...generateMSPEQBounds('buyPriceBuffer', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('minProfitMargin', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('stoplossTimeout', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('sellTimeout', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('stoplossFailureTimeout', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('buyPriceBuffer', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('minProfitMargin', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('stoplossTimeout', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('sellTimeout', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('stoplossFailureTimeout', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
 };
 
 const quarterlyNCandleMSPEQOnlyBounds: ParameterBounds = {
-    ...generateMSPEQBounds('buyPriceBuffer', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('minProfitMargin', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('stoplossTimeout', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('sellTimeout', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('stoplossFailureTimeout', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('buyPriceBuffer', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('minProfitMargin', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('stoplossTimeout', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('sellTimeout', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('stoplossFailureTimeout', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
 };
 
 const crossPeriodMomentumMSPEQOnlyBounds: ParameterBounds = {
-    ...generateMSPEQBounds('buyPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
-    ...generateMSPEQBounds('sellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('cutoffMinute', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('btcDirection', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.4, c0Max: 0.6 }),
-    ...generateMSPEQBounds('momentumThreshold', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('winStreakThreshold', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('earlySellTime', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
-    ...generateMSPEQBounds('earlySellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
+    ...generateMSPEQBounds('sellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('cutoffMinute', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('btcDirection', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.4, c0Max: 0.6 }),
+    ...generateMSPEQBounds('momentumThreshold', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('winStreakThreshold', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('earlySellTime', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
+    ...generateMSPEQBounds('earlySellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
 };
 
 const quarterlyCrossPeriodMomentumMSPEQOnlyBounds: ParameterBounds = {
-    ...generateMSPEQBounds('buyPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
-    ...generateMSPEQBounds('sellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('cutoffMinute', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('btcDirection', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.4, c0Max: 0.6 }),
-    ...generateMSPEQBounds('momentumThreshold', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('winStreakThreshold', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
-    ...generateMSPEQBounds('earlySellTime', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
-    ...generateMSPEQBounds('earlySellPrice', [...MSPEQ_SIGNAL_NAMES], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
+    ...generateMSPEQBounds('sellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('cutoffMinute', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('btcDirection', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.4, c0Max: 0.6 }),
+    ...generateMSPEQBounds('momentumThreshold', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('winStreakThreshold', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
+    ...generateMSPEQBounds('earlySellTime', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
+    ...generateMSPEQBounds('earlySellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
 };
 
 // ============================================================================
@@ -1343,12 +1353,12 @@ function createFirstCandleMSPEQBot(botParams: BotParams): SimulatedBot {
         candleSizeReference: params.candleSizeReference as number ?? 1000,
         baseBuyPrice: params.baseBuyPrice as number ?? 0.50,
         minProfitMargin: params.minProfitMargin as number ?? 0.10,
-        targetBuyPriceMSPEQ: buildMSPEQConfig('buyPrice', params, MSPEQ_SIGNAL_NAMES),
-        targetSellPriceMSPEQ: buildMSPEQConfig('sellPrice', params, MSPEQ_SIGNAL_NAMES),
-        earlySellTimeMSPEQ: buildMSPEQConfig('earlySellTime', params, MSPEQ_SIGNAL_NAMES),
-        earlySellPriceMSPEQ: buildMSPEQConfig('earlySellPrice', params, MSPEQ_SIGNAL_NAMES),
-        breakoutBufferMSPEQ: buildMSPEQConfig('breakoutBuffer', params, MSPEQ_SIGNAL_NAMES),
-        pullbackBufferMSPEQ: buildMSPEQConfig('pullbackBuffer', params, MSPEQ_SIGNAL_NAMES),
+        targetBuyPriceMSPEQ: buildMSPEQConfig('buyPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        targetSellPriceMSPEQ: buildMSPEQConfig('sellPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        earlySellTimeMSPEQ: buildMSPEQConfig('earlySellTime', params, ACTIVE_MSPEQ_SIGNALS),
+        earlySellPriceMSPEQ: buildMSPEQConfig('earlySellPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        breakoutBufferMSPEQ: buildMSPEQConfig('breakoutBuffer', params, ACTIVE_MSPEQ_SIGNALS),
+        pullbackBufferMSPEQ: buildMSPEQConfig('pullbackBuffer', params, ACTIVE_MSPEQ_SIGNALS),
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
@@ -1376,12 +1386,12 @@ function createQuarterlyFirstCandleMSPEQBot(botParams: BotParams): SimulatedBot 
         candleSizeReference: params.candleSizeReference as number ?? 1000,
         baseBuyPrice: params.baseBuyPrice as number ?? 0.50,
         minProfitMargin: params.minProfitMargin as number ?? 0.10,
-        targetBuyPriceMSPEQ: buildMSPEQConfig('buyPrice', params, MSPEQ_SIGNAL_NAMES),
-        targetSellPriceMSPEQ: buildMSPEQConfig('sellPrice', params, MSPEQ_SIGNAL_NAMES),
-        earlySellTimeMSPEQ: buildMSPEQConfig('earlySellTime', params, MSPEQ_SIGNAL_NAMES),
-        earlySellPriceMSPEQ: buildMSPEQConfig('earlySellPrice', params, MSPEQ_SIGNAL_NAMES),
-        breakoutBufferMSPEQ: buildMSPEQConfig('breakoutBuffer', params, MSPEQ_SIGNAL_NAMES),
-        pullbackBufferMSPEQ: buildMSPEQConfig('pullbackBuffer', params, MSPEQ_SIGNAL_NAMES),
+        targetBuyPriceMSPEQ: buildMSPEQConfig('buyPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        targetSellPriceMSPEQ: buildMSPEQConfig('sellPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        earlySellTimeMSPEQ: buildMSPEQConfig('earlySellTime', params, ACTIVE_MSPEQ_SIGNALS),
+        earlySellPriceMSPEQ: buildMSPEQConfig('earlySellPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        breakoutBufferMSPEQ: buildMSPEQConfig('breakoutBuffer', params, ACTIVE_MSPEQ_SIGNALS),
+        pullbackBufferMSPEQ: buildMSPEQConfig('pullbackBuffer', params, ACTIVE_MSPEQ_SIGNALS),
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
@@ -1408,12 +1418,12 @@ function createEarlyBuyerMSPEQBot(botParams: BotParams): SimulatedBot {
         candleSizeReference: params.candleSizeReference as number ?? 200,
         minProfitMargin: params.minProfitMargin as number ?? 0.20,
         directionThreshold: params.directionThreshold as number ?? 0.5,
-        targetBuyPriceMSPEQ: buildMSPEQConfig('buyPrice', params, MSPEQ_SIGNAL_NAMES),
-        targetSellPriceMSPEQ: buildMSPEQConfig('sellPrice', params, MSPEQ_SIGNAL_NAMES),
-        cutoffMinuteMSPEQ: buildMSPEQConfig('cutoffMinute', params, MSPEQ_SIGNAL_NAMES),
-        btcDirectionMSPEQ: buildMSPEQConfig('btcDirection', params, MSPEQ_SIGNAL_NAMES),
-        earlySellTimeMSPEQ: buildMSPEQConfig('earlySellTime', params, MSPEQ_SIGNAL_NAMES),
-        earlySellPriceMSPEQ: buildMSPEQConfig('earlySellPrice', params, MSPEQ_SIGNAL_NAMES),
+        targetBuyPriceMSPEQ: buildMSPEQConfig('buyPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        targetSellPriceMSPEQ: buildMSPEQConfig('sellPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        cutoffMinuteMSPEQ: buildMSPEQConfig('cutoffMinute', params, ACTIVE_MSPEQ_SIGNALS),
+        btcDirectionMSPEQ: buildMSPEQConfig('btcDirection', params, ACTIVE_MSPEQ_SIGNALS),
+        earlySellTimeMSPEQ: buildMSPEQConfig('earlySellTime', params, ACTIVE_MSPEQ_SIGNALS),
+        earlySellPriceMSPEQ: buildMSPEQConfig('earlySellPrice', params, ACTIVE_MSPEQ_SIGNALS),
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
@@ -1440,12 +1450,12 @@ function createQuarterlyEarlyBuyerMSPEQBot(botParams: BotParams): SimulatedBot {
         candleSizeReference: params.candleSizeReference as number ?? 200,
         minProfitMargin: params.minProfitMargin as number ?? 0.20,
         directionThreshold: params.directionThreshold as number ?? 0.5,
-        targetBuyPriceMSPEQ: buildMSPEQConfig('buyPrice', params, MSPEQ_SIGNAL_NAMES),
-        targetSellPriceMSPEQ: buildMSPEQConfig('sellPrice', params, MSPEQ_SIGNAL_NAMES),
-        cutoffMinuteMSPEQ: buildMSPEQConfig('cutoffMinute', params, MSPEQ_SIGNAL_NAMES),
-        btcDirectionMSPEQ: buildMSPEQConfig('btcDirection', params, MSPEQ_SIGNAL_NAMES),
-        earlySellTimeMSPEQ: buildMSPEQConfig('earlySellTime', params, MSPEQ_SIGNAL_NAMES),
-        earlySellPriceMSPEQ: buildMSPEQConfig('earlySellPrice', params, MSPEQ_SIGNAL_NAMES),
+        targetBuyPriceMSPEQ: buildMSPEQConfig('buyPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        targetSellPriceMSPEQ: buildMSPEQConfig('sellPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        cutoffMinuteMSPEQ: buildMSPEQConfig('cutoffMinute', params, ACTIVE_MSPEQ_SIGNALS),
+        btcDirectionMSPEQ: buildMSPEQConfig('btcDirection', params, ACTIVE_MSPEQ_SIGNALS),
+        earlySellTimeMSPEQ: buildMSPEQConfig('earlySellTime', params, ACTIVE_MSPEQ_SIGNALS),
+        earlySellPriceMSPEQ: buildMSPEQConfig('earlySellPrice', params, ACTIVE_MSPEQ_SIGNALS),
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
@@ -1479,12 +1489,12 @@ function createMarketMakerMSPEQBot(botParams: BotParams): SimulatedBot {
         targetDollars: params.targetDollars as number ?? 10,
         baseCutoffMinute: params.baseCutoffMinute as number ?? 45,
         candleSizeReference: params.candleSizeReference as number ?? 200,
-        profitMarginMSPEQ: buildMSPEQConfig('profitMargin', params, MSPEQ_SIGNAL_NAMES),
-        spreadDistanceMSPEQ: buildMSPEQConfig('spreadDistance', params, MSPEQ_SIGNAL_NAMES),
-        stopLossAmountMSPEQ: buildMSPEQConfig('stopLossAmount', params, MSPEQ_SIGNAL_NAMES),
-        cutoffMinuteMSPEQ: buildMSPEQConfig('cutoffMinute', params, MSPEQ_SIGNAL_NAMES),
-        minPriceMSPEQ: buildMSPEQConfig('minPrice', params, MSPEQ_SIGNAL_NAMES),
-        maxPriceMSPEQ: buildMSPEQConfig('maxPrice', params, MSPEQ_SIGNAL_NAMES),
+        profitMarginMSPEQ: buildMSPEQConfig('profitMargin', params, ACTIVE_MSPEQ_SIGNALS),
+        spreadDistanceMSPEQ: buildMSPEQConfig('spreadDistance', params, ACTIVE_MSPEQ_SIGNALS),
+        stopLossAmountMSPEQ: buildMSPEQConfig('stopLossAmount', params, ACTIVE_MSPEQ_SIGNALS),
+        cutoffMinuteMSPEQ: buildMSPEQConfig('cutoffMinute', params, ACTIVE_MSPEQ_SIGNALS),
+        minPriceMSPEQ: buildMSPEQConfig('minPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        maxPriceMSPEQ: buildMSPEQConfig('maxPrice', params, ACTIVE_MSPEQ_SIGNALS),
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
@@ -1518,12 +1528,12 @@ function createQuarterlyMarketMakerMSPEQBot(botParams: BotParams): SimulatedBot 
         targetDollars: params.targetDollars as number ?? 10,
         baseCutoffMinute: params.baseCutoffMinute as number ?? 12,
         candleSizeReference: params.candleSizeReference as number ?? 200,
-        profitMarginMSPEQ: buildMSPEQConfig('profitMargin', params, MSPEQ_SIGNAL_NAMES),
-        spreadDistanceMSPEQ: buildMSPEQConfig('spreadDistance', params, MSPEQ_SIGNAL_NAMES),
-        stopLossAmountMSPEQ: buildMSPEQConfig('stopLossAmount', params, MSPEQ_SIGNAL_NAMES),
-        cutoffMinuteMSPEQ: buildMSPEQConfig('cutoffMinute', params, MSPEQ_SIGNAL_NAMES),
-        minPriceMSPEQ: buildMSPEQConfig('minPrice', params, MSPEQ_SIGNAL_NAMES),
-        maxPriceMSPEQ: buildMSPEQConfig('maxPrice', params, MSPEQ_SIGNAL_NAMES),
+        profitMarginMSPEQ: buildMSPEQConfig('profitMargin', params, ACTIVE_MSPEQ_SIGNALS),
+        spreadDistanceMSPEQ: buildMSPEQConfig('spreadDistance', params, ACTIVE_MSPEQ_SIGNALS),
+        stopLossAmountMSPEQ: buildMSPEQConfig('stopLossAmount', params, ACTIVE_MSPEQ_SIGNALS),
+        cutoffMinuteMSPEQ: buildMSPEQConfig('cutoffMinute', params, ACTIVE_MSPEQ_SIGNALS),
+        minPriceMSPEQ: buildMSPEQConfig('minPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        maxPriceMSPEQ: buildMSPEQConfig('maxPrice', params, ACTIVE_MSPEQ_SIGNALS),
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
@@ -1556,11 +1566,11 @@ function createNCandleMSPEQBot(botParams: BotParams): SimulatedBot {
         cutoffMinute: params.cutoffMinute as number ?? 20,
         maxTradesPerHour: params.maxTradesPerHour as number ?? 5,
         candleSizeReference: params.candleSizeReference as number ?? 20,
-        buyPriceBufferMSPEQ: buildMSPEQConfig('buyPriceBuffer', params, MSPEQ_SIGNAL_NAMES),
-        minProfitMarginMSPEQ: buildMSPEQConfig('minProfitMargin', params, MSPEQ_SIGNAL_NAMES),
-        stoplossTimeoutMSPEQ: buildMSPEQConfig('stoplossTimeout', params, MSPEQ_SIGNAL_NAMES),
-        sellTimeoutMSPEQ: buildMSPEQConfig('sellTimeout', params, MSPEQ_SIGNAL_NAMES),
-        stoplossFailureTimeoutMSPEQ: buildMSPEQConfig('stoplossFailureTimeout', params, MSPEQ_SIGNAL_NAMES),
+        buyPriceBufferMSPEQ: buildMSPEQConfig('buyPriceBuffer', params, ACTIVE_MSPEQ_SIGNALS),
+        minProfitMarginMSPEQ: buildMSPEQConfig('minProfitMargin', params, ACTIVE_MSPEQ_SIGNALS),
+        stoplossTimeoutMSPEQ: buildMSPEQConfig('stoplossTimeout', params, ACTIVE_MSPEQ_SIGNALS),
+        sellTimeoutMSPEQ: buildMSPEQConfig('sellTimeout', params, ACTIVE_MSPEQ_SIGNALS),
+        stoplossFailureTimeoutMSPEQ: buildMSPEQConfig('stoplossFailureTimeout', params, ACTIVE_MSPEQ_SIGNALS),
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
@@ -1593,11 +1603,11 @@ function createQuarterlyNCandleMSPEQBot(botParams: BotParams): SimulatedBot {
         cutoffMinute: params.cutoffMinute as number ?? 10,
         maxTradesPerHour: params.maxTradesPerHour as number ?? 3,
         candleSizeReference: params.candleSizeReference as number ?? 20,
-        buyPriceBufferMSPEQ: buildMSPEQConfig('buyPriceBuffer', params, MSPEQ_SIGNAL_NAMES),
-        minProfitMarginMSPEQ: buildMSPEQConfig('minProfitMargin', params, MSPEQ_SIGNAL_NAMES),
-        stoplossTimeoutMSPEQ: buildMSPEQConfig('stoplossTimeout', params, MSPEQ_SIGNAL_NAMES),
-        sellTimeoutMSPEQ: buildMSPEQConfig('sellTimeout', params, MSPEQ_SIGNAL_NAMES),
-        stoplossFailureTimeoutMSPEQ: buildMSPEQConfig('stoplossFailureTimeout', params, MSPEQ_SIGNAL_NAMES),
+        buyPriceBufferMSPEQ: buildMSPEQConfig('buyPriceBuffer', params, ACTIVE_MSPEQ_SIGNALS),
+        minProfitMarginMSPEQ: buildMSPEQConfig('minProfitMargin', params, ACTIVE_MSPEQ_SIGNALS),
+        stoplossTimeoutMSPEQ: buildMSPEQConfig('stoplossTimeout', params, ACTIVE_MSPEQ_SIGNALS),
+        sellTimeoutMSPEQ: buildMSPEQConfig('sellTimeout', params, ACTIVE_MSPEQ_SIGNALS),
+        stoplossFailureTimeoutMSPEQ: buildMSPEQConfig('stoplossFailureTimeout', params, ACTIVE_MSPEQ_SIGNALS),
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
@@ -1626,14 +1636,14 @@ function createCrossPeriodMomentumMSPEQBot(botParams: BotParams): SimulatedBot {
         directionThreshold: params.directionThreshold as number ?? 0.5,
         baseMomentumThreshold: params.baseMomentumThreshold as number ?? 0.15,
         baseMinWinStreak: params.baseMinWinStreak as number ?? 1,
-        targetBuyPriceMSPEQ: buildMSPEQConfig('buyPrice', params, MSPEQ_SIGNAL_NAMES),
-        targetSellPriceMSPEQ: buildMSPEQConfig('sellPrice', params, MSPEQ_SIGNAL_NAMES),
-        cutoffMinuteMSPEQ: buildMSPEQConfig('cutoffMinute', params, MSPEQ_SIGNAL_NAMES),
-        btcDirectionMSPEQ: buildMSPEQConfig('btcDirection', params, MSPEQ_SIGNAL_NAMES),
-        momentumThresholdMSPEQ: buildMSPEQConfig('momentumThreshold', params, MSPEQ_SIGNAL_NAMES),
-        winStreakThresholdMSPEQ: buildMSPEQConfig('winStreakThreshold', params, MSPEQ_SIGNAL_NAMES),
-        earlySellTimeMSPEQ: buildMSPEQConfig('earlySellTime', params, MSPEQ_SIGNAL_NAMES),
-        earlySellPriceMSPEQ: buildMSPEQConfig('earlySellPrice', params, MSPEQ_SIGNAL_NAMES),
+        targetBuyPriceMSPEQ: buildMSPEQConfig('buyPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        targetSellPriceMSPEQ: buildMSPEQConfig('sellPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        cutoffMinuteMSPEQ: buildMSPEQConfig('cutoffMinute', params, ACTIVE_MSPEQ_SIGNALS),
+        btcDirectionMSPEQ: buildMSPEQConfig('btcDirection', params, ACTIVE_MSPEQ_SIGNALS),
+        momentumThresholdMSPEQ: buildMSPEQConfig('momentumThreshold', params, ACTIVE_MSPEQ_SIGNALS),
+        winStreakThresholdMSPEQ: buildMSPEQConfig('winStreakThreshold', params, ACTIVE_MSPEQ_SIGNALS),
+        earlySellTimeMSPEQ: buildMSPEQConfig('earlySellTime', params, ACTIVE_MSPEQ_SIGNALS),
+        earlySellPriceMSPEQ: buildMSPEQConfig('earlySellPrice', params, ACTIVE_MSPEQ_SIGNALS),
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
@@ -1662,14 +1672,14 @@ function createQuarterlyCrossPeriodMomentumMSPEQBot(botParams: BotParams): Simul
         directionThreshold: params.directionThreshold as number ?? 0.5,
         baseMomentumThreshold: params.baseMomentumThreshold as number ?? 0.15,
         baseMinWinStreak: params.baseMinWinStreak as number ?? 1,
-        targetBuyPriceMSPEQ: buildMSPEQConfig('buyPrice', params, MSPEQ_SIGNAL_NAMES),
-        targetSellPriceMSPEQ: buildMSPEQConfig('sellPrice', params, MSPEQ_SIGNAL_NAMES),
-        cutoffMinuteMSPEQ: buildMSPEQConfig('cutoffMinute', params, MSPEQ_SIGNAL_NAMES),
-        btcDirectionMSPEQ: buildMSPEQConfig('btcDirection', params, MSPEQ_SIGNAL_NAMES),
-        momentumThresholdMSPEQ: buildMSPEQConfig('momentumThreshold', params, MSPEQ_SIGNAL_NAMES),
-        winStreakThresholdMSPEQ: buildMSPEQConfig('winStreakThreshold', params, MSPEQ_SIGNAL_NAMES),
-        earlySellTimeMSPEQ: buildMSPEQConfig('earlySellTime', params, MSPEQ_SIGNAL_NAMES),
-        earlySellPriceMSPEQ: buildMSPEQConfig('earlySellPrice', params, MSPEQ_SIGNAL_NAMES),
+        targetBuyPriceMSPEQ: buildMSPEQConfig('buyPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        targetSellPriceMSPEQ: buildMSPEQConfig('sellPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        cutoffMinuteMSPEQ: buildMSPEQConfig('cutoffMinute', params, ACTIVE_MSPEQ_SIGNALS),
+        btcDirectionMSPEQ: buildMSPEQConfig('btcDirection', params, ACTIVE_MSPEQ_SIGNALS),
+        momentumThresholdMSPEQ: buildMSPEQConfig('momentumThreshold', params, ACTIVE_MSPEQ_SIGNALS),
+        winStreakThresholdMSPEQ: buildMSPEQConfig('winStreakThreshold', params, ACTIVE_MSPEQ_SIGNALS),
+        earlySellTimeMSPEQ: buildMSPEQConfig('earlySellTime', params, ACTIVE_MSPEQ_SIGNALS),
+        earlySellPriceMSPEQ: buildMSPEQConfig('earlySellPrice', params, ACTIVE_MSPEQ_SIGNALS),
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);

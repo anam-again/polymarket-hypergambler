@@ -42,7 +42,7 @@ import { EarlyBuyerV2 } from '../bots/EarlyBuyerV2.js';
 import { EsotericNormalization } from '../bots/EsotericNormalization.js';
 import { FirstCandleMSPEQ } from '../bots/FirstCandleMSPEQ.js';
 import { ScalingPEQ, ScalingPEQCoefficients } from '../utils/ScalingPEQ.js';
-import { MultiSignalPEQConfig, STANDARD_NORMALIZATIONS } from '../utils/MultiSignalPEQ.js';
+import { MultiSignalPEQConfig, STANDARD_NORMALIZATIONS, SIGNAL_NAMES } from '../utils/MultiSignalPEQ.js';
 
 // ============================================================================
 // Helper Functions
@@ -70,9 +70,6 @@ function extractPEQCoefficients(
     };
 }
 
-// Signal names for MSPEQ
-const MSPEQ_SIGNAL_NAMES = ['candleSize', 'volatility', 'momentum'] as const;
-
 /**
  * Extract Multi-Signal PEQ config from merged params.
  * Looks for flat params like: {prefix}_{signalName}_w, {prefix}_{signalName}_c0, etc.
@@ -80,7 +77,7 @@ const MSPEQ_SIGNAL_NAMES = ['candleSize', 'volatility', 'momentum'] as const;
 function extractMSPEQConfig(
     params: Record<string, unknown>,
     prefix: string,
-    signalNames: readonly string[] = MSPEQ_SIGNAL_NAMES
+    signalNames: readonly string[] = SIGNAL_NAMES
 ): MultiSignalPEQConfig {
     const signals = signalNames.map(name => ({
         name,
