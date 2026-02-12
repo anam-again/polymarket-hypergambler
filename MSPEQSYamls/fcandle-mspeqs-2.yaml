@@ -17,60 +17,36 @@ params:
   buyPrice_candleSize_w: 0.2500102749599691
   buyPrice_candleSize_c0: 0.5
   buyPrice_candleSize_c1: 0.8631166061376399
-  buyPrice_candleSize_c2: -0.6222196590253631
-  buyPrice_candleSize_c3: -1
   buyPrice_volatility_w: 0.32229508774585536
   buyPrice_volatility_c0: 0.7658097291610613
   buyPrice_volatility_c1: 0.41118400199421723
-  buyPrice_volatility_c2: 0.2736126912144038
-  buyPrice_volatility_c3: -0.7600961676434808
   buyPrice_momentum_w: 0.29095465644201424
   buyPrice_momentum_c0: 0.7889904906052422
   buyPrice_momentum_c1: 0.8108979464257757
-  buyPrice_momentum_c2: 0.29540996513344875
-  buyPrice_momentum_c3: -0.8831996860469786
   sellPrice_candleSize_w: 0.8189808389663003
   sellPrice_candleSize_c0: 0.9296658352576475
   sellPrice_candleSize_c1: 0.30151965544218795
-  sellPrice_candleSize_c2: -0.1438261405829997
-  sellPrice_candleSize_c3: -0.0507297197005534
   sellPrice_volatility_w: 0.26588957192927154
   sellPrice_volatility_c0: 1.1531656649485584
   sellPrice_volatility_c1: -0.3534952861111065
-  sellPrice_volatility_c2: -0.39910113143375403
-  sellPrice_volatility_c3: 0.9966555165248714
   sellPrice_momentum_w: 0
   sellPrice_momentum_c0: 0.925725791643374
   sellPrice_momentum_c1: 0.9260400282635395
-  sellPrice_momentum_c2: -0.7863999527658885
-  sellPrice_momentum_c3: 0.21619805817446325
   earlySellTime_candleSize_w: 0.42466421497044415
   earlySellTime_candleSize_c0: 0.32144158690318275
   earlySellTime_candleSize_c1: -0.41768707457034826
-  earlySellTime_candleSize_c2: 0.12361227573947925
-  earlySellTime_candleSize_c3: 0.26836699252719276
   earlySellTime_volatility_w: 0.9761885889037104
   earlySellTime_volatility_c0: 0.2050818246780889
   earlySellTime_volatility_c1: 0.14813998602072942
-  earlySellTime_volatility_c2: 0.3279626068758076
-  earlySellTime_volatility_c3: -0.29077648202134454
   earlySellTime_momentum_w: 0.4392788408920252
   earlySellTime_momentum_c0: 0.3893073106922923
   earlySellTime_momentum_c1: -0.07336700706317267
-  earlySellTime_momentum_c2: 0.31641633804619995
-  earlySellTime_momentum_c3: -0.3902546881392366
   earlySellPrice_candleSize_w: 1.0357597186946779
   earlySellPrice_candleSize_c0: 0.8561562488759351
   earlySellPrice_candleSize_c1: -0.7358679313810217
-  earlySellPrice_candleSize_c2: 0.9446432798238615
-  earlySellPrice_candleSize_c3: -0.391407077694258
   earlySellPrice_volatility_w: 0.5897485403788005
   earlySellPrice_volatility_c0: 0.8606540416467033
   earlySellPrice_volatility_c1: 0.5373557214590758
-  earlySellPrice_volatility_c2: 0.31512178571324156
-  earlySellPrice_volatility_c3: 0.7171160266825722
   earlySellPrice_momentum_w: 0.15497248386014137
   earlySellPrice_momentum_c0: 1.0801772789913253
   earlySellPrice_momentum_c1: 0.40489672031893464
-  earlySellPrice_momentum_c2: 0.23423292511830862
-  earlySellPrice_momentum_c3: 0.030195374799454555

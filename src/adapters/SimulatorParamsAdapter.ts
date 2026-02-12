@@ -26,6 +26,7 @@ import { MultiSignalPEQ, MultiSignalPEQConfig, SIGNAL_NAMES, STANDARD_NORMALIZAT
 import { FirstCandleMSPEQ, FirstCandleMSPEQProps } from '../bots/FirstCandleMSPEQ.js';
 import { EarlyBuyerMSPEQ, EarlyBuyerMSPEQProps } from '../bots/EarlyBuyerMSPEQ.js';
 import { NCandleMSPEQ, NCandleMSPEQProps } from '../bots/NCandleMSPEQ.js';
+import { CrossPeriodMomentumMSPEQ, CrossPeriodMomentumMSPEQProps } from '../bots/CrossPeriodMomentumMSPEQ.js';
 import { QuantBotRun } from '../bots/QuantBot.js';
 import { ClobClient } from '@polymarket/clob-client';
 import { MarketInfo } from '../nonBots/MarketInfo.js';
@@ -70,7 +71,10 @@ export type SupportedStrategy =
     | 'QuarterlyEarlyBuyerMSPEQ'
     | 'HourlyEarlyBuyerMSPEQ'
     | 'QuarterlyNCandleMSPEQ'
-    | 'HourlyNCandleMSPEQ';
+    | 'HourlyNCandleMSPEQ'
+    | 'QuarterlyCrossPeriodMomentumMSPEQ'
+    | 'HourlyCrossPeriodMomentumMSPEQ'
+    | 'CrossPeriodMomentumMSPEQ';
 
 // ============================================================================
 // Market Mapping
@@ -129,6 +133,12 @@ const EARLYBUYER_MSPEQ_SIGNALS = ['candleSize', 'volatility', 'momentum'] as con
  * (same 3 signals as FirstCandleMSPEQ and EarlyBuyerMSPEQ)
  */
 const NCANDLE_MSPEQ_SIGNALS = ['candleSize', 'volatility', 'momentum'] as const;
+
+/**
+ * Signal names used in CrossPeriodMomentumMSPEQ
+ * (same 3 signals as other MSPEQ bots)
+ */
+const CROSSPERIODMOMENTUM_MSPEQ_SIGNALS = ['candleSize', 'volatility', 'momentum'] as const;
 
 // ============================================================================
 // YAML Parsing
@@ -222,6 +232,8 @@ export function extractFirstCandleMSPEQProps(
         targetSellPriceMSPEQ: extractMSPEQConfig('sellPrice', params),
         earlySellTimeMSPEQ: extractMSPEQConfig('earlySellTime', params),
         earlySellPriceMSPEQ: extractMSPEQConfig('earlySellPrice', params),
+        breakoutBufferMSPEQ: extractMSPEQConfig('breakoutBuffer', params),
+        pullbackBufferMSPEQ: extractMSPEQConfig('pullbackBuffer', params),
     };
 }
 
@@ -465,6 +477,112 @@ export function loadNCandleMSPEQFromYaml(
 }
 
 // ============================================================================
+// CrossPeriodMomentumMSPEQ Adapter
+// ============================================================================
+
+/**
+ * Converts flat YAML params to MultiSignalPEQConfig for CrossPeriodMomentumMSPEQ
+ */
+function extractCrossPeriodMomentumMSPEQConfig(
+    prefix: string,
+    params: Record<string, number>,
+    signalNames: readonly string[] = CROSSPERIODMOMENTUM_MSPEQ_SIGNALS
+): MultiSignalPEQConfig {
+    return MultiSignalPEQ.fromFlatParams(
+        prefix,
+        params,
+        [...signalNames],
+        {
+            normalizations: {
+                candleSize: STANDARD_NORMALIZATIONS.candleSize,
+                volatility: STANDARD_NORMALIZATIONS.volatility,
+                momentum: STANDARD_NORMALIZATIONS.momentum,
+            },
+        }
+    ).getConfig();
+}
+
+/**
+ * Extracts CrossPeriodMomentumMSPEQProps from simulator YAML params
+ */
+export function extractCrossPeriodMomentumMSPEQProps(
+    yaml: SimulatorYamlOutput,
+    config: CommonBotConfig,
+    filePath?: string
+): CrossPeriodMomentumMSPEQProps {
+    const { params } = yaml;
+    const targetedMarket = resolveMarket(yaml.market);
+
+    // Generate bot name from filename + params
+    const shortname = targetMarketToShortname(targetedMarket);
+    const baseFilename = filePath ? getBaseFilename(filePath) : 'cpmmspeq';
+    const name = `${baseFilename}-${shortname}`;
+
+    return {
+        // Identity
+        name,
+        targetedMarket,
+
+        // Common config
+        client: config.client,
+        marketInfo: config.marketInfo,
+        PROD_MODE: config.PROD_MODE,
+        hourlyDollarLimit: config.hourlyDollarLimit,
+
+        // Base parameters from YAML
+        targetDollars: config.targetDollars ?? params.targetDollars ?? 10,
+        baseBuyPrice: params.baseBuyPrice ?? 0.52,
+        baseSellPrice: params.baseSellPrice ?? 0.58,
+        baseCutoffMinute: params.baseCutoffMinute ?? 30,
+        candleSizeReference: params.candleSizeReference ?? 1000,
+        minProfitMargin: params.minProfitMargin ?? 0.05,
+        directionThreshold: params.directionThreshold ?? 0.5,
+        baseMomentumThreshold: params.baseMomentumThreshold ?? 0.15,
+        baseMinWinStreak: params.baseMinWinStreak ?? 1,
+
+        // Multi-Signal PEQ configs (converted from flat params)
+        targetBuyPriceMSPEQ: extractCrossPeriodMomentumMSPEQConfig('buyPrice', params),
+        targetSellPriceMSPEQ: extractCrossPeriodMomentumMSPEQConfig('sellPrice', params),
+        cutoffMinuteMSPEQ: extractCrossPeriodMomentumMSPEQConfig('cutoffMinute', params),
+        btcDirectionMSPEQ: extractCrossPeriodMomentumMSPEQConfig('btcDirection', params),
+        momentumThresholdMSPEQ: extractCrossPeriodMomentumMSPEQConfig('momentumThreshold', params),
+        winStreakThresholdMSPEQ: extractCrossPeriodMomentumMSPEQConfig('winStreakThreshold', params),
+        earlySellTimeMSPEQ: extractCrossPeriodMomentumMSPEQConfig('earlySellTime', params),
+        earlySellPriceMSPEQ: extractCrossPeriodMomentumMSPEQConfig('earlySellPrice', params),
+    };
+}
+
+/**
+ * Loads a CrossPeriodMomentumMSPEQ bot from a simulator YAML file
+ *
+ * @param filePath - Path to the YAML file
+ * @param config - Common bot configuration
+ * @returns Configured CrossPeriodMomentumMSPEQ bot instance
+ *
+ * @example
+ * const bot = loadCrossPeriodMomentumMSPEQFromYaml(
+ *   './logs/simulator/stage2-crossperiodmomentummspeq-2026-02-10T04-09-13.yaml',
+ *   { client: clobClient, marketInfo, PROD_MODE: true, hourlyDollarLimit: 50 }
+ * );
+ */
+export function loadCrossPeriodMomentumMSPEQFromYaml(
+    filePath: string,
+    config: CommonBotConfig
+): CrossPeriodMomentumMSPEQ {
+    const yaml = loadSimulatorYaml(filePath);
+
+    if (!yaml.strategy.includes('CrossPeriodMomentumMSPEQ')) {
+        console.warn(
+            `[SimulatorParamsAdapter] Warning: YAML strategy "${yaml.strategy}" ` +
+            `may not be compatible with CrossPeriodMomentumMSPEQ`
+        );
+    }
+
+    const props = extractCrossPeriodMomentumMSPEQProps(yaml, config, filePath);
+    return new CrossPeriodMomentumMSPEQ(props);
+}
+
+// ============================================================================
 // Batch Loading
 // ============================================================================
 
@@ -542,6 +660,10 @@ export function loadBotsFromYamlDir(
                 console.log(`[SimulatorParamsAdapter] Loaded ${bot.name} from ${file}`);
             } else if (yaml.strategy.includes('NCandleMSPEQ')) {
                 const bot = loadNCandleMSPEQFromYaml(filePath, config);
+                bots.push(bot);
+                console.log(`[SimulatorParamsAdapter] Loaded ${bot.name} from ${file}`);
+            } else if (yaml.strategy.includes('CrossPeriodMomentumMSPEQ')) {
+                const bot = loadCrossPeriodMomentumMSPEQFromYaml(filePath, config);
                 bots.push(bot);
                 console.log(`[SimulatorParamsAdapter] Loaded ${bot.name} from ${file}`);
             } else {
@@ -642,6 +764,9 @@ export function loadLatestBot(
     }
     if (strategy.includes('NCandleMSPEQ')) {
         return loadNCandleMSPEQFromYaml(yamlPath, config);
+    }
+    if (strategy.includes('CrossPeriodMomentumMSPEQ')) {
+        return loadCrossPeriodMomentumMSPEQFromYaml(yamlPath, config);
     }
     return loadFirstCandleMSPEQFromYaml(yamlPath, config);
 }

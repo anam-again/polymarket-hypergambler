@@ -18,6 +18,14 @@ export interface SignalSnapshot {
     momentum: number;
     /** Order book imbalance: (upMid - downMid), range -0.5 to 0.5 */
     priceImbalance: number;
+    /** Where price sits in recent range (0 = at low, 1 = at high), like Stochastic */
+    rangePosition: number;
+    /** Trend strength from linear regression slope, range -1 to 1 */
+    trendStrength: number;
+    /** Volatility trend: positive = increasing, negative = decreasing, range -1 to 1 */
+    volatilityTrend: number;
+    /** Hour of day normalized to 0-1 (0 = midnight, 0.5 = noon) */
+    hourOfDay: number;
     /** Timestamp of when signals were computed */
     timestamp: number;
 }
@@ -34,6 +42,8 @@ export interface SignalProviderConfig {
     momentumWindowMinutes: number;
     /** Period length in milliseconds for timeLeft calculation */
     periodLengthMs: number;
+    /** Optional clock for simulation compatibility (uses Date.now() if not provided) */
+    clock?: { now(): number };
 }
 
 /**
@@ -96,9 +106,11 @@ export abstract class BaseSignalProvider implements ISignalProvider {
     protected periodEnd: number = 0;
     protected candleHigh: number = 0;
     protected candleLow: number = 0;
+    protected clock?: { now(): number };
 
     constructor(config: Partial<SignalProviderConfig> = {}) {
         this.config = { ...DEFAULT_SIGNAL_CONFIG, ...config };
+        this.clock = config.clock;
     }
 
     abstract getSignals(): Promise<SignalSnapshot>;
@@ -135,7 +147,7 @@ export abstract class BaseSignalProvider implements ISignalProvider {
      */
     getTimeLeft(): number {
         if (this.periodEnd === 0 || this.periodStart === 0) return 1;
-        const now = Date.now();
+        const now = this.clock?.now() ?? Date.now();
         const periodLength = this.periodEnd - this.periodStart;
         if (periodLength <= 0) return 1;
         const remaining = Math.max(0, this.periodEnd - now);
@@ -148,5 +160,17 @@ export abstract class BaseSignalProvider implements ISignalProvider {
     getCandleSize(): number {
         const range = this.candleHigh - this.candleLow;
         return range / this.config.candleSizeReference;
+    }
+
+    /**
+     * Gets hourOfDay signal normalized to 0-1.
+     * 0 = midnight UTC, 0.5 = noon UTC, 1 = midnight UTC
+     */
+    getHourOfDay(): number {
+        const now = this.clock?.now() ?? Date.now();
+        const date = new Date(now);
+        const hours = date.getUTCHours();
+        const minutes = date.getUTCMinutes();
+        return (hours + minutes / 60) / 24;
     }
 }

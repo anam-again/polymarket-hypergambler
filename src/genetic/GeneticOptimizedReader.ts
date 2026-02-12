@@ -50,12 +50,12 @@ import { MultiSignalPEQConfig, STANDARD_NORMALIZATIONS } from '../utils/MultiSig
 
 /**
  * Extract PEQ coefficients from merged params.
- * Supports both nested object format ({ c0, c1, c2, c3 }) and flat format (_c0, _c1, _c2, _c3).
+ * Supports both nested object format ({ c0, c1 }) and flat format (_c0, _c1).
  */
 function extractPEQCoefficients(
     params: Record<string, unknown>,
     prefix: string,
-    defaults: ScalingPEQCoefficients = { c0: 1, c1: 0, c2: 0, c3: 0 }
+    defaults: ScalingPEQCoefficients = { c0: 1, c1: 0 }
 ): ScalingPEQCoefficients {
     // Check for nested object format first
     const nested = params[prefix];
@@ -67,8 +67,6 @@ function extractPEQCoefficients(
     return {
         c0: (params[`${prefix}_c0`] as number) ?? defaults.c0,
         c1: (params[`${prefix}_c1`] as number) ?? defaults.c1,
-        c2: (params[`${prefix}_c2`] as number) ?? defaults.c2,
-        c3: (params[`${prefix}_c3`] as number) ?? defaults.c3,
     };
 }
 
@@ -90,8 +88,6 @@ function extractMSPEQConfig(
         coefficients: {
             c0: (params[`${prefix}_${name}_c0`] as number) ?? 1.0,
             c1: (params[`${prefix}_${name}_c1`] as number) ?? 0,
-            c2: (params[`${prefix}_${name}_c2`] as number) ?? 0,
-            c3: (params[`${prefix}_${name}_c3`] as number) ?? 0,
         },
         normalize: STANDARD_NORMALIZATIONS[name as keyof typeof STANDARD_NORMALIZATIONS],
     }));
@@ -342,7 +338,7 @@ export class GeneticOptimizedReader {
                     minProfitMargin: mergedParams.minProfitMargin ?? 0.05,
                     targetBuyPricePEQ: extractPEQCoefficients(mergedParams, 'targetBuyPricePEQ'),
                     targetSellPricePEQ: extractPEQCoefficients(mergedParams, 'targetSellPricePEQ'),
-                    earlySellTimePEQ: extractPEQCoefficients(mergedParams, 'earlySellTimePEQ', { c0: 0.2, c1: 0, c2: 0, c3: 0 }),
+                    earlySellTimePEQ: extractPEQCoefficients(mergedParams, 'earlySellTimePEQ', { c0: 0.2, c1: 0 }),
                     earlySellPricePEQ: extractPEQCoefficients(mergedParams, 'earlySellPricePEQ'),
                 });
 
@@ -363,6 +359,8 @@ export class GeneticOptimizedReader {
                     targetSellPriceMSPEQ: extractMSPEQConfig(mergedParams, 'sellPrice'),
                     earlySellTimeMSPEQ: extractMSPEQConfig(mergedParams, 'earlySellTime'),
                     earlySellPriceMSPEQ: extractMSPEQConfig(mergedParams, 'earlySellPrice'),
+                    breakoutBufferMSPEQ: extractMSPEQConfig(mergedParams, 'breakoutBuffer'),
+                    pullbackBufferMSPEQ: extractMSPEQConfig(mergedParams, 'pullbackBuffer'),
                 });
 
             case 'FirstCandleV2':
@@ -412,22 +410,16 @@ export class GeneticOptimizedReader {
                     sellTimeoutPEQ: new ScalingPEQ({
                         c0: mergedParams.sellTimeoutPEQ_c0 ?? 1.0,
                         c1: mergedParams.sellTimeoutPEQ_c1 ?? 0,
-                        c2: mergedParams.sellTimeoutPEQ_c2 ?? 0,
-                        c3: mergedParams.sellTimeoutPEQ_c3 ?? 0,
                     }),
                     stoplossCheckTimeout: mergedParams.stoplossCheckTimeout ?? 10,
                     stoplossCheckTimeoutPEQ: new ScalingPEQ({
                         c0: mergedParams.stoplossCheckTimeoutPEQ_c0 ?? 1.0,
                         c1: mergedParams.stoplossCheckTimeoutPEQ_c1 ?? 0,
-                        c2: mergedParams.stoplossCheckTimeoutPEQ_c2 ?? 0,
-                        c3: mergedParams.stoplossCheckTimeoutPEQ_c3 ?? 0,
                     }),
                     stoplossFailureTimeout: mergedParams.stoplossFailureTimeout ?? 15,
                     stoplossFailureTimeoutPEQ: new ScalingPEQ({
                         c0: mergedParams.stoplossFailureTimeoutPEQ_c0 ?? 1.0,
                         c1: mergedParams.stoplossFailureTimeoutPEQ_c1 ?? 0,
-                        c2: mergedParams.stoplossFailureTimeoutPEQ_c2 ?? 0,
-                        c3: mergedParams.stoplossFailureTimeoutPEQ_c3 ?? 0,
                     }),
                 });
 
@@ -476,38 +468,28 @@ export class GeneticOptimizedReader {
                     buyPriceBufferPEQ: new ScalingPEQ({
                         c0: mergedParams.buyPriceBufferPEQ_c0 ?? 1.0,
                         c1: mergedParams.buyPriceBufferPEQ_c1 ?? 0,
-                        c2: mergedParams.buyPriceBufferPEQ_c2 ?? 0,
-                        c3: mergedParams.buyPriceBufferPEQ_c3 ?? 0,
                     }),
                     sellPriceBuffer: mergedParams.sellPriceBuffer ?? 0.02,
                     minProfitMargin: mergedParams.minProfitMargin ?? 0.05,
                     minProfitMarginPEQ: new ScalingPEQ({
                         c0: mergedParams.minProfitMarginPEQ_c0 ?? 1.0,
                         c1: mergedParams.minProfitMarginPEQ_c1 ?? 0,
-                        c2: mergedParams.minProfitMarginPEQ_c2 ?? 0,
-                        c3: mergedParams.minProfitMarginPEQ_c3 ?? 0,
                     }),
                     stopLossMultiplier: mergedParams.stopLossMultiplier ?? 1.5,
                     stoplossTimeout: mergedParams.stoplossTimeout ?? 30,
                     stoplossTimeoutPEQ: new ScalingPEQ({
                         c0: mergedParams.stoplossTimeoutPEQ_c0 ?? 1.0,
                         c1: mergedParams.stoplossTimeoutPEQ_c1 ?? 0,
-                        c2: mergedParams.stoplossTimeoutPEQ_c2 ?? 0,
-                        c3: mergedParams.stoplossTimeoutPEQ_c3 ?? 0,
                     }),
                     sellTimeout: mergedParams.sellTimeout ?? 300,
                     sellTimeoutPEQ: new ScalingPEQ({
                         c0: mergedParams.sellTimeoutPEQ_c0 ?? 1.0,
                         c1: mergedParams.sellTimeoutPEQ_c1 ?? 0,
-                        c2: mergedParams.sellTimeoutPEQ_c2 ?? 0,
-                        c3: mergedParams.sellTimeoutPEQ_c3 ?? 0,
                     }),
                     stoplossFailureTimeout: mergedParams.stoplossFailureTimeout ?? 15,
                     stoplossFailureTimeoutPEQ: new ScalingPEQ({
                         c0: mergedParams.stoplossFailureTimeoutPEQ_c0 ?? 1.0,
                         c1: mergedParams.stoplossFailureTimeoutPEQ_c1 ?? 0,
-                        c2: mergedParams.stoplossFailureTimeoutPEQ_c2 ?? 0,
-                        c3: mergedParams.stoplossFailureTimeoutPEQ_c3 ?? 0,
                     }),
                     earlySellScalar: mergedParams.earlySellScalar ?? 0.3,
                     targetDollars: mergedParams.targetDollars ?? 10,

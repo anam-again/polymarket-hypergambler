@@ -1,59 +1,53 @@
 // ============================================================================
-// ScalingPEQ - Polynomial Equation Scaling Functions
+// ScalingPEQ - Linear Equation Scaling Functions
 // ============================================================================
 
 /**
- * Coefficients for the polynomial scaling equation:
- * f(x) = c0 + c1*x + c2*x^2 + c3*x^3
+ * Coefficients for the linear scaling equation:
+ * f(x) = c0 + c1*x
  *
- * Default values (c0=1, c1=0, c2=0, c3=0) give a constant multiplier of 1.
+ * Default values (c0=1, c1=0) give a constant multiplier of 1.
  */
 export interface ScalingPEQCoefficients {
-    c0: number;  // constant term
-    c1: number;  // linear term
-    c2: number;  // quadratic term
-    c3: number;  // cubic term
+    c0: number;  // constant term (intercept)
+    c1: number;  // linear term (slope)
 }
 
 /**
- * ScalingPEQ - Polynomial Equation Scaling
+ * ScalingPEQ - Linear Equation Scaling
  *
- * Provides polynomial-based scaling functions for trading parameters.
- * Instead of simple linear scalars like `f(x) = scalar * x`, this allows
- * more expressive non-linear relationships: `f(x) = c0 + c1*x + c2*x^2 + c3*x^3`
+ * Provides linear scaling functions for trading parameters.
+ * Uses the equation: `f(x) = c0 + c1*x`
  *
- * This gives the genetic optimizer 4 coefficients per scaling function,
- * enabling more flexible optimization of time-based parameter adjustments.
+ * This gives the genetic optimizer 2 coefficients per scaling function,
+ * enabling flexible optimization of signal-based parameter adjustments
+ * while keeping the search space manageable.
  */
 export class ScalingPEQ {
     private readonly c0: number;
     private readonly c1: number;
-    private readonly c2: number;
-    private readonly c3: number;
 
     constructor(coefficients: ScalingPEQCoefficients) {
         this.c0 = coefficients.c0;
         this.c1 = coefficients.c1;
-        this.c2 = coefficients.c2;
-        this.c3 = coefficients.c3;
     }
 
     /**
-     * Computes the polynomial value for input x.
-     * f(x) = c0 + c1*x + c2*x^2 + c3*x^3
+     * Computes the linear value for input x.
+     * f(x) = c0 + c1*x
      *
-     * @param x - Input value (typically 0-1 for timeLeftRatio)
-     * @returns The computed polynomial value
+     * @param x - Input value (typically 0-1 normalized signal)
+     * @returns The computed linear value
      */
     compute(x: number): number {
-        return this.c0 + this.c1 * x + this.c2 * x * x + this.c3 * x * x * x;
+        return this.c0 + this.c1 * x;
     }
 
     /**
-     * Scales a base value by the polynomial function.
+     * Scales a base value by the linear function.
      *
      * @param baseValue - The base value to scale
-     * @param x - Input value for the polynomial (typically timeLeftRatio)
+     * @param x - Input value for the equation (typically normalized signal)
      * @returns baseValue * compute(x)
      */
     scale(baseValue: number, x: number): number {
@@ -67,24 +61,22 @@ export class ScalingPEQ {
         return {
             c0: this.c0,
             c1: this.c1,
-            c2: this.c2,
-            c3: this.c3,
         };
     }
 
     /**
      * Creates a ScalingPEQ with default coefficients (constant 1.0).
-     * This is equivalent to the old behavior with no scaling.
+     * This is equivalent to no scaling.
      */
     static default(): ScalingPEQ {
-        return new ScalingPEQ({ c0: 1.0, c1: 0, c2: 0, c3: 0 });
+        return new ScalingPEQ({ c0: 1.0, c1: 0 });
     }
 
     /**
-     * Creates a ScalingPEQ that approximates (1 - x).
-     * Useful for migrating from old scalars that used (1 - timeLeftRatio).
+     * Creates a ScalingPEQ with a specific slope.
+     * Useful for simple linear relationships.
      */
     static linear(slope: number = -1): ScalingPEQ {
-        return new ScalingPEQ({ c0: 1.0, c1: slope, c2: 0, c3: 0 });
+        return new ScalingPEQ({ c0: 1.0, c1: slope });
     }
 }

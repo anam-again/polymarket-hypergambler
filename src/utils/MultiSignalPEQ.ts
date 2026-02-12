@@ -1,5 +1,5 @@
 // ============================================================================
-// MultiSignalPEQ - Multi-Signal Polynomial Equation Scaling
+// MultiSignalPEQ - Multi-Signal Linear Equation Scaling
 // ============================================================================
 
 import { ScalingPEQ, ScalingPEQCoefficients } from './ScalingPEQ.js';
@@ -12,7 +12,7 @@ export interface SignalConfig {
     name: string;
     /** Weight for this signal's contribution (genetically optimized) */
     weight: number;
-    /** Polynomial coefficients for this signal */
+    /** Linear coefficients for this signal (c0 + c1*x) */
     coefficients: ScalingPEQCoefficients;
     /** Optional normalization bounds for the input signal */
     normalize?: { min: number; max: number };
@@ -39,24 +39,28 @@ export const SIGNAL_NAMES = [
     'volatility',
     'momentum',
     'priceImbalance',
+    'rangePosition',
+    'trendStrength',
+    'volatilityTrend',
+    'hourOfDay',
 ] as const;
 
 export type SignalName = (typeof SIGNAL_NAMES)[number];
 
 /**
- * MultiSignalPEQ - Multi-Signal Polynomial Equation Scaling
+ * MultiSignalPEQ - Multi-Signal Linear Equation Scaling
  *
- * Extends ScalingPEQ to combine multiple input signals, each with their own
- * polynomial equation and weight. This allows the genetic optimizer to learn
- * complex relationships between multiple market signals and trading decisions.
+ * Combines multiple input signals, each with their own linear equation and weight.
+ * This allows the genetic optimizer to learn relationships between multiple market
+ * signals and trading decisions.
  *
  * Output computation:
  * - If baseValue provided: output = baseValue * Σ(weight_i * PEQ_i(signal_i))
  * - If no baseValue: output = Σ(weight_i * PEQ_i(signal_i))
  *
- * Each signal can have its own normalization bounds, polynomial coefficients,
- * and contribution weight, giving the optimizer 5 parameters per signal:
- * weight, c0, c1, c2, c3
+ * Each signal can have its own normalization bounds, linear coefficients,
+ * and contribution weight, giving the optimizer 3 parameters per signal:
+ * weight, c0, c1
  */
 export class MultiSignalPEQ {
     private readonly signals: Array<{
@@ -130,6 +134,7 @@ export class MultiSignalPEQ {
 
     /**
      * Returns flat parameter representation for genetic optimizer.
+     * Uses LINEAR model (w, c0, c1 only) to reduce parameter count.
      *
      * @param prefix - Parameter name prefix (e.g., 'buyPrice')
      * @returns Record of flat parameter names to values
@@ -139,8 +144,6 @@ export class MultiSignalPEQ {
      *   'buyPrice_candleSize_w': 0.5,
      *   'buyPrice_candleSize_c0': 0.4,
      *   'buyPrice_candleSize_c1': -0.2,
-     *   'buyPrice_candleSize_c2': 0.1,
-     *   'buyPrice_candleSize_c3': 0.0,
      *   'buyPrice_volatility_w': 0.3,
      *   ...
      * }
@@ -153,10 +156,9 @@ export class MultiSignalPEQ {
             params[`${signalPrefix}_w`] = signal.weight;
 
             const coeffs = signal.peq.getCoefficients();
+            // Linear model: only c0 and c1
             params[`${signalPrefix}_c0`] = coeffs.c0;
             params[`${signalPrefix}_c1`] = coeffs.c1;
-            params[`${signalPrefix}_c2`] = coeffs.c2;
-            params[`${signalPrefix}_c3`] = coeffs.c3;
         }
 
         if (this.baseValue !== undefined) {
@@ -193,8 +195,6 @@ export class MultiSignalPEQ {
                 coefficients: {
                     c0: params[`${signalPrefix}_c0`] ?? 1,
                     c1: params[`${signalPrefix}_c1`] ?? 0,
-                    c2: params[`${signalPrefix}_c2`] ?? 0,
-                    c3: params[`${signalPrefix}_c3`] ?? 0,
                 },
                 normalize: options?.normalizations?.[name],
             };
@@ -221,7 +221,7 @@ export class MultiSignalPEQ {
             signals: signalNames.map((name) => ({
                 name,
                 weight: 1.0 / signalNames.length, // Equal weights summing to 1
-                coefficients: { c0: 1, c1: 0, c2: 0, c3: 0 },
+                coefficients: { c0: 1, c1: 0 },
             })),
         });
     }
@@ -266,10 +266,16 @@ export const STANDARD_NORMALIZATIONS: Record<SignalName, { min: number; max: num
     volatility: { min: 0, max: 1 },
     momentum: { min: -1, max: 1 },
     priceImbalance: { min: -0.5, max: 0.5 },
+    rangePosition: { min: 0, max: 1 },
+    trendStrength: { min: -1, max: 1 },
+    volatilityTrend: { min: -1, max: 1 },
+    hourOfDay: { min: 0, max: 1 },
 };
 
 /**
  * Helper to generate parameter bounds for a MultiSignalPEQ.
+ *
+ * Uses LINEAR model (c0 + c1*x) for efficient optimization.
  *
  * @param prefix - Parameter name prefix (e.g., 'buyPrice')
  * @param signalNames - Array of signal names
@@ -291,14 +297,13 @@ export function generateMSPEQBounds(
     for (const name of signalNames) {
         const signalPrefix = `${prefix}_${name}`;
 
+        // Linear model: weight, c0 (intercept), c1 (slope)
         bounds[`${signalPrefix}_w`] = weightBounds;
         bounds[`${signalPrefix}_c0`] = {
             min: coeffBounds.c0Min ?? coeffBounds.min,
             max: coeffBounds.c0Max ?? coeffBounds.max,
         };
         bounds[`${signalPrefix}_c1`] = coeffBounds;
-        bounds[`${signalPrefix}_c2`] = coeffBounds;
-        bounds[`${signalPrefix}_c3`] = coeffBounds;
     }
 
     return bounds;

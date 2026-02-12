@@ -1,0 +1,47 @@
+# CrossPeriodMomentumMSPEQ Base Parameters Template
+# =================================================
+#
+# Usage:
+#   npm run histSim -- --base-params MSPEQsTestingParams/CrossPeriodMomentumMSPEQ-template.yaml -s CrossPeriodMomentumMSPEQ -p 150 -m 75 -c btc
+#
+# This file contains the base parameters for CrossPeriodMomentumMSPEQ strategy.
+# Stage 2 optimization will freeze these and only optimize the MSPEQ coefficients.
+#
+# CrossPeriodMomentumMSPEQ uses multiple signals (candleSize, volatility, momentum) to
+# dynamically compute: buy price, sell price, cutoff time, BTC direction,
+# momentum threshold, win streak threshold, early sell timing, and early sell price.
+#
+# Strategy: If period N has strong momentum in one direction (UP or DOWN wins
+# decisively), bet the same direction in period N+1. This exploits the
+# observation that momentum often persists across short time periods.
+
+# how 2 run:
+# hourly
+# npm run histSim -- -g -s CrossPeriodMomentumMSPEQ -M btc-hourly -c btc -p 30 -m 50 -d 20 -a 5 --base-params MSPEQsTestingParams/CrossPeriodMomentumMSPEQ-template.yaml
+# quarterly
+# npm run histSim -- -g -s QuarterlyCrossPeriodMomentumMSPEQ -M btc-quarterly -c btc -p 30 -m 50 -d 20 -a 5 --base-params MSPEQsTestingParams/CrossPeriodMomentumMSPEQ-template.yaml
+
+params:
+  # Position sizing
+  targetDollars: 10
+
+  # Base pricing (MSPEQ scales these)
+  baseBuyPrice: 0.52          # Base buy price (MSPEQ output multiplies this)
+  baseSellPrice: 0.58         # Base sell price (MSPEQ output multiplies this)
+  minProfitMargin: 0.05       # Minimum profit margin for sell orders
+
+  # Trading window
+  baseCutoffMinute: 30        # Base cutoff minute for hourly (MSPEQ can scale this)
+                              # Use ~10 for quarterly markets
+
+  # Signal configuration
+  candleSizeReference: 200   # Reference value for normalizing candle size
+
+  # Direction determination
+  directionThreshold: 0.5     # MSPEQ output >= this means UP, otherwise DOWN
+
+  # Momentum-specific parameters
+  baseMomentumThreshold: 0.15 # Minimum price move magnitude to trigger momentum signal
+                              # (distance from 0.5, e.g., 0.15 means UP token at 0.65+ or 0.35-)
+  baseMinWinStreak: 1         # Minimum consecutive wins in one direction to trigger entry
+                              # (higher = more conservative, waits for stronger trend)

@@ -27,7 +27,12 @@
       "Bash(while read file)",
       "Bash(do)",
       "Bash(echo:*)",
-      "Bash(done)"
+      "Bash(done)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:www.npmjs.com)",
+      "Bash(npx eslint:*)",
+      "Bash(npm search:*)"
     ]
   }
 }

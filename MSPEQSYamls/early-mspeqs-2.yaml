@@ -16,90 +16,54 @@ params:
   buyPrice_candleSize_w: 0
   buyPrice_candleSize_c0: 0.715980839390495
   buyPrice_candleSize_c1: 0.17494710178854195
-  buyPrice_candleSize_c2: 0.4742654349911186
-  buyPrice_candleSize_c3: -1
   buyPrice_volatility_w: 0
   buyPrice_volatility_c0: 0.8561326107807896
   buyPrice_volatility_c1: -0.8827154614873778
-  buyPrice_volatility_c2: -0.24611430015233632
-  buyPrice_volatility_c3: -0.1939215104026435
   buyPrice_momentum_w: 0
   buyPrice_momentum_c0: 0.7057954871336916
   buyPrice_momentum_c1: -0.7112433718103133
-  buyPrice_momentum_c2: 0.7637631333025454
-  buyPrice_momentum_c3: -0.451187806685159
   sellPrice_candleSize_w: 0
   sellPrice_candleSize_c0: 0.8655187106809484
   sellPrice_candleSize_c1: 0.37387998464508276
-  sellPrice_candleSize_c2: 0.0077218067468727905
-  sellPrice_candleSize_c3: -0.009422367221162298
   sellPrice_volatility_w: 1.1659019660654804
   sellPrice_volatility_c0: 0.9710665462184669
   sellPrice_volatility_c1: -0.7690964608198092
-  sellPrice_volatility_c2: 0.2480304022507016
-  sellPrice_volatility_c3: -0.06982738846889702
   sellPrice_momentum_w: 0.17131117428823905
   sellPrice_momentum_c0: 1.0063989549260712
   sellPrice_momentum_c1: -0.7941107615101902
-  sellPrice_momentum_c2: -0.3643765263349515
-  sellPrice_momentum_c3: -1
   cutoffMinute_candleSize_w: 0.6921882772887926
   cutoffMinute_candleSize_c0: 0.8
   cutoffMinute_candleSize_c1: 1
-  cutoffMinute_candleSize_c2: -0.5011932090790832
-  cutoffMinute_candleSize_c3: 0.276953685327856
   cutoffMinute_volatility_w: 0
   cutoffMinute_volatility_c0: 1.0121902526120914
   cutoffMinute_volatility_c1: 0.00790590113339168
-  cutoffMinute_volatility_c2: -0.5353094109072989
-  cutoffMinute_volatility_c3: -1
   cutoffMinute_momentum_w: 1.532644366088623
   cutoffMinute_momentum_c0: 0.8841453144537236
   cutoffMinute_momentum_c1: -1
-  cutoffMinute_momentum_c2: 1
-  cutoffMinute_momentum_c3: -0.6853344616801544
   btcDirection_candleSize_w: 0.7854124932447971
   btcDirection_candleSize_c0: 0.5721069719463425
   btcDirection_candleSize_c1: -0.09488784294449074
-  btcDirection_candleSize_c2: 0.17340475341076275
-  btcDirection_candleSize_c3: 0.0390676603339378
   btcDirection_volatility_w: 0.3092423494136794
   btcDirection_volatility_c0: 0.49096104479198976
   btcDirection_volatility_c1: 0.03878381238679118
-  btcDirection_volatility_c2: 0.4204829951096729
-  btcDirection_volatility_c3: -0.5
   btcDirection_momentum_w: 1
   btcDirection_momentum_c0: 0.5507848179263565
   btcDirection_momentum_c1: 0.4937415956630886
-  btcDirection_momentum_c2: 0.1364458035061556
-  btcDirection_momentum_c3: 0.24144048292762932
   earlySellTime_candleSize_w: 0.8759684962744395
   earlySellTime_candleSize_c0: 0.31553368861996167
   earlySellTime_candleSize_c1: -0.32423628305989194
-  earlySellTime_candleSize_c2: 0.08835311479820818
-  earlySellTime_candleSize_c3: 0.5
   earlySellTime_volatility_w: 0.868629984007112
   earlySellTime_volatility_c0: 0.32617487869719514
   earlySellTime_volatility_c1: 0.393218289002913
-  earlySellTime_volatility_c2: -0.33360796131060216
-  earlySellTime_volatility_c3: 0.1895714090919808
   earlySellTime_momentum_w: 0.46341964392144935
   earlySellTime_momentum_c0: 0.12496765829831404
   earlySellTime_momentum_c1: 0.2620184449669489
-  earlySellTime_momentum_c2: -0.5
-  earlySellTime_momentum_c3: 0.04506813800903181
   earlySellPrice_candleSize_w: 0
   earlySellPrice_candleSize_c0: 0.8
   earlySellPrice_candleSize_c1: -0.6443663777818225
-  earlySellPrice_candleSize_c2: -0.8725900558880961
-  earlySellPrice_candleSize_c3: -0.4273626559718622
   earlySellPrice_volatility_w: 0.9547913582879186
   earlySellPrice_volatility_c0: 1.2
   earlySellPrice_volatility_c1: 0.32435557858169894
-  earlySellPrice_volatility_c2: -0.48897490008665023
-  earlySellPrice_volatility_c3: -0.7438440631451289
   earlySellPrice_momentum_w: 1.8575690878990363
   earlySellPrice_momentum_c0: 0.9236767841249529
   earlySellPrice_momentum_c1: 0.5912106925536591
-  earlySellPrice_momentum_c2: 0.18789386762026394
-  earlySellPrice_momentum_c3: 0.22488484324792557

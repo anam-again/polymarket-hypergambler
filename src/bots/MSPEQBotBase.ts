@@ -62,6 +62,7 @@ export abstract class MSPEQBotBase extends QuantBot {
             periodLengthMs: this.marketSchedule === MarketSchedule.QUARTERLY
                 ? 15 * 60 * 1000
                 : 60 * 60 * 1000,
+            clock: this.clock,
         });
     }
 
@@ -133,6 +134,10 @@ export abstract class MSPEQBotBase extends QuantBot {
                 volatility: 0.5,
                 momentum: 0,
                 priceImbalance: 0,
+                rangePosition: 0.5,
+                trendStrength: 0,
+                volatilityTrend: 0,
+                hourOfDay: 0.5,
             };
         }
         return {
@@ -141,6 +146,10 @@ export abstract class MSPEQBotBase extends QuantBot {
             volatility: this.lastSignals.volatility,
             momentum: this.lastSignals.momentum,
             priceImbalance: this.lastSignals.priceImbalance,
+            rangePosition: this.lastSignals.rangePosition,
+            trendStrength: this.lastSignals.trendStrength,
+            volatilityTrend: this.lastSignals.volatilityTrend,
+            hourOfDay: this.lastSignals.hourOfDay,
         };
     }
 
@@ -149,7 +158,8 @@ export abstract class MSPEQBotBase extends QuantBot {
      * Should be called on period reset.
      */
     protected updateSignalProviderTiming(): void {
-        const now = Date.now();
+        // Use clock.now() for simulation compatibility
+        const now = this.clock.now();
         const periodLength = this.marketSchedule === MarketSchedule.QUARTERLY
             ? 15 * 60 * 1000
             : 60 * 60 * 1000;
@@ -178,5 +188,34 @@ export abstract class MSPEQBotBase extends QuantBot {
 
         // Reset signal provider period timing
         this.updateSignalProviderTiming();
+
+        // Seed signal provider with pre-period historical data for accurate signals
+        this.seedSignalProviderHistory();
+    }
+
+    /**
+     * Seeds the signal provider with historical price data from before the period.
+     * This ensures volatility/momentum signals are accurate from period start.
+     */
+    protected seedSignalProviderHistory(): void {
+        if (!(this.signalProvider instanceof HistoricalSignalProvider)) {
+            return;
+        }
+
+        try {
+            const cdMarketData = this.getCdMarketData();
+            // Get 10 minutes of historical data (covers volatility and momentum windows)
+            const recentPrices = cdMarketData.getRecentPrices(10, this.targetedMarket);
+
+            if (recentPrices.length > 0) {
+                const entries = recentPrices.map(entry => ({
+                    timestamp: entry.timestamp.getTime(),
+                    price: entry.price,
+                }));
+                (this.signalProvider as HistoricalSignalProvider).seedWithHistory(entries);
+            }
+        } catch {
+            // Silently fail - signal provider will accumulate data during period
+        }
     }
 }

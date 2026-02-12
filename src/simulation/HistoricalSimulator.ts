@@ -2,13 +2,27 @@ import { Side } from '@polymarket/clob-client';
 import { SimulationClock } from './SimulationClock.js';
 import { MockCDMarketData } from './MockCDMarketData.js';
 import { MockMarketInfo } from './MockMarketInfo.js';
-import { GeneticOptimizer, GeneticConfig, ParameterBounds, OptimizationResult, CoinType, ValidationResult, StabilityResult } from './GeneticOptimizer.js';
+import { GeneticOptimizer, CoinType } from './GeneticOptimizer.js';
+import type { GeneticConfig, ParameterBounds, OptimizationResult, ValidationResult, StabilityResult } from './GeneticOptimizer.js';
 import { SimulatorLogger } from './SimulatorLogger.js';
 import { TargetedMarket } from '../types/interfaces.js';
 
 // Re-export CoinType and TargetedMarket for convenience
 export { CoinType } from './GeneticOptimizer.js';
 export { TargetedMarket } from '../types/interfaces.js';
+
+// ============================================================================
+// ANSI Color Codes
+// ============================================================================
+
+const RESET = '\x1b[0m';
+const GREEN = '\x1b[32m';
+const RED = '\x1b[31m';
+const CYAN = '\x1b[36m';
+
+/** Colors a PnL value: green for positive, red for negative */
+const colorPnl = (value: number): string =>
+    value >= 0 ? `${GREEN}$${value.toFixed(2)}${RESET}` : `${RED}$${value.toFixed(2)}${RESET}`;
 
 // ============================================================================
 // Types & Interfaces
@@ -103,6 +117,10 @@ export interface SimulationResult {
     avgPnl: number;
     maxDrawdown: number;
     sharpeRatio: number;
+    /** Sortino ratio: avgReturn / downsideDeviation (only penalizes losses) */
+    sortinoRatio: number;
+    /** Calmar ratio: totalPnl / |maxDrawdown| (return per unit of max pain) */
+    calmarRatio: number;
 }
 
 // ============================================================================
@@ -174,6 +192,8 @@ export class HistoricalSimulator {
                 avgPnl: 0,
                 maxDrawdown: 0,
                 sharpeRatio: 0,
+                sortinoRatio: 0,
+                calmarRatio: 0,
             };
         }
 
@@ -191,6 +211,8 @@ export class HistoricalSimulator {
             avgPnl: avg(results.map(r => r.avgPnl)),
             maxDrawdown: avg(results.map(r => r.maxDrawdown)),
             sharpeRatio: avg(results.map(r => r.sharpeRatio)),
+            sortinoRatio: avg(results.map(r => r.sortinoRatio)),
+            calmarRatio: avg(results.map(r => r.calmarRatio)),
         };
     }
 
@@ -230,6 +252,19 @@ export class HistoricalSimulator {
         const stdDev = Math.sqrt(variance);
         const sharpeRatio = stdDev > 0 ? avgReturn / stdDev : 0;
 
+        // Calculate Sortino ratio (only penalizes downside deviation)
+        // Downside deviation = sqrt(mean of squared negative returns)
+        const negativeReturns = pnls.filter(pnl => pnl < 0);
+        const downsideVariance = negativeReturns.length > 0
+            ? negativeReturns.reduce((sum, pnl) => sum + Math.pow(pnl, 2), 0) / negativeReturns.length
+            : 0;
+        const downsideDeviation = Math.sqrt(downsideVariance);
+        const sortinoRatio = downsideDeviation > 0 ? avgReturn / downsideDeviation : (avgReturn > 0 ? 10 : 0);
+
+        // Calculate Calmar ratio (return per unit of max drawdown)
+        // Higher is better - means more return for the pain endured
+        const calmarRatio = maxDrawdown < 0 ? totalPnl / Math.abs(maxDrawdown) : (totalPnl > 0 ? 10 : 0);
+
         return {
             botName,
             params,
@@ -241,6 +276,8 @@ export class HistoricalSimulator {
             avgPnl: completedTrades.length > 0 ? totalPnl / completedTrades.length : 0,
             maxDrawdown,
             sharpeRatio,
+            sortinoRatio,
+            calmarRatio,
         };
     }
 
@@ -879,8 +916,8 @@ export class HistoricalSimulator {
         if (valConfig.enableWalkForward) {
             this.logger.log('\n[1/4] Running Walk-Forward Validation...');
             walkForwardResult = await this.runWalkForwardValidation(botName, botFactory, bestParams);
-            this.logger.log(`  Train PnL: $${walkForwardResult.trainPnl.toFixed(2)}`);
-            this.logger.log(`  Validation PnL: $${walkForwardResult.validationPnl.toFixed(2)}`);
+            this.logger.log(`  Train PnL: ${colorPnl(walkForwardResult.trainPnl)}`);
+            this.logger.log(`  Validation PnL: ${colorPnl(walkForwardResult.validationPnl)}`);
             const ratio = walkForwardResult.validationPnl / (walkForwardResult.trainPnl || 1);
             this.logger.log(`  Ratio (val/train): ${(ratio * 100).toFixed(1)}%`);
         }
@@ -890,8 +927,8 @@ export class HistoricalSimulator {
         if (valConfig.enableCrossPeriod) {
             this.logger.log('\n[2/4] Running Cross-Period Validation...');
             crossPeriodResult = await this.runCrossPeriodValidation(botName, botFactory, bestParams);
-            this.logger.log(`  Period PnLs: [${crossPeriodResult.pnls.map(p => `$${p.toFixed(2)}`).join(', ')}]`);
-            this.logger.log(`  Average: $${crossPeriodResult.avg.toFixed(2)}`);
+            this.logger.log(`  Period PnLs: [${crossPeriodResult.pnls.map(p => colorPnl(p)).join(', ')}]`);
+            this.logger.log(`  ${CYAN}Average${RESET}: ${colorPnl(crossPeriodResult.avg)}`);
             this.logger.log(`  Std Dev: $${crossPeriodResult.stdDev.toFixed(2)}`);
         }
 
@@ -900,7 +937,7 @@ export class HistoricalSimulator {
         if (valConfig.enableHoldout) {
             this.logger.log('\n[3/4] Running Out-of-Sample Holdout Validation...');
             holdoutPnl = await this.runHoldoutValidation(botName, botFactory, bestParams);
-            this.logger.log(`  Holdout PnL: $${holdoutPnl.toFixed(2)}`);
+            this.logger.log(`  Holdout PnL: ${colorPnl(holdoutPnl)}`);
             const holdoutRatio = holdoutPnl / (trainPnl || 1);
             this.logger.log(`  Ratio (holdout/train): ${(holdoutRatio * 100).toFixed(1)}%`);
         }
@@ -918,8 +955,8 @@ export class HistoricalSimulator {
             stabilityResult = await this.runStabilityTest(
                 botName, botFactory, optimizer, bestParams, trainPnl
             );
-            this.logger.log(`  Original PnL: $${stabilityResult.originalPnl.toFixed(2)}`);
-            this.logger.log(`  Avg Perturbed PnL: $${stabilityResult.avgPerturbedPnl.toFixed(2)}`);
+            this.logger.log(`  Original PnL: ${colorPnl(stabilityResult.originalPnl)}`);
+            this.logger.log(`  ${CYAN}Avg Perturbed PnL${RESET}: ${colorPnl(stabilityResult.avgPerturbedPnl)}`);
             this.logger.log(`  Stability Score: ${(stabilityResult.stabilityScore * 100).toFixed(1)}%`);
             this.logger.log(`  Is Stable: ${stabilityResult.isStable ? 'YES ✓' : 'NO ✗'}`);
         }

@@ -58,19 +58,29 @@ export class MockSignalProvider extends BaseSignalProvider {
     async getSignals(): Promise<SignalSnapshot> {
         const candleSize = this.getCandleSize();
         const timeLeft = this.getTimeLeft();
+        const hourOfDay = this.getHourOfDay();
 
         let volatility: number;
         let momentum: number;
         let priceImbalance: number;
+        let rangePosition: number;
+        let trendStrength: number;
+        let volatilityTrend: number;
 
         if (this.useRandomValues) {
             volatility = Math.random();
             momentum = Math.random() * 2 - 1;
             priceImbalance = Math.random() - 0.5;
+            rangePosition = Math.random();
+            trendStrength = Math.random() * 2 - 1;
+            volatilityTrend = Math.random() * 2 - 1;
         } else {
             volatility = this.mockValues.volatility ?? 0.5;
             momentum = this.mockValues.momentum ?? 0;
             priceImbalance = this.mockValues.priceImbalance ?? 0;
+            rangePosition = 0.5;
+            trendStrength = 0;
+            volatilityTrend = 0;
         }
 
         return {
@@ -79,6 +89,10 @@ export class MockSignalProvider extends BaseSignalProvider {
             volatility,
             momentum,
             priceImbalance,
+            rangePosition,
+            trendStrength,
+            volatilityTrend,
+            hourOfDay,
             timestamp: Date.now(),
         };
     }
@@ -143,6 +157,19 @@ export class HistoricalSignalProvider extends BaseSignalProvider {
     }
 
     /**
+     * Seeds the price history with historical data.
+     * Call this after clearHistory() to provide pre-period context for
+     * accurate volatility/momentum signals from the start of the period.
+     */
+    seedWithHistory(entries: Array<{ timestamp: number; price: number }>): void {
+        for (const entry of entries) {
+            this.priceHistory.push({ timestamp: entry.timestamp, price: entry.price });
+        }
+        // Sort by timestamp in case entries aren't ordered
+        this.priceHistory.sort((a, b) => a.timestamp - b.timestamp);
+    }
+
+    /**
      * Gets prices within a time window (in minutes).
      */
     private getPricesInWindow(windowMinutes: number): number[] {
@@ -196,6 +223,94 @@ export class HistoricalSignalProvider extends BaseSignalProvider {
         return Math.max(-0.5, Math.min(0.5, imbalance));
     }
 
+    /**
+     * Computes range position: where current price sits in recent high/low range.
+     * Like Stochastic oscillator: 0 = at low, 1 = at high.
+     */
+    private computeRangePosition(): number {
+        const prices = this.getPricesInWindow(this.volatilityWindowMinutes);
+        if (prices.length < 2) return 0.5;
+
+        const high = Math.max(...prices);
+        const low = Math.min(...prices);
+        const current = prices[prices.length - 1];
+
+        const range = high - low;
+        if (range === 0) return 0.5;
+
+        return Math.max(0, Math.min(1, (current - low) / range));
+    }
+
+    /**
+     * Computes trend strength using linear regression slope.
+     * Positive = uptrend, negative = downtrend, normalized to -1 to 1.
+     */
+    private computeTrendStrength(): number {
+        const prices = this.getPricesInWindow(this.momentumWindowMinutes);
+        if (prices.length < 3) return 0;
+
+        // Simple linear regression
+        const n = prices.length;
+        let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+
+        for (let i = 0; i < n; i++) {
+            sumX += i;
+            sumY += prices[i];
+            sumXY += i * prices[i];
+            sumX2 += i * i;
+        }
+
+        const denominator = n * sumX2 - sumX * sumX;
+        if (denominator === 0) return 0;
+
+        const slope = (n * sumXY - sumX * sumY) / denominator;
+        const meanPrice = sumY / n;
+
+        // Normalize slope relative to mean price (slope per data point as % of price)
+        // Multiply by n to get total change over window, then normalize
+        if (meanPrice === 0) return 0;
+        const normalizedSlope = (slope * n) / meanPrice;
+
+        // Scale to -1 to 1 (assume 5% total change is max expected)
+        return Math.max(-1, Math.min(1, normalizedSlope / 0.05));
+    }
+
+    /**
+     * Computes volatility trend: is volatility increasing or decreasing?
+     * Compares recent volatility to older volatility.
+     * Positive = increasing, negative = decreasing, range -1 to 1.
+     */
+    private computeVolatilityTrend(): number {
+        // Need enough data for two volatility windows
+        const halfWindow = Math.floor(this.volatilityWindowMinutes / 2);
+        if (halfWindow < 1) return 0;
+
+        const allPrices = this.getPricesInWindow(this.volatilityWindowMinutes);
+        if (allPrices.length < 4) return 0;
+
+        const midPoint = Math.floor(allPrices.length / 2);
+        const olderPrices = allPrices.slice(0, midPoint);
+        const newerPrices = allPrices.slice(midPoint);
+
+        const computeStdDev = (prices: number[]): number => {
+            if (prices.length < 2) return 0;
+            const mean = prices.reduce((a, b) => a + b, 0) / prices.length;
+            const variance = prices.reduce((sum, p) => sum + Math.pow(p - mean, 2), 0) / prices.length;
+            return Math.sqrt(variance);
+        };
+
+        const olderVol = computeStdDev(olderPrices);
+        const newerVol = computeStdDev(newerPrices);
+
+        if (olderVol === 0) return newerVol > 0 ? 1 : 0;
+
+        // Compute % change in volatility
+        const volChange = (newerVol - olderVol) / olderVol;
+
+        // Normalize to -1 to 1 (assume 50% change is significant)
+        return Math.max(-1, Math.min(1, volChange / 0.5));
+    }
+
     async getSignals(): Promise<SignalSnapshot> {
         return {
             candleSize: this.getCandleSize(),
@@ -203,6 +318,10 @@ export class HistoricalSignalProvider extends BaseSignalProvider {
             volatility: this.computeVolatility(),
             momentum: this.computeMomentum(),
             priceImbalance: this.computePriceImbalance(),
+            rangePosition: this.computeRangePosition(),
+            trendStrength: this.computeTrendStrength(),
+            volatilityTrend: this.computeVolatilityTrend(),
+            hourOfDay: this.getHourOfDay(),
             timestamp: Date.now(),
         };
     }

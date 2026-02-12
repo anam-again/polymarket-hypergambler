@@ -24,6 +24,7 @@ export interface GeneticConfig {
     // Anti-overfitting settings
     minTradeCount: number;           // Minimum trades required (default: 10)
     minTradePenalty: number;         // Penalty multiplier when below minTradeCount (default: 0.5)
+    fitnessMode: FitnessMode;        // Primary metric for optimization (default: 'sortino')
     fitnessWeights: FitnessWeights;  // Weights for multi-metric fitness
     diversityThreshold: number;      // Min population diversity before injection (default: 0.1)
     diversityInjectionRate: number;  // Fraction of population to replace if low diversity (default: 0.2)
@@ -36,9 +37,20 @@ export interface GeneticConfig {
     requireValidation: boolean;      // Require validation before returning results (default: true)
 }
 
+/**
+ * Fitness mode determines the primary metric for optimization.
+ * - 'pnl': Optimize raw PnL (can overfit to lucky volatile strategies)
+ * - 'sharpe': Optimize Sharpe ratio (penalizes all volatility)
+ * - 'sortino': Optimize Sortino ratio (only penalizes downside volatility) - RECOMMENDED
+ * - 'calmar': Optimize return/drawdown ratio (focuses on avoiding large drawdowns)
+ */
+export type FitnessMode = 'pnl' | 'sharpe' | 'sortino' | 'calmar';
+
 export interface FitnessWeights {
     pnl: number;              // Weight for total PnL (default: 1.0)
     sharpe: number;           // Weight for Sharpe ratio (default: 0.5)
+    sortino: number;          // Weight for Sortino ratio (default: 0.0)
+    calmar: number;           // Weight for Calmar ratio (default: 0.0)
     drawdownPenalty: number;  // Penalty multiplier for max drawdown (default: 0.3)
     winRate: number;          // Weight for win rate (default: 0.2)
     consistency: number;      // Weight for PnL consistency (low variance) (default: 0.2)
@@ -60,6 +72,8 @@ export interface Individual {
     // Extended metrics for analysis
     rawPnl?: number;
     sharpeRatio?: number;
+    sortinoRatio?: number;
+    calmarRatio?: number;
     maxDrawdown?: number;
     winRate?: number;
     tradeCount?: number;
@@ -127,12 +141,16 @@ export class GeneticOptimizer {
      * Use this helper when you want default values.
      */
     public static createConfig(overrides: Partial<GeneticConfig> = {}): GeneticConfig {
+        // Default weights for multi-metric fitness
+        // When fitnessMode is set, these weights are used as secondary factors
         const defaultFitnessWeights: FitnessWeights = {
-            pnl: 1.0,
-            sharpe: 0.5,
-            drawdownPenalty: 0.3,
-            winRate: 0.2,
-            consistency: 0.2,
+            pnl: 0.3,           // Reduced - raw PnL is less important with risk-adjusted mode
+            sharpe: 0.2,        // Sharpe as secondary signal
+            sortino: 0.0,       // Primary metric handled by fitnessMode
+            calmar: 0.0,        // Primary metric handled by fitnessMode
+            drawdownPenalty: 0.5, // Increased - penalize large drawdowns
+            winRate: 0.1,       // Minor factor
+            consistency: 0.2,   // Reward consistent returns
         };
 
         return {
@@ -146,6 +164,7 @@ export class GeneticOptimizer {
             crossoverRate: overrides.crossoverRate ?? 0.7,
             minTradeCount: overrides.minTradeCount ?? 10,
             minTradePenalty: overrides.minTradePenalty ?? 0.5,
+            fitnessMode: overrides.fitnessMode ?? 'sortino',  // Default to Sortino (risk-adjusted)
             fitnessWeights: overrides.fitnessWeights ?? defaultFitnessWeights,
             diversityThreshold: overrides.diversityThreshold ?? 0.1,
             diversityInjectionRate: overrides.diversityInjectionRate ?? 0.2,
@@ -191,6 +210,8 @@ export class GeneticOptimizer {
             // Store raw metrics for analysis
             individual.rawPnl = result.totalPnl;
             individual.sharpeRatio = result.sharpeRatio;
+            individual.sortinoRatio = result.sortinoRatio;
+            individual.calmarRatio = result.calmarRatio;
             individual.maxDrawdown = result.maxDrawdown;
             individual.winRate = result.winRate;
             individual.tradeCount = result.matchedTrades + result.expiredTrades;
@@ -219,29 +240,80 @@ export class GeneticOptimizer {
     }
 
     /**
-     * Calculates multi-metric fitness score.
+     * Calculates multi-metric fitness score based on fitnessMode.
+     *
+     * The fitnessMode determines the PRIMARY metric:
+     * - 'pnl': Raw total PnL (original behavior)
+     * - 'sharpe': Risk-adjusted returns (penalizes all volatility)
+     * - 'sortino': Risk-adjusted returns (only penalizes downside volatility) - RECOMMENDED
+     * - 'calmar': Return per unit of max drawdown (focuses on avoiding large losses)
+     *
+     * Secondary factors (from fitnessWeights) are added to fine-tune selection.
      */
     private calculateMultiMetricFitness(result: SimulationResult, tradeCount: number): number {
         const w = this.config.fitnessWeights;
+        const mode = this.config.fitnessMode;
 
-        // Base fitness from PnL
-        let fitness = result.totalPnl * w.pnl;
+        // =====================================================================
+        // PRIMARY FITNESS: Based on fitnessMode
+        // =====================================================================
+        // Scale ratios to be comparable to PnL values (~$10-100 range)
+        const RATIO_SCALE = 20;  // Sortino/Sharpe of 1.0 → 20 fitness points
+        const CALMAR_SCALE = 10; // Calmar of 1.0 → 10 fitness points
 
-        // Add Sharpe ratio contribution (normalize to similar scale as PnL)
-        // Sharpe typically ranges from -2 to +3, so scale by 10
-        fitness += result.sharpeRatio * 10 * w.sharpe;
+        let primaryFitness: number;
+        switch (mode) {
+            case 'sharpe':
+                // Sharpe ratio: avgReturn / stdDev
+                // Good strategies have Sharpe > 1, excellent > 2
+                primaryFitness = result.sharpeRatio * RATIO_SCALE;
+                break;
+            case 'sortino':
+                // Sortino ratio: avgReturn / downsideDeviation
+                // Better than Sharpe because it doesn't penalize upside volatility
+                primaryFitness = result.sortinoRatio * RATIO_SCALE;
+                break;
+            case 'calmar':
+                // Calmar ratio: totalPnl / |maxDrawdown|
+                // Good for avoiding strategies with large drawdowns
+                primaryFitness = result.calmarRatio * CALMAR_SCALE;
+                break;
+            case 'pnl':
+            default:
+                // Raw PnL (original behavior)
+                primaryFitness = result.totalPnl;
+                break;
+        }
+
+        // =====================================================================
+        // SECONDARY FACTORS: Fine-tune beyond primary metric
+        // =====================================================================
+        let secondaryFitness = 0;
+
+        // Add weighted contributions from other metrics
+        secondaryFitness += result.totalPnl * w.pnl;
+        secondaryFitness += result.sharpeRatio * 10 * w.sharpe;
+        secondaryFitness += result.sortinoRatio * 10 * w.sortino;
+        secondaryFitness += result.calmarRatio * 5 * w.calmar;
 
         // Penalize drawdown (drawdown is negative, so this subtracts)
-        fitness += result.maxDrawdown * w.drawdownPenalty;
+        secondaryFitness += result.maxDrawdown * w.drawdownPenalty;
 
         // Add win rate contribution (0-100, scale down)
-        fitness += result.winRate * 0.1 * w.winRate;
+        secondaryFitness += result.winRate * 0.1 * w.winRate;
 
-        // Penalize high variance (reward consistency)
-        // Use inverse of avgPnl standard deviation if available
-        const consistency = result.sharpeRatio > 0 ? result.sharpeRatio : 0;
-        fitness += consistency * 5 * w.consistency;
+        // Reward consistency (low variance of returns)
+        const consistency = Math.max(result.sharpeRatio, result.sortinoRatio, 0);
+        secondaryFitness += consistency * 5 * w.consistency;
 
+        // =====================================================================
+        // COMBINE: Primary (70%) + Secondary (30%)
+        // =====================================================================
+        let fitness = primaryFitness * 0.7 + secondaryFitness * 0.3;
+
+        // =====================================================================
+        // PENALTIES
+        // =====================================================================
         // Apply minimum trade count penalty
         if (tradeCount < this.config.minTradeCount) {
             const penaltyRatio = tradeCount / this.config.minTradeCount;
@@ -253,7 +325,6 @@ export class GeneticOptimizer {
         }
 
         // Safety: clamp fitness to reasonable bounds and handle invalid values
-        // This prevents extreme values from corrupting the optimization
         const MAX_REASONABLE_FITNESS = 100000;
         if (isNaN(fitness) || !isFinite(fitness)) {
             fitness = -1000;
@@ -574,14 +645,24 @@ export class GeneticOptimizer {
     }
 
     private printGenerationStats(stats: GenerationStats): void {
+        // ANSI color codes
+        const RESET = '\x1b[0m';
+        const GREEN = '\x1b[32m';
+        const RED = '\x1b[31m';
+        const CYAN = '\x1b[36m';
+        const YELLOW = '\x1b[33m';
+
         const improvementStr = stats.improvement >= 0
-            ? `+${stats.improvement.toFixed(2)}`
-            : stats.improvement.toFixed(2);
+            ? `${GREEN}+${stats.improvement.toFixed(2)}${RESET}`
+            : `${RED}${stats.improvement.toFixed(2)}${RESET}`;
+
+        const bestColor = stats.bestFitness >= 0 ? GREEN : RED;
+        const avgColor = stats.avgFitness >= 0 ? YELLOW : RED;
 
         this.logger.log(
             `  Gen ${stats.generation.toString().padStart(3)}: ` +
-            `Best=$${stats.bestFitness.toFixed(2)} ` +
-            `Avg=$${stats.avgFitness.toFixed(2)} ` +
+            `${CYAN}Best${RESET}=${bestColor}$${stats.bestFitness.toFixed(2)}${RESET} ` +
+            `${CYAN}Avg${RESET}=${avgColor}$${stats.avgFitness.toFixed(2)}${RESET} ` +
             `(${improvementStr})`
         );
     }
@@ -653,19 +734,32 @@ export class GeneticOptimizer {
     public printSummary(): void {
         const result = this.getResult();
 
-        this.logger.log(`\n${'='.repeat(60)}`);
-        this.logger.log('GENETIC OPTIMIZATION RESULTS');
-        this.logger.log(`${'='.repeat(60)}`);
+        // ANSI color codes
+        const RESET = '\x1b[0m';
+        const GREEN = '\x1b[32m';
+        const RED = '\x1b[31m';
+        const CYAN = '\x1b[36m';
+        const YELLOW = '\x1b[33m';
+        const BOLD = '\x1b[1m';
+
+        const colorPnl = (value: number) => value >= 0 ? `${GREEN}$${value.toFixed(2)}${RESET}` : `${RED}$${value.toFixed(2)}${RESET}`;
+
+        this.logger.log(`\n${CYAN}${'='.repeat(60)}${RESET}`);
+        this.logger.log(`${BOLD}${CYAN}GENETIC OPTIMIZATION RESULTS${RESET}`);
+        this.logger.log(`${CYAN}${'='.repeat(60)}${RESET}`);
 
         this.logger.log(`\nConvergence: ${result.convergenceReason}`);
         this.logger.log(`Total Generations: ${result.totalGenerations}`);
 
-        this.logger.log(`\nBest Individual:`);
+        this.logger.log(`\n${BOLD}Best Individual:${RESET}`);
+        this.logger.log(`  Fitness Mode: ${this.config.fitnessMode}`);
         this.logger.log(`  Composite Fitness: ${result.bestIndividual.fitness.toFixed(2)}`);
-        this.logger.log(`  Raw PnL: $${(result.bestIndividual.rawPnl ?? 0).toFixed(2)}`);
+        this.logger.log(`  ${CYAN}Raw PnL${RESET}: ${colorPnl(result.bestIndividual.rawPnl ?? 0)}`);
         this.logger.log(`  Sharpe Ratio: ${(result.bestIndividual.sharpeRatio ?? 0).toFixed(3)}`);
-        this.logger.log(`  Max Drawdown: $${(result.bestIndividual.maxDrawdown ?? 0).toFixed(2)}`);
-        this.logger.log(`  Win Rate: ${(result.bestIndividual.winRate ?? 0).toFixed(1)}%`);
+        this.logger.log(`  ${CYAN}Sortino Ratio${RESET}: ${(result.bestIndividual.sortinoRatio ?? 0).toFixed(3)}`);
+        this.logger.log(`  Calmar Ratio: ${(result.bestIndividual.calmarRatio ?? 0).toFixed(3)}`);
+        this.logger.log(`  Max Drawdown: ${RED}$${(result.bestIndividual.maxDrawdown ?? 0).toFixed(2)}${RESET}`);
+        this.logger.log(`  Win Rate: ${YELLOW}${(result.bestIndividual.winRate ?? 0).toFixed(1)}%${RESET}`);
         this.logger.log(`  Trade Count: ${result.bestIndividual.tradeCount ?? 0}`);
         this.logger.log(`  Found in Generation: ${result.bestIndividual.generation}`);
         this.logger.log(`  Parameters:`);
@@ -679,11 +773,12 @@ export class GeneticOptimizer {
             const firstGen = this.generationHistory[0];
             const lastGen = this.generationHistory[this.generationHistory.length - 1];
             const totalImprovement = lastGen.bestFitness - firstGen.bestFitness;
+            const improvementColor = totalImprovement >= 0 ? GREEN : RED;
 
-            this.logger.log(`\nImprovement Over Optimization:`);
-            this.logger.log(`  Initial Best PnL: $${firstGen.bestFitness.toFixed(2)}`);
-            this.logger.log(`  Final Best PnL:   $${lastGen.bestFitness.toFixed(2)}`);
-            this.logger.log(`  Total Improvement: $${totalImprovement.toFixed(2)} (${((totalImprovement / Math.abs(firstGen.bestFitness || 1)) * 100).toFixed(1)}%)`);
+            this.logger.log(`\n${BOLD}Improvement Over Optimization:${RESET}`);
+            this.logger.log(`  Initial Best PnL: ${colorPnl(firstGen.bestFitness)}`);
+            this.logger.log(`  Final Best PnL:   ${colorPnl(lastGen.bestFitness)}`);
+            this.logger.log(`  Total Improvement: ${improvementColor}$${totalImprovement.toFixed(2)} (${((totalImprovement / Math.abs(firstGen.bestFitness || 1)) * 100).toFixed(1)}%)${RESET}`);
         }
     }
 }

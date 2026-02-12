@@ -144,6 +144,81 @@ export class LiveSignalProvider extends BaseSignalProvider {
         }
     }
 
+    /**
+     * Computes range position: where current price sits in recent high/low range.
+     * Like Stochastic oscillator: 0 = at low, 1 = at high.
+     */
+    private computeRangePosition(): number {
+        const prices = this.getPricesInWindow(this.volatilityWindowMinutes);
+        if (prices.length < 2) return 0.5;
+
+        const high = Math.max(...prices);
+        const low = Math.min(...prices);
+        const current = prices[prices.length - 1];
+
+        const range = high - low;
+        if (range === 0) return 0.5;
+
+        return Math.max(0, Math.min(1, (current - low) / range));
+    }
+
+    /**
+     * Computes trend strength using linear regression slope.
+     * Positive = uptrend, negative = downtrend, normalized to -1 to 1.
+     */
+    private computeTrendStrength(): number {
+        const prices = this.getPricesInWindow(this.momentumWindowMinutes);
+        if (prices.length < 3) return 0;
+
+        const n = prices.length;
+        let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+
+        for (let i = 0; i < n; i++) {
+            sumX += i;
+            sumY += prices[i];
+            sumXY += i * prices[i];
+            sumX2 += i * i;
+        }
+
+        const denominator = n * sumX2 - sumX * sumX;
+        if (denominator === 0) return 0;
+
+        const slope = (n * sumXY - sumX * sumY) / denominator;
+        const meanPrice = sumY / n;
+
+        if (meanPrice === 0) return 0;
+        const normalizedSlope = (slope * n) / meanPrice;
+
+        return Math.max(-1, Math.min(1, normalizedSlope / 0.05));
+    }
+
+    /**
+     * Computes volatility trend: is volatility increasing or decreasing?
+     */
+    private computeVolatilityTrend(): number {
+        const allPrices = this.getPricesInWindow(this.volatilityWindowMinutes);
+        if (allPrices.length < 4) return 0;
+
+        const midPoint = Math.floor(allPrices.length / 2);
+        const olderPrices = allPrices.slice(0, midPoint);
+        const newerPrices = allPrices.slice(midPoint);
+
+        const computeStdDev = (prices: number[]): number => {
+            if (prices.length < 2) return 0;
+            const mean = prices.reduce((a, b) => a + b, 0) / prices.length;
+            const variance = prices.reduce((sum, p) => sum + Math.pow(p - mean, 2), 0) / prices.length;
+            return Math.sqrt(variance);
+        };
+
+        const olderVol = computeStdDev(olderPrices);
+        const newerVol = computeStdDev(newerPrices);
+
+        if (olderVol === 0) return newerVol > 0 ? 1 : 0;
+
+        const volChange = (newerVol - olderVol) / olderVol;
+        return Math.max(-1, Math.min(1, volChange / 0.5));
+    }
+
     async getSignals(): Promise<SignalSnapshot> {
         await this.updatePriceHistory();
 
@@ -155,6 +230,10 @@ export class LiveSignalProvider extends BaseSignalProvider {
             volatility: this.computeVolatility(),
             momentum: this.computeMomentum(),
             priceImbalance,
+            rangePosition: this.computeRangePosition(),
+            trendStrength: this.computeTrendStrength(),
+            volatilityTrend: this.computeVolatilityTrend(),
+            hourOfDay: this.getHourOfDay(),
             timestamp: Date.now(),
         };
     }

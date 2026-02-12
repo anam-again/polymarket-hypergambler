@@ -27,6 +27,8 @@ export interface FirstCandleMSPEQProps extends MSPEQBotProps {
     targetSellPriceMSPEQ: MultiSignalPEQConfig;
     earlySellTimeMSPEQ: MultiSignalPEQConfig;
     earlySellPriceMSPEQ: MultiSignalPEQConfig;
+    breakoutBufferMSPEQ: MultiSignalPEQConfig;
+    pullbackBufferMSPEQ: MultiSignalPEQConfig;
 }
 
 type TradingState =
@@ -73,6 +75,8 @@ export class FirstCandleMSPEQ extends MSPEQBotBase implements QuantBotRun {
     private targetSellPriceMSPEQ: MultiSignalPEQ;
     private earlySellTimeMSPEQ: MultiSignalPEQ;
     private earlySellPriceMSPEQ: MultiSignalPEQ;
+    private breakoutBufferMSPEQ: MultiSignalPEQ;
+    private pullbackBufferMSPEQ: MultiSignalPEQ;
 
     // --- Trading State ---
     private actualBuyPrice: number = 0;
@@ -102,6 +106,8 @@ export class FirstCandleMSPEQ extends MSPEQBotBase implements QuantBotRun {
         this.targetSellPriceMSPEQ = new MultiSignalPEQ(props.targetSellPriceMSPEQ);
         this.earlySellTimeMSPEQ = new MultiSignalPEQ(props.earlySellTimeMSPEQ);
         this.earlySellPriceMSPEQ = new MultiSignalPEQ(props.earlySellPriceMSPEQ);
+        this.breakoutBufferMSPEQ = new MultiSignalPEQ(props.breakoutBufferMSPEQ);
+        this.pullbackBufferMSPEQ = new MultiSignalPEQ(props.pullbackBufferMSPEQ);
     }
 
     // --- Main Run Loop ---
@@ -227,8 +233,12 @@ export class FirstCandleMSPEQ extends MSPEQBotBase implements QuantBotRun {
     }
 
     private handleWaitingBreakout(currentPrice: number): void {
-        const brokeAbove = currentPrice > this.candleHigh + this.breakoutBuffer;
-        const brokeBelow = currentPrice < this.candleLow - this.breakoutBuffer;
+        const signals = this.getSignalRecord();
+        const dynamicBreakoutBuffer = this.breakoutBuffer *
+            this.breakoutBufferMSPEQ.compute(signals);
+
+        const brokeAbove = currentPrice > this.candleHigh + dynamicBreakoutBuffer;
+        const brokeBelow = currentPrice < this.candleLow - dynamicBreakoutBuffer;
 
         if (brokeAbove) {
             this.breakoutDirection = 'UP';
@@ -236,7 +246,7 @@ export class FirstCandleMSPEQ extends MSPEQBotBase implements QuantBotRun {
             this.state = 'WAITING_PULLBACK';
             this.writeLog(
                 `Breakout UP detected at ${currentPrice.toFixed(2)}, ` +
-                `waiting for pullback to ${this.candleHigh.toFixed(2)}`
+                `waiting for pullback to ${this.candleHigh.toFixed(2)} (buffer=${dynamicBreakoutBuffer.toFixed(2)})`
             );
         } else if (brokeBelow) {
             this.breakoutDirection = 'DOWN';
@@ -244,7 +254,7 @@ export class FirstCandleMSPEQ extends MSPEQBotBase implements QuantBotRun {
             this.state = 'WAITING_PULLBACK';
             this.writeLog(
                 `Breakout DOWN detected at ${currentPrice.toFixed(2)}, ` +
-                `waiting for pullback to ${this.candleLow.toFixed(2)}`
+                `waiting for pullback to ${this.candleLow.toFixed(2)} (buffer=${dynamicBreakoutBuffer.toFixed(2)})`
             );
         }
     }
@@ -266,12 +276,16 @@ export class FirstCandleMSPEQ extends MSPEQBotBase implements QuantBotRun {
     private checkPullbackConfirmation(currentPrice: number): boolean {
         if (!this.breakoutDirection || !this.breakoutConfirmedPrice) return false;
 
+        const signals = this.getSignalRecord();
+        const dynamicPullbackBuffer = this.pullbackBuffer *
+            this.pullbackBufferMSPEQ.compute(signals);
+
         if (this.breakoutDirection === 'UP') {
-            const pullbackToSupport = Math.abs(currentPrice - this.breakoutConfirmedPrice) <= this.pullbackBuffer;
+            const pullbackToSupport = Math.abs(currentPrice - this.breakoutConfirmedPrice) <= dynamicPullbackBuffer;
             const stillAboveSupport = currentPrice >= this.breakoutConfirmedPrice;
             return pullbackToSupport && stillAboveSupport;
         } else {
-            const pullbackToResistance = Math.abs(currentPrice - this.breakoutConfirmedPrice) <= this.pullbackBuffer;
+            const pullbackToResistance = Math.abs(currentPrice - this.breakoutConfirmedPrice) <= dynamicPullbackBuffer;
             const stillBelowResistance = currentPrice <= this.breakoutConfirmedPrice;
             return pullbackToResistance && stillBelowResistance;
         }

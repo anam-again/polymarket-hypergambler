@@ -478,7 +478,19 @@ export class SimulatorLogger {
      * Updates status bar with simulation progress.
      */
     public updateSimulationStatus(generation: number, individual: number, totalIndividuals: number, topPnl: number, avgPnl: number): void {
-        const status = `Gen: ${generation} | Individual: ${individual}/${totalIndividuals} | Top PnL: $${topPnl.toFixed(2)} | Avg PnL: $${avgPnl.toFixed(2)}`;
+        // ANSI color codes
+        const RESET = '\x1b[0m';
+        const GREEN = '\x1b[32m';
+        const RED = '\x1b[31m';
+        const CYAN = '\x1b[36m';
+        const YELLOW = '\x1b[33m';
+
+        const topColor = topPnl >= 0 ? GREEN : RED;
+        const avgColor = avgPnl >= 0 ? YELLOW : RED;
+
+        const status = `Gen: ${generation} | Individual: ${individual}/${totalIndividuals} | ` +
+            `${CYAN}Top PnL${RESET}: ${topColor}$${topPnl.toFixed(2)}${RESET} | ` +
+            `${CYAN}Avg PnL${RESET}: ${avgColor}$${avgPnl.toFixed(2)}${RESET}`;
         this.updateStatusBar(status);
     }
 
