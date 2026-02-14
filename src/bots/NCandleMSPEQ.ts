@@ -231,6 +231,9 @@ export class NCandleMSPEQ extends MSPEQBotBase implements QuantBotRun {
         // Update signals first
         await this.updateSignals();
 
+        // Update regime for TradeGate evaluation
+        this.updateRegime();
+
         await this.updateOrders();
 
         // Track when buy order gets matched
@@ -295,6 +298,11 @@ export class NCandleMSPEQ extends MSPEQBotBase implements QuantBotRun {
 
         // Check if we can still trade this hour
         if (!this.canTradeThisHour(this.maxTradesPerHour)) {
+            return;
+        }
+
+        // Check TradeGate before new trade entry
+        if (!this.shouldTrade() && this.state !== 'TRADE_ACTIVE') {
             return;
         }
 

@@ -349,6 +349,37 @@ export class MarketInfo {
     }
 
     /**
+     * Gets the midpoint price for a token (average of best bid and best ask).
+     * @param clobTokenId - The CLOB token ID to get the midpoint for.
+     * @param market - The targeted market.
+     * @returns The midpoint price, or 0.5 if no bids/asks available.
+     */
+    public async getMidPrice(clobTokenId: string, market: TargetedMarket): Promise<number> {
+        const liveData = await this.getLiveData(market);
+
+        // Determine which token we're looking at
+        let orderBook: { bids: { price: string; size: string }[]; asks: { price: string; size: string }[] };
+        if (clobTokenId === liveData.BtcUpTokenId) {
+            orderBook = liveData.BtcUp;
+        } else if (clobTokenId === liveData.BtcDownTokenId) {
+            orderBook = liveData.BtcDown;
+        } else {
+            // Token not found in current period's order books
+            return 0.5;
+        }
+
+        // Get best bid (highest) and best ask (lowest)
+        const bestBid = orderBook.bids.length > 0
+            ? parseFloat(orderBook.bids[orderBook.bids.length - 1].price)
+            : 0;
+        const bestAsk = orderBook.asks.length > 0
+            ? parseFloat(orderBook.asks[orderBook.asks.length - 1].price)
+            : 1;
+
+        return (bestBid + bestAsk) / 2;
+    }
+
+    /**
      * Fetches the CLOB token IDs for the Bitcoin hourly market at a given timestamp.
      * This function does not cache the result.
      * @param timestamp - The timestamp in milliseconds since epoch.

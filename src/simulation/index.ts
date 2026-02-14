@@ -9,6 +9,7 @@ import {
 } from './HistoricalSimulator.js';
 import { TargetedMarket } from '../types/interfaces.js';
 import { SimulatorLogger } from './SimulatorLogger.js';
+import { getBaseType, getBaseParamNames } from '../strategies/index.js';
 
 // Import optimization module
 import {
@@ -26,6 +27,36 @@ const CYAN = '\x1b[36m';
 /** Colors a PnL value: green for positive, red for negative */
 const colorPnl = (value: number): string =>
     value >= 0 ? `${GREEN}$${value.toFixed(2)}${RESET}` : `${RED}$${value.toFixed(2)}${RESET}`;
+
+/**
+ * Converts TargetedMarket enum value to legacy market string format.
+ * e.g., "BitcoinQuarterly" -> "btc-quarterly"
+ */
+function targetedMarketToLegacyFormat(market: string): string {
+    const mapping: Record<string, string> = {
+        'BitcoinQuarterly': 'btc-quarterly',
+        'EthereumQuarterly': 'eth-quarterly',
+        'SolanaQuarterly': 'sol-quarterly',
+        'XrpQuarterly': 'xrp-quarterly',
+        'BitcoinHourly': 'btc-hourly',
+        'EthereumHourly': 'eth-hourly',
+        'SolanaHourly': 'sol-hourly',
+        'XrpHourly': 'xrp-hourly',
+    };
+    return mapping[market] || market.toLowerCase();
+}
+
+/**
+ * Extracts coin type from market string.
+ */
+function extractCoinFromMarket(market: string): string {
+    const marketLower = market.toLowerCase();
+    if (marketLower.includes('btc') || marketLower.includes('bitcoin')) return 'btc';
+    if (marketLower.includes('eth') || marketLower.includes('ethereum')) return 'eth';
+    if (marketLower.includes('sol') || marketLower.includes('solana')) return 'sol';
+    if (marketLower.includes('xrp')) return 'xrp';
+    return 'btc';
+}
 
 // Import strategy definitions (bounds, factories, geneticStrategies)
 import {
@@ -262,6 +293,7 @@ interface TwoStageConfig {
     auditTradesCount: number;
     isQuarterly: boolean;
     fitnessMode?: 'pnl' | 'sharpe' | 'sortino' | 'calmar';
+    minTrades?: number;  // Minimum trades required (default: 20). Strategies below this get severe penalty.
 }
 
 /**
@@ -482,6 +514,7 @@ interface IterativeOptimizationConfig {
     stage2Optimizer: OptimizerType;
     optimizerOverride?: OptimizerType;
     fitnessMode?: 'pnl' | 'sharpe' | 'sortino' | 'calmar';
+    minTrades?: number;  // Minimum trades required (default: 20). Strategies below this get severe penalty.
 }
 
 /**
@@ -537,44 +570,68 @@ async function runIterativeOptimization(config: IterativeOptimizationConfig): Pr
         auditTradesCount: config.auditTradesCount,
     });
 
-    // Create evaluation function with risk-adjusted fitness
-    const calculateFitness = (result: SimulationResult): number => {
+    // Create evaluation function with risk-adjusted fitness and trade activity requirements
+    const minTrades = config.minTrades ?? 20;
+    const calculateFitness = (result: SimulationResult, tradeCount: number): number => {
         const mode = config.fitnessMode ?? 'sortino';
         const RATIO_SCALE = 20;
         const CALMAR_SCALE = 10;
+        const NO_TRADE_PENALTY = -1000;
+        const TRADE_BONUS_SCALE = 0;
+        const TRADE_BONUS_CAP = 0;
 
+        // Hard penalty for strategies that don't trade enough
+        // This ensures "do nothing" is always worse than "trade and lose moderately"
+        if (tradeCount < minTrades) {
+            return NO_TRADE_PENALTY;
+        }
+
+        // Trade activity bonus: rewards finding trading opportunities
+        // log(1 + 100) * 1 ≈ 4.6, log(1 + 500) * 1 ≈ 6.2, capped at 0 for now (no bonus)
+        const tradeBonus = Math.min(TRADE_BONUS_CAP, Math.log(1 + tradeCount) * TRADE_BONUS_SCALE);
+
+        // Base fitness from risk-adjusted metric
+        let baseFitness: number;
         switch (mode) {
             case 'sharpe':
-                return result.sharpeRatio * RATIO_SCALE;
+                baseFitness = result.sharpeRatio * RATIO_SCALE;
+                break;
             case 'sortino':
-                return result.sortinoRatio * RATIO_SCALE;
+                baseFitness = result.sortinoRatio * RATIO_SCALE;
+                break;
             case 'calmar':
-                return result.calmarRatio * CALMAR_SCALE;
+                baseFitness = result.calmarRatio * CALMAR_SCALE;
+                break;
             case 'pnl':
             default:
-                return result.totalPnl;
+                baseFitness = result.totalPnl;
+                break;
         }
+
+        return baseFitness + tradeBonus;
     };
 
     const evaluate = async (paramSets: Record<string, number>[]): Promise<EvaluationResult[]> => {
         const results: EvaluationResult[] = [];
 
         for (const params of paramSets) {
-            const { result } = await simulator.runSingleSimulation(
+            const { result, trades } = await simulator.runSingleSimulation(
                 strategy.name,
                 strategy.factory,
                 params,
                 { shouldWriteLogs: false }
             );
 
+            // Count only matched SELL trades (completed round-trips that realize PnL)
+            const tradeCount = trades.filter(t => t.status === 'MATCHED' && t.side === 'SELL').length;
             results.push({
                 params,
-                fitness: calculateFitness(result),  // Risk-adjusted fitness
+                fitness: calculateFitness(result, tradeCount),  // Risk-adjusted fitness with trade requirements
                 rawPnl: result.totalPnl,
                 sharpeRatio: result.sharpeRatio,
                 maxDrawdown: result.maxDrawdown,
                 winRate: result.winRate,
-                tradeCount: result.matchedTrades + result.expiredTrades,
+                tradeCount,
             });
         }
 
@@ -644,10 +701,15 @@ async function runIterativeOptimization(config: IterativeOptimizationConfig): Pr
 
         // Save to YAML in GeneticYamlConfig format (compatible with MSPEQsYamls)
         const yamlPath = `${outputDir}/params.yaml`;
+        const legacyMarket = targetedMarketToLegacyFormat(config.targetedMarket);
         const yamlOutput = {
             schemaVersion: 1,
             botStyle: strategy.name,
+            strategy: strategy.name,  // For compatibility with loadBotsFromYamlDir
             targetedMarket: config.targetedMarket,
+            market: legacyMarket,  // Legacy format for compatibility
+            coin: extractCoinFromMarket(config.targetedMarket),
+            days: config.lookbackDays,
             optimization: {
                 bestPnl: finalResult.totalPnl,
                 avgPnl: finalResult.avgPnl,
@@ -760,10 +822,15 @@ async function runIterativeOptimization(config: IterativeOptimizationConfig): Pr
 
     // Save combined params to YAML in GeneticYamlConfig format (compatible with MSPEQsYamls)
     const yamlPath = `${outputDir}/params.yaml`;
+    const legacyMarket = targetedMarketToLegacyFormat(config.targetedMarket);
     const yamlOutput = {
         schemaVersion: 1,
         botStyle: strategy.name,
+        strategy: strategy.name,  // For compatibility with loadBotsFromYamlDir
         targetedMarket: config.targetedMarket,
+        market: legacyMarket,  // Legacy format for compatibility
+        coin: extractCoinFromMarket(config.targetedMarket),
+        days: config.lookbackDays,
         optimization: {
             bestPnl: finalResult.totalPnl,
             avgPnl: finalResult.avgPnl,
@@ -811,9 +878,9 @@ async function runIterativeOptimization(config: IterativeOptimizationConfig): Pr
  * Get base parameter bounds for a strategy (Stage 1).
  */
 function getBaseParamBounds(strategyName: string, isQuarterly: boolean): ParameterBounds {
-    const name = strategyName.toLowerCase();
+    const baseType = getBaseType(strategyName);
 
-    if (name.includes('firstcandlemspeq')) {
+    if (baseType === 'FirstCandleMSPEQ') {
         return {
             targetDollars: { min: 5, max: 20, step: 1 },
             candleMinutes: isQuarterly ? { min: 1, max: 7, step: 1 } : { min: 5, max: 30, step: 2 },
@@ -826,7 +893,7 @@ function getBaseParamBounds(strategyName: string, isQuarterly: boolean): Paramet
         };
     }
 
-    if (name.includes('earlybuyermspeq')) {
+    if (baseType === 'EarlyBuyerMSPEQ') {
         return {
             targetDollars: { min: 5, max: 25, step: 1 },
             baseBuyPrice: { min: 0.02, max: 0.90 },
@@ -838,7 +905,7 @@ function getBaseParamBounds(strategyName: string, isQuarterly: boolean): Paramet
         };
     }
 
-    if (name.includes('crossperiodmomentum')) {
+    if (baseType === 'CrossPeriodMomentumMSPEQ') {
         return {
             targetDollars: { min: 5, max: 25, step: 1 },
             baseBuyPrice: { min: 0.02, max: 0.90 },
@@ -861,25 +928,25 @@ function getBaseParamBounds(strategyName: string, isQuarterly: boolean): Paramet
  * Get MSPEQ parameter bounds for a strategy (Stage 2).
  */
 function getMSPEQBounds(strategyName: string, isQuarterly: boolean): ParameterBounds {
-    const name = strategyName.toLowerCase();
+    const baseType = getBaseType(strategyName);
 
-    if (name.includes('firstcandlemspeq')) {
+    if (baseType === 'FirstCandleMSPEQ') {
         return isQuarterly ? quarterlyFirstCandleMSPEQOnlyBounds : firstCandleMSPEQOnlyBounds;
     }
 
-    if (name.includes('earlybuyermspeq')) {
+    if (baseType === 'EarlyBuyerMSPEQ') {
         return isQuarterly ? quarterlyEarlyBuyerMSPEQOnlyBounds : earlyBuyerMSPEQOnlyBounds;
     }
 
-    if (name.includes('marketmakermspeq')) {
+    if (baseType === 'MarketMakerMSPEQ') {
         return isQuarterly ? quarterlyMarketMakerMSPEQOnlyBounds : marketMakerMSPEQOnlyBounds;
     }
 
-    if (name.includes('ncandlemspeq')) {
+    if (baseType === 'NCandleMSPEQ') {
         return isQuarterly ? quarterlyNCandleMSPEQOnlyBounds : nCandleMSPEQOnlyBounds;
     }
 
-    if (name.includes('crossperiodmomentum')) {
+    if (baseType === 'CrossPeriodMomentumMSPEQ') {
         return isQuarterly ? quarterlyCrossPeriodMomentumMSPEQOnlyBounds : crossPeriodMomentumMSPEQOnlyBounds;
     }
 
@@ -903,6 +970,7 @@ interface Stage2OnlyConfig {
     baseParamsFile: string;
     strategyFilter?: string;  // Optional: 'EarlyBuyerMSPEQ', 'FirstCandleMSPEQ', etc.
     fitnessMode?: 'pnl' | 'sharpe' | 'sortino' | 'calmar';
+    minTrades?: number;  // Minimum trades required (default: 20). Strategies below this get severe penalty.
 }
 
 /**
@@ -937,19 +1005,35 @@ async function runStage2OnlyOptimization(config: Stage2OnlyConfig): Promise<void
         process.exit(1);
     }
 
-    // Detect strategy type from filter or base params file path
-    const isEarlyBuyerMSPEQ = config.strategyFilter?.toLowerCase().includes('earlybuyermspeq') ||
+    // Detect strategy type from filter using registry, fall back to file path heuristics
+    const strategyBaseType = config.strategyFilter ? getBaseType(config.strategyFilter) : undefined;
+    const isEarlyBuyerMSPEQ = strategyBaseType === 'EarlyBuyerMSPEQ' ||
         config.baseParamsFile.toLowerCase().includes('earlybuyer');
-    const isMarketMakerMSPEQ = config.strategyFilter?.toLowerCase().includes('marketmakermspeq') ||
+    const isMarketMakerMSPEQ = strategyBaseType === 'MarketMakerMSPEQ' ||
         config.baseParamsFile.toLowerCase().includes('marketmaker');
-    const isNCandleMSPEQ = config.strategyFilter?.toLowerCase().includes('ncandlemspeq') ||
+    const isNCandleMSPEQ = strategyBaseType === 'NCandleMSPEQ' ||
         config.baseParamsFile.toLowerCase().includes('ncandle');
-    const isCrossPeriodMomentumMSPEQ = config.strategyFilter?.toLowerCase().includes('crossperiodmomentummspeq') ||
+    const isCrossPeriodMomentumMSPEQ = strategyBaseType === 'CrossPeriodMomentumMSPEQ' ||
         config.baseParamsFile.toLowerCase().includes('crossperiodmomentum');
 
-    // Select appropriate base param names based on strategy
+    // Select appropriate base param names based on strategy using registry
     let baseParamNames: readonly string[];
-    if (isMarketMakerMSPEQ) {
+    if (config.strategyFilter) {
+        const registryParams = getBaseParamNames(config.strategyFilter);
+        if (registryParams) {
+            baseParamNames = registryParams;
+        } else if (isMarketMakerMSPEQ) {
+            baseParamNames = MARKETMAKER_MSPEQ_BASE_PARAM_NAMES;
+        } else if (isNCandleMSPEQ) {
+            baseParamNames = NCANDLE_MSPEQ_BASE_PARAM_NAMES;
+        } else if (isCrossPeriodMomentumMSPEQ) {
+            baseParamNames = CROSSPERIODMOMENTUM_MSPEQ_BASE_PARAM_NAMES;
+        } else if (isEarlyBuyerMSPEQ) {
+            baseParamNames = EARLYBUYER_MSPEQ_BASE_PARAM_NAMES;
+        } else {
+            baseParamNames = MSPEQ_BASE_PARAM_NAMES;
+        }
+    } else if (isMarketMakerMSPEQ) {
         baseParamNames = MARKETMAKER_MSPEQ_BASE_PARAM_NAMES;
     } else if (isNCandleMSPEQ) {
         baseParamNames = NCANDLE_MSPEQ_BASE_PARAM_NAMES;
@@ -1156,6 +1240,8 @@ async function main() {
     let stage2Optimizer: 'genetic' | 'bayesian' | 'cmaes' = 'cmaes';
     // Fitness mode for risk-adjusted optimization
     let fitnessMode: 'pnl' | 'sharpe' | 'sortino' | 'calmar' = 'sortino';
+    // Minimum trades for fitness penalty
+    let minTrades = 20;
 
     for (let i = 0; i < args.length; i++) {
         switch (args[i]) {
@@ -1289,6 +1375,10 @@ async function main() {
                     }
                     break;
                 }
+            case '--min-trades':
+            case '-T':
+                minTrades = parseInt(args[i + 1]) || 20;
+                break;
             case '--help':
             case '-h':
                 printHelp();
@@ -1313,6 +1403,7 @@ async function main() {
             baseParamsFile,
             strategyFilter: strategyFilter ?? undefined,
             fitnessMode,
+            minTrades,
         });
         return;
     }
@@ -1332,6 +1423,7 @@ async function main() {
             auditTradesCount,
             isQuarterly,
             fitnessMode,
+            minTrades,
         });
         return;
     }
@@ -1356,6 +1448,7 @@ async function main() {
             stage2Optimizer,
             optimizerOverride: optimizerOverride ?? undefined,
             fitnessMode,
+            minTrades,
         });
         return;
     }
@@ -1478,6 +1571,9 @@ Risk-Adjusted Fitness Options:
                         - sharpe:  Risk-adjusted (penalizes all volatility)
                         - sortino: Risk-adjusted (only penalizes downside) - RECOMMENDED
                         - calmar:  Return/drawdown ratio (avoids large drawdowns)
+  -T, --min-trades <n>  Minimum trades required for valid fitness (default: 20)
+                        Strategies with fewer trades get a -1000 penalty to prevent
+                        convergence to "do nothing" strategies
 
 Available Strategies:
   Hourly Markets (60-min periods):

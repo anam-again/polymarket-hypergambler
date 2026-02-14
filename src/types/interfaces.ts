@@ -113,6 +113,9 @@ export interface IClock {
 
     /** Unregister a callback */
     off(event: ClockEventType, callback: () => void): void;
+
+    /** Stop the clock and clean up resources (cron jobs, listeners) */
+    stop(): void;
 }
 
 // ============================================================================
@@ -149,6 +152,9 @@ export interface IMarketInfo {
 
     /** Gets the current price for a token */
     getPrice(clobTokenId: string, side: Side, market: TargetedMarket): Promise<number>;
+
+    /** Gets the midpoint price for a token (average of bid and ask) */
+    getMidPrice(clobTokenId: string, market: TargetedMarket): Promise<number>;
 
     /** Gets the CLOB token IDs for a targeted market */
     getCurrentClobTokenIds(market: TargetedMarket): Promise<string[]>;

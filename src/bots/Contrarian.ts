@@ -9,6 +9,7 @@ interface ContrarianProps extends QuantBotProps {
     targetSellPrice: number;
     lookbackHours: number;
     targetBuyPrice: number;
+    invertSignal?: boolean;  // If true, bet WITH the trend instead of against it
 }
 
 export class Contrarian extends QuantBot implements QuantBotRun {
@@ -18,6 +19,7 @@ export class Contrarian extends QuantBot implements QuantBotRun {
     private targetSellPrice!: number;
     private targetBuyPrice!: number;
     private lookbackHours!: number;
+    private invertSignal: boolean = false;
 
     private buyOrder: TradeOrder | undefined = undefined;
     private sellOrder: TradeOrder | undefined = undefined;
@@ -34,6 +36,7 @@ export class Contrarian extends QuantBot implements QuantBotRun {
         this.targetSellPrice = props.targetSellPrice;
         this.targetBuyPrice = props.targetBuyPrice;
         this.lookbackHours = props.lookbackHours;
+        this.invertSignal = props.invertSignal ?? false;
 
         this.doNothing = false;
     }
@@ -82,8 +85,8 @@ export class Contrarian extends QuantBot implements QuantBotRun {
     }
 
     private isAfterCutoff() {
-        const now = new Date();
-        const currentMinute = now.getMinutes();
+        // Use clock.getMinutes() for simulation compatibility
+        const currentMinute = this.clock.getMinutes();
         if (this.marketSchedule === MarketSchedule.QUARTERLY) {
             return (currentMinute % 15) >= this.cutoffMinute;
         } else {
@@ -123,25 +126,37 @@ export class Contrarian extends QuantBot implements QuantBotRun {
         return { majority, results };
     }
 
+    protected override resetTradeState(): void {
+        this.buyOrder = undefined;
+        this.sellOrder = undefined;
+        this.isTie = false;
+        this.doNothing = false;
+    }
+
+    public override async onSimulationTick(): Promise<void> {
+        await this.executeTradingLogic();
+    }
+
     public async run() {
         this.registerResetHandler(async () => {
             await this.updateOrders();
             await this.auditAndReset()
-            this.buyOrder = undefined;
-            this.sellOrder = undefined;
-            this.isTie = false;
-            this.doNothing = false;
+            this.resetTradeState();
         });
 
         this.tickWrapper(1000 * 5, 1000 * 2, async () => {
+            await this.executeTradingLogic();
+        });
+    }
 
-            await this.updateOrders();
+    private async executeTradingLogic(): Promise<void> {
+        await this.updateOrders();
 
-            if (this.doNothing) {
-                return;
-            }
+        if (this.doNothing) {
+            return;
+        }
 
-            const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
+        const orderBooks = await this.marketInfo.getLiveData(this.targetedMarket);
 
             const makeSellOrder = async () => {
                 if (!this.sellOrder && this.buyOrder) {
@@ -182,10 +197,14 @@ export class Contrarian extends QuantBot implements QuantBotRun {
                 return;
             }
 
-            const betDirection = previousPeriods.majority === 'UP' ? 'DOWN' : 'UP';
+            // Normal contrarian: bet AGAINST the trend. With invertSignal: bet WITH the trend (momentum).
+            let betDirection: 'UP' | 'DOWN' = previousPeriods.majority === 'UP' ? 'DOWN' : 'UP';
+            if (this.invertSignal) {
+                betDirection = betDirection === 'UP' ? 'DOWN' : 'UP';
+            }
             const tokenId = betDirection === 'UP' ? orderBooks.BtcUpTokenId : orderBooks.BtcDownTokenId;
 
-            this.writeLog(`Previous ${this.lookbackHours} ${periodLabel}: [${previousPeriods.results.join(', ')}] -> majority: ${previousPeriods.majority}, betting on: ${betDirection}`);
+            this.writeLog(`Previous ${this.lookbackHours} ${periodLabel}: [${previousPeriods.results.join(', ')}] -> majority: ${previousPeriods.majority}, betting on: ${betDirection}${this.invertSignal ? ' (inverted)' : ''}`);
 
             const targetSize = this.dollarToTokens(this.targetDollars, this.targetBuyPrice);
             if (targetSize !== null && this.checkIfOrderIsValid(this.targetBuyPrice, targetSize) && this.canSpend(this.targetBuyPrice * targetSize)) {
@@ -200,7 +219,6 @@ export class Contrarian extends QuantBot implements QuantBotRun {
                     makeSellOrder();
                 })
             }
-        });
     }
 
     // -------------------------------------------------------------------------

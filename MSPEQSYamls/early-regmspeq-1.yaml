@@ -1,0 +1,108 @@
+schemaVersion: 1
+botStyle: RegimeAwareQuarterlyEarlyBuyerMSPEQ
+strategy: RegimeAwareQuarterlyEarlyBuyerMSPEQ
+targetedMarket: BitcoinQuarterly
+market: btc-quarterly
+coin: btc
+days: 20
+optimization:
+  bestPnl: 1361.9799999999932
+  avgPnl: 0.7127053898482434
+  generations: 10
+  converged: true
+  convergenceReason: cmaes optimization complete
+  timestamp: 2026-02-13T07:37:36.424Z
+  lookbackDays: 20
+  populationSize: 100
+  maxGenerations: 100
+  fitnessMode: sharpe
+  optimizationFitness: 0.25840000803720775
+  sharpeRatio: 0.013332441833906384
+  sortinoRatio: 0.0356705007545955
+  calmarRatio: 0.7356089657034787
+  winRate: 2.4594453165881736
+  totalTrades: 3182
+params:
+  targetDollars: 20
+  baseBuyPrice: 0.02
+  baseSellPrice: 0.1
+  baseCutoffMinute: 4
+  candleSizeReference: 1500
+  minProfitMargin: 0.18
+  directionThreshold: 0.45
+  buyPrice_candleSize_w: 0.5596731328036885
+  buyPrice_candleSize_c0: 1.127346229482681
+  buyPrice_candleSize_c1: -0.2417366196390478
+  buyPrice_timeLeft_w: 1.3820732205300643
+  buyPrice_timeLeft_c0: 0.748935436511925
+  buyPrice_timeLeft_c1: -1
+  buyPrice_volatility_w: 1.0241569339133583
+  buyPrice_volatility_c0: 1.0964789789839138
+  buyPrice_volatility_c1: 0.5263042212008417
+  buyPrice_momentum_w: 0.1018343692837117
+  buyPrice_momentum_c0: 0.9818331586742228
+  buyPrice_momentum_c1: 0.589912332041463
+  sellPrice_candleSize_w: 0.6088953813506546
+  sellPrice_candleSize_c0: 0.8941323023451867
+  sellPrice_candleSize_c1: 0.7417147828040034
+  sellPrice_timeLeft_w: 0.9790753454801489
+  sellPrice_timeLeft_c0: 1.2
+  sellPrice_timeLeft_c1: -0.6303187688525165
+  sellPrice_volatility_w: 1.5045188963006186
+  sellPrice_volatility_c0: 0.9305420187763362
+  sellPrice_volatility_c1: -0.32822861972574746
+  sellPrice_momentum_w: 0.8713473480734131
+  sellPrice_momentum_c0: 0.864068821261609
+  sellPrice_momentum_c1: -0.3006840924386631
+  cutoffMinute_candleSize_w: 0.9715078287276655
+  cutoffMinute_candleSize_c0: 0.9728265866831558
+  cutoffMinute_candleSize_c1: -0.9165799077241423
+  cutoffMinute_timeLeft_w: 1.7578279262905312
+  cutoffMinute_timeLeft_c0: 0.8499005043390572
+  cutoffMinute_timeLeft_c1: 0.47011850884749373
+  cutoffMinute_volatility_w: 0.9454635082204731
+  cutoffMinute_volatility_c0: 1.0128420002706109
+  cutoffMinute_volatility_c1: -0.4953399120093773
+  cutoffMinute_momentum_w: 0.46698268764139467
+  cutoffMinute_momentum_c0: 0.9639860231465033
+  cutoffMinute_momentum_c1: -0.5208501021808593
+  btcDirection_candleSize_w: 0.4098513102654398
+  btcDirection_candleSize_c0: 0.5136486440491753
+  btcDirection_candleSize_c1: -0.14687859404350334
+  btcDirection_timeLeft_w: 0.46444712348337963
+  btcDirection_timeLeft_c0: 0.528897890295803
+  btcDirection_timeLeft_c1: -0.2722562577154632
+  btcDirection_volatility_w: 0.25975222307375667
+  btcDirection_volatility_c0: 0.4866683902054908
+  btcDirection_volatility_c1: 0.14460437864849918
+  btcDirection_momentum_w: 0.34866115894717864
+  btcDirection_momentum_c0: 0.4819909628562864
+  btcDirection_momentum_c1: -0.5
+  earlySellTime_candleSize_w: 0.8893191939082854
+  earlySellTime_candleSize_c0: 0.21428068506980533
+  earlySellTime_candleSize_c1: -0.329539172932404
+  earlySellTime_timeLeft_w: 0.4846275410175397
+  earlySellTime_timeLeft_c0: 0.26411549109928545
+  earlySellTime_timeLeft_c1: -0.5
+  earlySellTime_volatility_w: 0.4298778611991585
+  earlySellTime_volatility_c0: 0.3415076085047763
+  earlySellTime_volatility_c1: -0.20156276417007107
+  earlySellTime_momentum_w: 0.6298032377259988
+  earlySellTime_momentum_c0: 0.3466829048404935
+  earlySellTime_momentum_c1: -0.10736653658868106
+  earlySellPrice_candleSize_w: 1.1942095925349425
+  earlySellPrice_candleSize_c0: 1.2
+  earlySellPrice_candleSize_c1: -0.513458618529601
+  earlySellPrice_timeLeft_w: 1.3174021171507726
+  earlySellPrice_timeLeft_c0: 1.0445143902081533
+  earlySellPrice_timeLeft_c1: -0.7595550598581504
+  earlySellPrice_volatility_w: 0.7092963007853645
+  earlySellPrice_volatility_c0: 1.1732885896866128
+  earlySellPrice_volatility_c1: 0.352573486388176
+  earlySellPrice_momentum_w: 0.5595539920110416
+  earlySellPrice_momentum_c0: 1.0445705459580896
+  earlySellPrice_momentum_c1: 1
+runtime:
+  enabled: false
+  prodMode: false
+  hourlyDollarLimit: 50

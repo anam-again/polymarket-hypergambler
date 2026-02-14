@@ -1,16 +1,11 @@
-strategy: QuarterlyTrendFollowing
-market: btc-quarterly
+strategy: Contrarian
+market: btc-hourly
 coin: btc
-days: 4
-
+days: 5
 params:
-  shortMaPeriod: 3
-  longMaPeriod: 12
-  adxPeriod: 5
-  adxThreshold: 39.5
-  atrPeriod: 6
-  atrStopMultiple: 2.25
-  targetBuyPrice: 0.13
-  targetSellPrice: 0.80
-  targetSize: 10
-  cutoffMinute: 9
+  targetDollars: 10
+  targetBuyPrice: 0.50
+  targetSellPrice: 0.99
+  lookbackHours: 1
+  cutoffMinute: 45
+  invertSignal: true

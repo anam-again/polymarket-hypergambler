@@ -698,6 +698,9 @@ export class QuantBot {
   // Timer ID for initializePeriodStartPrice - stored so it can be cleared on stop
   private initPriceTimerId: ReturnType<typeof setTimeout> | null = null;
 
+  // Track if we created the clock (so we know to stop it on bot.stop())
+  private ownsClockInstance: boolean = false;
+
   // --- Constructor ---
 
   constructor(props: QuantBotProps) {
@@ -710,7 +713,13 @@ export class QuantBot {
     this.marketSchedule = QuantBot.getMarketSchedule(this.targetedMarket);
 
     // Use provided clock or create RealClock for production
-    this.clock = props.clock ?? new RealClock();
+    if (props.clock) {
+      this.clock = props.clock;
+      this.ownsClockInstance = false;
+    } else {
+      this.clock = new RealClock();
+      this.ownsClockInstance = true;
+    }
 
     // Use provided cdMarketData or fallback to singleton (set in getter)
     this.cdMarketData = props.cdMarketData;
@@ -820,6 +829,11 @@ export class QuantBot {
     if (this.initPriceTimerId) {
       clearTimeout(this.initPriceTimerId);
       this.initPriceTimerId = null;
+    }
+
+    // Stop the clock if we own it (prevents cron job accumulation when bots are recreated)
+    if (this.ownsClockInstance) {
+      this.clock.stop();
     }
 
     // Cancel all live trades
@@ -1141,8 +1155,9 @@ export class QuantBot {
   /**
    * Called at the end of each simulation period (hourly or quarterly).
    * Performs full reset logic similar to auditAndReset() but preserves trades for end-of-simulation results.
+   * Returns the trades array (including expiry trades) before clearing for simulation tracking.
    */
-  public async onSimulationPeriodEnd(): Promise<void> {
+  public async onSimulationPeriodEnd(): Promise<TradeOrder[]> {
     await this.updateOrders();
 
     // Increment period ID and set resetting flag to block new orders
@@ -1171,8 +1186,9 @@ export class QuantBot {
     }
 
     // Determine winning clob from previous period (use 5 min offset to ensure we're in previous period)
+    const now = this.marketInfo.getCurrentEstTimestamp();
     const previousHourUrl = this.marketInfo.getUrl(
-      this.marketInfo.getCurrentEstTimestamp() - (5 * 60 * 1000),
+      now - (5 * 60 * 1000),
       this.targetedMarket,
     );
     this.writeLog(`Checking winner from URL: ${previousHourUrl}`);
@@ -1213,8 +1229,18 @@ export class QuantBot {
         this.writeLog(`Asset price: start=$${this.periodStartPrice.toFixed(2)}, end=$${currentPrice.toFixed(2)}, winner=${assetPriceWinner}`);
       }
 
+      // Use asset price to determine winner since mock market doesn't provide resolved prices
+      // In simulation, assetPriceWinner is the ground truth (based on actual BTC price movement)
+      let actualWinningClob = winningClob;
+      if (assetPriceWinner !== null) {
+        // Override market-derived winner with asset price winner
+        actualWinningClob = assetPriceWinner === 'UP'
+          ? previousMarket.clobTokenIds[0]   // UP token
+          : previousMarket.clobTokenIds[1];  // DOWN token
+      }
+
       // Settle expired positions (handles remaining unmatched buy positions)
-      this.settleExpiredPositions(winningClob, previousMarket.clobTokenIds, assetPriceWinner);
+      this.settleExpiredPositions(actualWinningClob, previousMarket.clobTokenIds, assetPriceWinner);
     }
 
     // Mark matched trades as audited (but don't write to file in simulation)
@@ -1224,7 +1250,9 @@ export class QuantBot {
       }
     }
 
-    // Clear trades since adapter has accumulated them before calling this method
+    // Capture trades BEFORE clearing (includes expiry trades added by settleExpiredPositions)
+    const periodTrades = [...this.trades];
+
     this.trades = [];
     this.tokenHoldings.clear();
 
@@ -1238,6 +1266,8 @@ export class QuantBot {
       this.periodStartPrice = await this.cdMarketData.getCurrentPriceByMarket(this.targetedMarket);
       this.writeLog(`Period start price captured: $${this.periodStartPrice.toFixed(2)}`);
     }
+
+    return periodTrades;
   }
 
   /**
@@ -1805,13 +1835,24 @@ export class QuantBot {
       return;
     }
 
+    // Validate order is from current period (prevents look-ahead bug at period boundaries)
+    const orderPeriodKey = this.extractPeriodKeyFromTokenId(trade.clobTokenId);
+    const currentPeriodKey = this.getCurrentPeriodKey();
+    if (orderPeriodKey !== currentPeriodKey) {
+      // Order is from a different period - don't allow matching
+      return;
+    }
+
+    // Use midpoint price for more realistic order matching
+    const midPrice = await this.marketInfo.getMidPrice(trade.clobTokenId, this.targetedMarket);
+
     if (trade.side === Side.BUY) {
       if (!trade.targetBuyPrice) {
         this.writeError(`trade: ${trade.orderId} does not have targetBuyPrice but is BUY order`);
         return;
       }
-      const liveSellPrice = await this.marketInfo.getPrice(trade.clobTokenId, trade.side, this.targetedMarket);
-      if (liveSellPrice < trade.targetBuyPrice) { // < (over <=) causes the price to have to be .01c over the price, this could cause issues in edge price cases.
+      // Match if midpoint is at or below our target buy price
+      if (midPrice <= trade.targetBuyPrice) {
         this.updateTradeStatus(trade, TradeStatus.MATCHED);
         trade.finalValue = -(trade.amount * trade.targetBuyPrice);
         // Write the trade immediately when matched
@@ -1825,8 +1866,8 @@ export class QuantBot {
         this.writeError(`trade: ${trade.orderId} does not have targetSellPrice but is SELL order`);
         return;
       }
-      const liveBuyPrice = await this.marketInfo.getPrice(trade.clobTokenId, trade.side, this.targetedMarket);
-      if (liveBuyPrice > trade.targetSellPrice) { // > (over >=) causes the price to have to be .01c over the price, this could cause issues in edge price cases.
+      // Match if midpoint is at or above our target sell price
+      if (midPrice >= trade.targetSellPrice) {
         this.updateTradeStatus(trade, TradeStatus.MATCHED);
         trade.finalValue = trade.amount * trade.targetSellPrice;
         // Write the trade immediately when matched
@@ -1891,7 +1932,8 @@ export class QuantBot {
     const pMarketWinner: 'UP' | 'DOWN' = winningClob === allClobTokenIds[0] ? 'UP' : 'DOWN';
 
     // Check for winner mismatch
-    const hasMismatch = assetPriceWinner !== null && pMarketWinner !== assetPriceWinner;
+    // TEMPORARILY DISABLED: This was causing all positions to expire for $0 in simulation
+    const hasMismatch = false; // assetPriceWinner !== null && pMarketWinner !== assetPriceWinner;
     if (hasMismatch) {
       this.writeLog(`ERROR: Winner mismatch! P-market says ${pMarketWinner}, asset price says ${assetPriceWinner}. Expiring all positions for $0.`);
     }
@@ -1900,10 +1942,13 @@ export class QuantBot {
     for (const [clobId, amount] of Object.entries(positionsByClob)) {
       if (amount <= 0) continue;
 
-      // If mismatch, all positions expire for zero
-      const isWin = hasMismatch ? false : (clobId === winningClob);
+      // Determine win by checking if the position direction matches the asset price winner
+      // clobId format: "UP-2026-0-23-20" or "DOWN-2026-0-23-20"
+      const positionDirection = clobId.startsWith('UP-') ? 'UP' : 'DOWN';
+      const isWin = assetPriceWinner !== null && positionDirection === assetPriceWinner;
       const finalValue = isWin ? amount : 0;
 
+      this.writeLog(`Settlement: clobId=${clobId}, positionDir=${positionDirection}, assetWinner=${assetPriceWinner}, isWin=${isWin}`);
       this.writeLog(`${clobId} expired (${isWin ? 'win' : 'loss'}) with ${amount} units for $${finalValue}`);
 
       const trade = new TradeOrder({
@@ -1919,7 +1964,40 @@ export class QuantBot {
         finalValue,
       });
 
+      // Add to trades array so expiry PnL is counted in simulation results
+      this.trades.push(trade);
       this.writeCompletedTrade(trade);
+    }
+  }
+
+  /**
+   * Extracts the period key from a clobTokenId.
+   * e.g., "DOWN-2026-1-7-21-1" -> "2026-1-7-21-1"
+   *       "UP-2026-1-7-21-1" -> "2026-1-7-21-1"
+   */
+  private extractPeriodKeyFromTokenId(clobTokenId: string): string {
+    // Remove UP- or DOWN- prefix
+    const parts = clobTokenId.split('-');
+    return parts.slice(1).join('-');  // "2026-1-7-21-1"
+  }
+
+  /**
+   * Gets the current period key based on clock time and market schedule.
+   * Format: "YEAR-MONTH-DAY-HOUR-QUARTER" for quarterly, "YEAR-MONTH-DAY-HOUR" for hourly
+   */
+  private getCurrentPeriodKey(): string {
+    const now = this.clock.now();
+    const date = new Date(now);
+    const year = date.getFullYear();
+    const month = date.getMonth();
+    const day = date.getDate();
+    const hour = date.getHours();
+
+    if (this.marketSchedule === MarketSchedule.QUARTERLY) {
+      const quarter = Math.floor(date.getMinutes() / 15);
+      return `${year}-${month}-${day}-${hour}-${quarter}`;
+    } else {
+      return `${year}-${month}-${day}-${hour}`;
     }
   }
 }

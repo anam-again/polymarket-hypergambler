@@ -156,6 +156,9 @@ export class FirstCandleMSPEQ extends MSPEQBotBase implements QuantBotRun {
         // Update signals first
         await this.updateSignals();
 
+        // Update regime for TradeGate evaluation
+        this.updateRegime();
+
         await this.updateOrders();
 
         // Handle sell order creation if buy matched
@@ -175,6 +178,11 @@ export class FirstCandleMSPEQ extends MSPEQBotBase implements QuantBotRun {
         // Check cutoff
         if (this.isAfterCutoff()) {
             await this.handleCutoff();
+            return;
+        }
+
+        // Check TradeGate before new trade entry
+        if (!this.shouldTrade()) {
             return;
         }
 

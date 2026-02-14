@@ -264,6 +264,12 @@ export class CDMarketData implements QuantBotRun {
     // -------------------------------------------------------------------------
 
     private startScheduledTasks(): void {
+        // Guard against duplicate scheduling if run() is called multiple times
+        if (this.cronJob || this.priceUpdateInterval) {
+            console.warn('[CDMarketData] Scheduled tasks already running, skipping duplicate setup');
+            return;
+        }
+
         // Write hourly data at minute 55
         this.cronJob = cron.schedule('55 * * * *', async () => {
             for (const symbol of Object.values(BinanceSymbol)) {

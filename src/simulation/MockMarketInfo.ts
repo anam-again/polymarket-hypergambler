@@ -430,6 +430,48 @@ export class MockMarketInfo implements IMarketInfo {
     }
 
     /**
+     * Gets the midpoint price for a token (average of bid and ask).
+     * Used for more realistic order matching in simulation.
+     */
+    public async getMidPrice(clobTokenId: string, market: TargetedMarket): Promise<number> {
+        const now = this.clock.now();
+        const data = this.getDataForMarket(market);
+
+        let entry: UpDownPriceEntry | null;
+
+        // For quarterly markets, use retry logic to wait for current period data
+        if (market && MockMarketInfo.getMarketSchedule(market) === MarketSchedule.QUARTERLY) {
+            entry = this.findEntryForCurrentPeriodSync(data, now);
+            if (!entry) {
+                throw new Error(`No data available for current 15-minute period. Current time: ${new Date(now).toISOString()}`);
+            }
+        } else {
+            entry = this.findPreviousEntry(data, now);
+            if (!entry) {
+                throw new Error(`No UP/DOWN data available for timestamp ${new Date(now).toISOString()}`);
+            }
+
+            // Check if the entry is from a different period (cross-period boundary)
+            const entryPeriodKey = this.getHourKey(entry.timestamp);
+            const currentPeriodKey = this.getHourKey(now);
+            if (entryPeriodKey !== currentPeriodKey) {
+                // Return neutral price at period start
+                return 0.50;
+            }
+        }
+
+        // Determine if this is UP or DOWN token based on ID
+        const isUpToken = clobTokenId.startsWith('UP-');
+
+        // Return midpoint (average of bid and ask)
+        if (isUpToken) {
+            return (entry.upBid + entry.upAsk) / 2;
+        } else {
+            return (entry.downBid + entry.downAsk) / 2;
+        }
+    }
+
+    /**
      * Gets mock order books for the current simulated time.
      * Supports both hourly and quarterly markets based on market parameter.
      * For quarterly markets, uses retry logic to find data within the current 15-minute period.

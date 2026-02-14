@@ -14,6 +14,7 @@ interface ContrarianV2Props extends QuantBotProps {
     lookbackHours: number;
     targetBuyPrice: number;
     cdLookbackHours: number;
+    invertSignal?: boolean;  // If true, bet WITH the trend instead of against it
 }
 
 // ============================================================================
@@ -30,6 +31,7 @@ export class ContrarianV2 extends QuantBot implements QuantBotRun {
     private targetBuyPrice: number;
     private lookbackHours: number;
     private cdLookbackHours: number;
+    private invertSignal: boolean;
 
     private buyOrder?: TradeOrder;
     private sellOrder?: TradeOrder;
@@ -47,6 +49,7 @@ export class ContrarianV2 extends QuantBot implements QuantBotRun {
         this.targetBuyPrice = props.targetBuyPrice;
         this.lookbackHours = props.lookbackHours;
         this.cdLookbackHours = props.cdLookbackHours;
+        this.invertSignal = props.invertSignal ?? false;
     }
 
     // --- Main Run Loop ---
@@ -149,7 +152,11 @@ export class ContrarianV2 extends QuantBot implements QuantBotRun {
             return;
         }
 
-        const betDirection = previousHours.majority === 'UP' ? 'DOWN' : 'UP';
+        // Normal contrarian: bet AGAINST the trend. With invertSignal: bet WITH the trend (momentum).
+        let betDirection: 'UP' | 'DOWN' = previousHours.majority === 'UP' ? 'DOWN' : 'UP';
+        if (this.invertSignal) {
+            betDirection = betDirection === 'UP' ? 'DOWN' : 'UP';
+        }
 
         // Check if totalChange agrees with bet direction
         if (!this.doesTotalChangeAgree(betDirection)) {
@@ -160,7 +167,7 @@ export class ContrarianV2 extends QuantBot implements QuantBotRun {
 
         const tokenId = betDirection === 'UP' ? orderBooks.BtcUpTokenId : orderBooks.BtcDownTokenId;
 
-        this.writeLog(`Previous ${this.lookbackHours} hours: [${previousHours.results.join(', ')}] -> majority: ${previousHours.majority}, betting on: ${betDirection}`);
+        this.writeLog(`Previous ${this.lookbackHours} hours: [${previousHours.results.join(', ')}] -> majority: ${previousHours.majority}, betting on: ${betDirection}${this.invertSignal ? ' (inverted)' : ''}`);
 
         const targetSize = this.dollarToTokens(this.targetDollars, this.targetBuyPrice);
         if (targetSize === null) return;

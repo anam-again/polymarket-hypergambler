@@ -909,7 +909,7 @@ app.get('/api/logs/:source', (req, res) => {
 // Simulator Audit Endpoints
 // ============================================================================
 
-// Parse a simulator audit file
+// Parse a simulator audit file (supports both old .audit.log and new tradeAudit.log formats)
 function parseSimulatorAuditFile(filePath) {
   if (!fs.existsSync(filePath)) {
     return [];
@@ -918,6 +918,36 @@ function parseSimulatorAuditFile(filePath) {
   const content = fs.readFileSync(filePath, 'utf-8');
   const lines = content.trim().split('\n').filter(line => line.trim());
 
+  // Check if this is the new CSV format with header
+  const firstLine = lines[0] || '';
+  const isNewFormat = firstLine.startsWith('timestamp,botName,orderId');
+
+  if (isNewFormat) {
+    // New tradeAudit.log format from optimizer runs
+    const dataLines = lines.slice(1); // Skip header
+    return dataLines.map(line => {
+      const parts = line.split(', ').map(p => p.trim());
+      if (parts.length < 14) return null;
+
+      return {
+        timestamp: parseInt(parts[0]),
+        strategy: parts[1],
+        tradeId: parts[2],
+        status: parts[3],
+        entryTimestamp: parseInt(parts[4]),
+        size: parseFloat(parts[5]),
+        buyPrice: parseFloat(parts[6]),
+        sellPrice: parseFloat(parts[7]),
+        gross: parseFloat(parts[8]),
+        pnl: parseFloat(parts[13]), // pnl is the last column in new format
+        mode: parts[10],
+        marketHash: parts[11],
+        side: parts[12]
+      };
+    }).filter(Boolean);
+  }
+
+  // Old .audit.log format
   // Skip header line and comment lines (lines starting with #)
   const dataLines = lines.slice(1).filter(line => !line.startsWith('#'));
 
@@ -1097,13 +1127,16 @@ function parseSimulatorFilename(filename) {
   return { strategy: filename, generation: null, timestamp: null, filename };
 }
 
-// Get list of simulator audit files
+// Get list of simulator audit files (including tradeAudit.log from subdirectories)
 app.get('/api/simulator/files', (req, res) => {
   if (!fs.existsSync(simulatorLogsDir)) {
     return res.json([]);
   }
 
-  const files = fs.readdirSync(simulatorLogsDir)
+  const files = [];
+
+  // Get old-style .audit.log files
+  const auditLogFiles = fs.readdirSync(simulatorLogsDir)
     .filter(f => f.endsWith('.audit.log'))
     .map(f => {
       const parsed = parseSimulatorFilename(f);
@@ -1112,32 +1145,93 @@ app.get('/api/simulator/files', (req, res) => {
       return {
         ...parsed,
         size: stats.size,
-        modified: stats.mtime.getTime()
+        modified: stats.mtime.getTime(),
+        type: 'audit.log'
       };
-    })
-    .sort((a, b) => b.modified - a.modified);
+    });
+  files.push(...auditLogFiles);
+
+  // Scan subdirectories for tradeAudit.log files (from optimizer runs)
+  const entries = fs.readdirSync(simulatorLogsDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      const tradeAuditPath = path.join(simulatorLogsDir, entry.name, 'tradeAudit.log');
+      const paramsPath = path.join(simulatorLogsDir, entry.name, 'params.yaml');
+
+      if (fs.existsSync(tradeAuditPath)) {
+        const stats = fs.statSync(tradeAuditPath);
+        let metadata = {};
+
+        // Try to read params.yaml for additional metadata
+        if (fs.existsSync(paramsPath)) {
+          try {
+            const yamlContent = fs.readFileSync(paramsPath, 'utf-8');
+            // Simple YAML parsing for key fields
+            const botStyleMatch = yamlContent.match(/botStyle:\s*(.+)/);
+            const marketMatch = yamlContent.match(/targetedMarket:\s*(.+)/);
+            const bestPnlMatch = yamlContent.match(/bestPnl:\s*([-\d.]+)/);
+            const totalTradesMatch = yamlContent.match(/totalTrades:\s*(\d+)/);
+            const sortinoMatch = yamlContent.match(/sortinoRatio:\s*([-\d.]+)/);
+
+            metadata = {
+              botStyle: botStyleMatch ? botStyleMatch[1].trim() : null,
+              market: marketMatch ? marketMatch[1].trim() : null,
+              bestPnl: bestPnlMatch ? parseFloat(bestPnlMatch[1]) : null,
+              totalTrades: totalTradesMatch ? parseInt(totalTradesMatch[1]) : null,
+              sortinoRatio: sortinoMatch ? parseFloat(sortinoMatch[1]) : null
+            };
+          } catch (e) {
+            // Ignore YAML parsing errors
+          }
+        }
+
+        // Parse directory name for strategy and timestamp
+        // Format: optimizer-strategy-timestamp (e.g., cmaes-regimeawarequarterlyearlybuyermspeq-2026-02-13T00-15-36)
+        const dirParts = entry.name.match(/^(\w+)-(.+?)-(\d{4}-\d{2}-\d{2}T[\d-]+)$/);
+        const strategy = metadata.botStyle || (dirParts ? dirParts[2] : entry.name);
+        const optimizer = dirParts ? dirParts[1] : 'unknown';
+
+        files.push({
+          filename: `${entry.name}/tradeAudit.log`,
+          strategy: strategy,
+          optimizer: optimizer,
+          generation: null,
+          modified: stats.mtime.getTime(),
+          size: stats.size,
+          type: 'tradeAudit.log',
+          dirName: entry.name,
+          ...metadata
+        });
+      }
+    }
+  }
+
+  // Sort by modified time descending
+  files.sort((a, b) => b.modified - a.modified);
 
   res.json(files);
 });
 
 // Get trades from a specific simulator audit file
-app.get('/api/simulator/file/:filename/trades', (req, res) => {
+app.get('/api/simulator/file/:filename(*)/trades', (req, res) => {
   // Validate path to prevent path traversal attacks
-  if (!isPathSafe(simulatorLogsDir, req.params.filename)) {
+  const filename = req.params.filename;
+  if (!isPathSafe(simulatorLogsDir, filename)) {
     return res.status(400).json({ error: 'Invalid path' });
   }
-  const filePath = path.join(simulatorLogsDir, req.params.filename);
+  const filePath = path.join(simulatorLogsDir, filename);
   const trades = parseSimulatorAuditFile(filePath);
   res.json(trades);
 });
 
 // Get stats from a specific simulator audit file
-app.get('/api/simulator/file/:filename/stats', (req, res) => {
+app.get('/api/simulator/file/:filename(*)/stats', (req, res) => {
   // Validate path to prevent path traversal attacks
-  if (!isPathSafe(simulatorLogsDir, req.params.filename)) {
+  const filename = req.params.filename;
+  if (!isPathSafe(simulatorLogsDir, filename)) {
     return res.status(400).json({ error: 'Invalid path' });
   }
-  const filePath = path.join(simulatorLogsDir, req.params.filename);
+  const filePath = path.join(simulatorLogsDir, filename);
   const trades = parseSimulatorAuditFile(filePath);
 
   const completedTrades = trades.filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED');
@@ -1165,12 +1259,45 @@ app.get('/api/simulator/file/:filename/stats', (req, res) => {
   const stdDev = Math.sqrt(variance);
   const sharpeRatio = stdDev > 0 ? avgPnl / stdDev : 0;
 
-  const parsed = parseSimulatorFilename(req.params.filename);
+  // Parse filename/directory for metadata
+  let strategy = null;
+  let generation = null;
+  let optimizer = null;
+
+  if (filename.includes('/')) {
+    // Subdirectory format: optimizer-strategy-timestamp/tradeAudit.log
+    const dirName = filename.split('/')[0];
+    const dirParts = dirName.match(/^(\w+)-(.+?)-(\d{4}-\d{2}-\d{2}T[\d-]+)$/);
+    if (dirParts) {
+      optimizer = dirParts[1].toUpperCase();
+      strategy = dirParts[2];
+    }
+
+    // Try to get better strategy name from params.yaml
+    const paramsPath = path.join(simulatorLogsDir, dirName, 'params.yaml');
+    if (fs.existsSync(paramsPath)) {
+      try {
+        const yamlContent = fs.readFileSync(paramsPath, 'utf-8');
+        const botStyleMatch = yamlContent.match(/botStyle:\s*(.+)/);
+        if (botStyleMatch) {
+          strategy = botStyleMatch[1].trim();
+        }
+      } catch (e) {
+        // Ignore
+      }
+    }
+  } else {
+    // Old .audit.log format
+    const parsed = parseSimulatorFilename(filename);
+    strategy = parsed.strategy;
+    generation = parsed.generation;
+  }
 
   res.json({
-    filename: req.params.filename,
-    strategy: parsed.strategy,
-    generation: parsed.generation,
+    filename: filename,
+    strategy: strategy,
+    generation: generation,
+    optimizer: optimizer,
     totalTrades: trades.length,
     completedTrades: completedTrades.length,
     matchedTrades: trades.filter(t => t.status === 'MATCHED').length,
@@ -1188,12 +1315,13 @@ app.get('/api/simulator/file/:filename/stats', (req, res) => {
 });
 
 // Get cumulative PnL for a simulator audit file
-app.get('/api/simulator/file/:filename/cumulative-pnl', (req, res) => {
+app.get('/api/simulator/file/:filename(*)/cumulative-pnl', (req, res) => {
   // Validate path to prevent path traversal attacks
-  if (!isPathSafe(simulatorLogsDir, req.params.filename)) {
+  const filename = req.params.filename;
+  if (!isPathSafe(simulatorLogsDir, filename)) {
     return res.status(400).json({ error: 'Invalid path' });
   }
-  const filePath = path.join(simulatorLogsDir, req.params.filename);
+  const filePath = path.join(simulatorLogsDir, filename);
   const trades = parseSimulatorAuditFile(filePath);
 
   const completedTrades = trades
@@ -1218,12 +1346,13 @@ app.get('/api/simulator/file/:filename/cumulative-pnl', (req, res) => {
 });
 
 // Get PnL distribution for a simulator audit file
-app.get('/api/simulator/file/:filename/pnl-distribution', (req, res) => {
+app.get('/api/simulator/file/:filename(*)/pnl-distribution', (req, res) => {
   // Validate path to prevent path traversal attacks
-  if (!isPathSafe(simulatorLogsDir, req.params.filename)) {
+  const filename = req.params.filename;
+  if (!isPathSafe(simulatorLogsDir, filename)) {
     return res.status(400).json({ error: 'Invalid path' });
   }
-  const filePath = path.join(simulatorLogsDir, req.params.filename);
+  const filePath = path.join(simulatorLogsDir, filename);
   const trades = parseSimulatorAuditFile(filePath);
 
   const completedTrades = trades.filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED');
@@ -1243,12 +1372,13 @@ app.get('/api/simulator/file/:filename/pnl-distribution', (req, res) => {
 });
 
 // Get top trades and parameters from a simulator audit file
-app.get('/api/simulator/file/:filename/top-trades', (req, res) => {
+app.get('/api/simulator/file/:filename(*)/top-trades', (req, res) => {
   // Validate path to prevent path traversal attacks
-  if (!isPathSafe(simulatorLogsDir, req.params.filename)) {
+  const filename = req.params.filename;
+  if (!isPathSafe(simulatorLogsDir, filename)) {
     return res.status(400).json({ error: 'Invalid path' });
   }
-  const filePath = path.join(simulatorLogsDir, req.params.filename);
+  const filePath = path.join(simulatorLogsDir, filename);
   const parsed = parseSimulatorAuditFileExtended(filePath);
 
   if (!parsed.topTrades) {
@@ -1264,12 +1394,13 @@ app.get('/api/simulator/file/:filename/top-trades', (req, res) => {
 });
 
 // Get average trade statistics and parameters from a simulator audit file
-app.get('/api/simulator/file/:filename/avg-stats', (req, res) => {
+app.get('/api/simulator/file/:filename(*)/avg-stats', (req, res) => {
   // Validate path to prevent path traversal attacks
-  if (!isPathSafe(simulatorLogsDir, req.params.filename)) {
+  const filename = req.params.filename;
+  if (!isPathSafe(simulatorLogsDir, filename)) {
     return res.status(400).json({ error: 'Invalid path' });
   }
-  const filePath = path.join(simulatorLogsDir, req.params.filename);
+  const filePath = path.join(simulatorLogsDir, filename);
   const parsed = parseSimulatorAuditFileExtended(filePath);
 
   if (!parsed.avgStats) {
@@ -1283,20 +1414,74 @@ app.get('/api/simulator/file/:filename/avg-stats', (req, res) => {
 });
 
 // Get full extended data from a simulator audit file (includes all sections)
-app.get('/api/simulator/file/:filename/extended', (req, res) => {
+app.get('/api/simulator/file/:filename(*)/extended', (req, res) => {
   // Validate path to prevent path traversal attacks
-  if (!isPathSafe(simulatorLogsDir, req.params.filename)) {
+  const filename = req.params.filename;
+  if (!isPathSafe(simulatorLogsDir, filename)) {
     return res.status(400).json({ error: 'Invalid path' });
   }
-  const filePath = path.join(simulatorLogsDir, req.params.filename);
+  const filePath = path.join(simulatorLogsDir, filename);
   const parsed = parseSimulatorAuditFileExtended(filePath);
+
+  // For subdirectory files, try to read params.yaml
+  let paramsYaml = null;
+  if (filename.includes('/')) {
+    const dirPath = path.dirname(filePath);
+    const paramsPath = path.join(dirPath, 'params.yaml');
+    if (fs.existsSync(paramsPath)) {
+      try {
+        const yamlContent = fs.readFileSync(paramsPath, 'utf-8');
+        // Parse key sections from YAML
+        const paramsMatch = yamlContent.match(/params:\n((?:\s{2}.+\n)+)/);
+        const optimizationMatch = yamlContent.match(/optimization:\n((?:\s{2}.+\n)+)/);
+
+        if (paramsMatch) {
+          // Parse params section
+          const paramsSection = paramsMatch[1];
+          const params = {};
+          const paramLines = paramsSection.match(/\s{2}(\w+):\s*(.+)/g) || [];
+          paramLines.forEach(line => {
+            const match = line.match(/\s{2}(\w+):\s*(.+)/);
+            if (match) {
+              const value = parseFloat(match[2]);
+              params[match[1]] = isNaN(value) ? match[2] : value;
+            }
+          });
+          paramsYaml = { params };
+        }
+
+        if (optimizationMatch) {
+          // Parse optimization section
+          const optSection = optimizationMatch[1];
+          const optimization = {};
+          const optLines = optSection.match(/\s{2}(\w+):\s*(.+)/g) || [];
+          optLines.forEach(line => {
+            const match = line.match(/\s{2}(\w+):\s*(.+)/);
+            if (match) {
+              const value = parseFloat(match[2]);
+              optimization[match[1]] = isNaN(value) ? match[2] : value;
+            }
+          });
+          paramsYaml = { ...paramsYaml, optimization };
+        }
+      } catch (e) {
+        // Ignore YAML parsing errors
+      }
+    }
+  }
+
+  // If we have params from YAML, create avgStats structure for display
+  const avgStats = parsed.avgStats || (paramsYaml ? {
+    params: paramsYaml.params,
+    ...paramsYaml.optimization
+  } : null);
 
   res.json({
     tradesCount: parsed.trades.length,
     hasTopTrades: !!parsed.topTrades,
-    hasAvgStats: !!parsed.avgStats,
+    hasAvgStats: !!avgStats,
     topTrades: parsed.topTrades,
-    avgStats: parsed.avgStats
+    avgStats: avgStats
   });
 });
 
@@ -1306,11 +1491,44 @@ app.get('/api/simulator/strategies', (req, res) => {
     return res.json([]);
   }
 
-  const files = fs.readdirSync(simulatorLogsDir)
-    .filter(f => f.endsWith('.audit.log'));
+  const strategies = new Set();
 
-  const strategies = [...new Set(files.map(f => parseSimulatorFilename(f).strategy))].sort();
-  res.json(strategies);
+  // Get strategies from .audit.log files
+  const auditFiles = fs.readdirSync(simulatorLogsDir)
+    .filter(f => f.endsWith('.audit.log'));
+  auditFiles.forEach(f => strategies.add(parseSimulatorFilename(f).strategy));
+
+  // Get strategies from subdirectory tradeAudit.log files
+  const entries = fs.readdirSync(simulatorLogsDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      const tradeAuditPath = path.join(simulatorLogsDir, entry.name, 'tradeAudit.log');
+      const paramsPath = path.join(simulatorLogsDir, entry.name, 'params.yaml');
+
+      if (fs.existsSync(tradeAuditPath)) {
+        // Try to get strategy name from params.yaml
+        if (fs.existsSync(paramsPath)) {
+          try {
+            const yamlContent = fs.readFileSync(paramsPath, 'utf-8');
+            const botStyleMatch = yamlContent.match(/botStyle:\s*(.+)/);
+            if (botStyleMatch) {
+              strategies.add(botStyleMatch[1].trim());
+              continue;
+            }
+          } catch (e) {
+            // Fall through to directory name parsing
+          }
+        }
+        // Fall back to parsing directory name
+        const dirParts = entry.name.match(/^(\w+)-(.+?)-(\d{4}-\d{2}-\d{2}T[\d-]+)$/);
+        if (dirParts) {
+          strategies.add(dirParts[2]);
+        }
+      }
+    }
+  }
+
+  res.json([...strategies].sort());
 });
 
 // ============================================================================

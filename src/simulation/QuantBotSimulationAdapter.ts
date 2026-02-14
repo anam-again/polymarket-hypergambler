@@ -52,13 +52,12 @@ export class QuantBotSimulationAdapter implements SimulatedBot {
      */
     public async onHourChange(): Promise<void> {
         try {
-            // Snapshot trades BEFORE reset clears them
-            const currentTrades = this.bot.trades.map(trade =>
+            // Get trades from period end (includes expiry trades created during settlement)
+            const periodTrades = await this.bot.onSimulationPeriodEnd();
+            const simulatedTrades = periodTrades.map(trade =>
                 this.convertToSimulatedTrade(trade)
             );
-            this.accumulatedTrades.push(...currentTrades);
-
-            await this.bot.onSimulationPeriodEnd();
+            this.accumulatedTrades.push(...simulatedTrades);
         } catch (error) {
             console.warn(`[${this.name}] Error in onHourChange: ${error}`);
         }

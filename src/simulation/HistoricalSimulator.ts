@@ -7,6 +7,10 @@ import { GeneticOptimizer, CoinType } from './GeneticOptimizer.js';
 import type { GeneticConfig, ParameterBounds, OptimizationResult, ValidationResult, StabilityResult } from './GeneticOptimizer.js';
 import { SimulatorLogger } from './SimulatorLogger.js';
 import { TargetedMarket } from '../types/interfaces.js';
+import { RegimeType, RegimeDetector, TradeGate, ALL_REGIME_TYPES } from '../regime/index.js';
+import type { RegimeStats } from '../regime/index.js';
+import { ACTIVE_MSPEQ_SIGNALS } from './strategyDefinitions.js';
+import { isRegimeAwareStrategy } from '../strategies/index.js';
 
 // Default concurrency for parallel simulation
 const DEFAULT_CONCURRENCY = Math.max(1, availableParallelism() - 1);
@@ -14,6 +18,9 @@ const DEFAULT_CONCURRENCY = Math.max(1, availableParallelism() - 1);
 // Re-export CoinType and TargetedMarket for convenience
 export { CoinType } from './GeneticOptimizer.js';
 export { TargetedMarket } from '../types/interfaces.js';
+// Re-export RegimeType for convenience
+export { RegimeType } from '../regime/index.js';
+export type { RegimeStats } from '../regime/index.js';
 
 // ============================================================================
 // ANSI Color Codes
@@ -42,6 +49,8 @@ export interface SimulationConfig {
     validationConfig?: ValidationConfig;
     // Parallelization settings
     concurrentSimulations?: number; // Number of parallel simulations (default: CPU cores - 1)
+    // End timestamp for simulation (defaults to Date.now() for reproducible backtests)
+    endTime?: number;
 }
 
 export interface ValidationConfig {
@@ -78,6 +87,9 @@ export interface BotParams {
     targetedMarket: TargetedMarket;
     shouldWriteLogs?: boolean;   // Optional - defaults to false for simulation
     logDirectory?: string;       // Optional - custom log directory for audit runs
+    // Regime-aware components (optional - only for RegimeAware strategies)
+    tradeGate?: TradeGate;       // TradeGate for gating trades based on regime
+    regimeDetector?: RegimeDetector; // RegimeDetector for detecting current regime
 }
 
 export interface SimulatedBot {
@@ -87,6 +99,7 @@ export interface SimulatedBot {
     getTrades: () => SimulatedTrade[];
     reset: () => void;
     dispose?: () => void;  // Optional cleanup method to help GC
+    getLastSignals?: () => Record<string, number> | null;  // Optional - for regime detection
 }
 
 export interface SimulatedTrade {
@@ -127,6 +140,8 @@ export interface SimulationResult {
     sortinoRatio: number;
     /** Calmar ratio: totalPnl / |maxDrawdown| (return per unit of max pain) */
     calmarRatio: number;
+    /** Per-regime statistics (optional, only present in regime-aware simulations) */
+    regimeStats?: Record<RegimeType, RegimeStats>;
 }
 
 // ============================================================================
@@ -156,7 +171,7 @@ export class HistoricalSimulator {
 
         this.config = {
             ...config,
-            tickIntervalMs: config.tickIntervalMs ?? 60 * 1000,
+            tickIntervalMs: config.tickIntervalMs ?? 5 * 1000,
             coinType: config.coinType,
             auditTradesCount: config.auditTradesCount ?? 0,
             targetedMarket: config.targetedMarket,
@@ -381,15 +396,23 @@ export class HistoricalSimulator {
                     currentAvg
                 );
 
+                // Detect if this is a RegimeAware strategy using the registry
+                const isRegimeAware = isRegimeAwareStrategy(botName);
+
                 // Run batch in parallel
                 const batchPromises = batch.map(async (params) => {
+                    // Choose simulation method based on strategy type
+                    const runSimulation = isRegimeAware
+                        ? () => this.runRegimeAwareSimulation(botName, botFactory, params)
+                        : () => this.runSingleBotSimulationWithTrades(botName, botFactory, params);
+
                     if (bootstrapRuns > 1) {
                         // Run multiple simulations and average the results
                         const runResults: SimulationResult[] = [];
                         let lastTrades: SimulatedTrade[] = [];
 
                         for (let run = 0; run < bootstrapRuns; run++) {
-                            const runOutput = await this.runSingleBotSimulationWithTrades(botName, botFactory, params);
+                            const runOutput = await runSimulation();
                             runResults.push(runOutput.result);
                             lastTrades = runOutput.trades;
                         }
@@ -400,7 +423,7 @@ export class HistoricalSimulator {
                             params
                         };
                     } else {
-                        const output = await this.runSingleBotSimulationWithTrades(botName, botFactory, params);
+                        const output = await runSimulation();
                         return { result: output.result, trades: output.trades, params };
                     }
                 });
@@ -547,6 +570,7 @@ export class HistoricalSimulator {
 
     /**
      * Runs a single bot simulation and returns both results and trades.
+     * Uses local variables for parallel safety (multiple simulations can run concurrently).
      */
     private async runSingleBotSimulationWithTrades(
         botName: string,
@@ -554,15 +578,21 @@ export class HistoricalSimulator {
         params: Record<string, number>,
         options?: { shouldWriteLogs?: boolean; logDirectory?: string }
     ): Promise<{ result: SimulationResult; trades: SimulatedTrade[] }> {
-        // Initialize fresh simulation components
-        this.initializeSimulationQuiet();
+        // Create fresh simulation components (local variables for parallel safety)
+        const endTime = this.config.endTime ?? Date.now();
+        const startTime = endTime - (this.config.lookbackDays * 24 * 60 * 60 * 1000);
+        const coinType = this.config.coinType!;
+
+        const clock = new SimulationClock(startTime, endTime, this.config.tickIntervalMs);
+        const marketInfo = new MockMarketInfo(clock, coinType);
+        const cdMarketData = new MockCDMarketData(clock, coinType);
 
         // Create the bot
         const bot = botFactory({
             name: botName,
-            clock: this.clock,
-            marketInfo: this.marketInfo,
-            cdMarketData: this.cdMarketData,
+            clock,
+            marketInfo,
+            cdMarketData,
             params,
             targetedMarket: this.config.targetedMarket!,
             shouldWriteLogs: options?.shouldWriteLogs ?? false,
@@ -573,18 +603,18 @@ export class HistoricalSimulator {
         const isQuarterly = this.config.targetedMarket?.toString().includes('Quarterly');
         if (isQuarterly) {
             // For quarterly markets, reset every 15 minutes
-            this.clock.on('quarterly', async () => {
+            clock.on('quarterly', async () => {
                 await bot.onHourChange();
             });
         } else {
             // For hourly markets, reset every hour
-            this.clock.on('hourly', async () => {
+            clock.on('hourly', async () => {
                 await bot.onHourChange();
             });
         }
 
         // Run the simulation
-        while (!this.clock.isComplete()) {
+        while (!clock.isComplete()) {
             try {
                 await bot.onTick();
             } catch (error) {
@@ -597,7 +627,7 @@ export class HistoricalSimulator {
                     throw error; // Re-throw other errors
                 }
             }
-            await this.clock.tick();  // Now properly awaits period change handlers
+            await clock.tick();  // Now properly awaits period change handlers
         }
 
         // Calculate results
@@ -608,16 +638,11 @@ export class HistoricalSimulator {
         const tradesCopy = [...trades];
 
         // Cleanup - clear listeners and dispose bot to help GC
-        this.clock.clearListeners();
+        clock.clearListeners();
         bot.reset();
         if (bot.dispose) {
             bot.dispose();
         }
-
-        // Null out references to help GC
-        (this as any).clock = null;
-        (this as any).marketInfo = null;
-        (this as any).cdMarketData = null;
 
         return { result, trades: tradesCopy };
     }
@@ -626,7 +651,7 @@ export class HistoricalSimulator {
      * Initializes simulation without verbose output.
      */
     private initializeSimulationQuiet(): void {
-        const endTime = Date.now();
+        const endTime = this.config.endTime ?? Date.now();
         const startTime = endTime - (this.config.lookbackDays * 24 * 60 * 60 * 1000);
         const coinType = this.config.coinType!;
 
@@ -643,6 +668,175 @@ export class HistoricalSimulator {
         this.clock = new SimulationClock(startTime, endTime, this.config.tickIntervalMs);
         this.marketInfo = new MockMarketInfo(this.clock, coinType);
         this.cdMarketData = new MockCDMarketData(this.clock, coinType);
+    }
+
+    /**
+     * Runs a regime-aware simulation that tracks trades by regime.
+     * The regime is locked at period start based on signals at that time.
+     * Uses local variables for parallel safety (multiple simulations can run concurrently).
+     *
+     * @param botName - Name of the bot
+     * @param botFactory - Factory function to create the bot
+     * @param params - Parameters including regime detection thresholds
+     * @returns Simulation result with per-regime statistics
+     */
+    public async runRegimeAwareSimulation(
+        botName: string,
+        botFactory: (params: BotParams) => SimulatedBot,
+        params: Record<string, number>,
+        options?: { shouldWriteLogs?: boolean; logDirectory?: string }
+    ): Promise<{ result: SimulationResult; trades: SimulatedTrade[] }> {
+        // Create fresh simulation components (local variables for parallel safety)
+        const endTime = this.config.endTime ?? Date.now();
+        const startTime = endTime - (this.config.lookbackDays * 24 * 60 * 60 * 1000);
+        const coinType = this.config.coinType!;
+
+        const clock = new SimulationClock(startTime, endTime, this.config.tickIntervalMs);
+        const marketInfo = new MockMarketInfo(clock, coinType);
+        const cdMarketData = new MockCDMarketData(clock, coinType);
+
+        // Create regime detector from params
+        const regimeDetector = RegimeDetector.fromParams(params);
+
+        // Create trade gate from params (uses ACTIVE_MSPEQ_SIGNALS)
+        const tradeGate = TradeGate.fromParams(params, [...ACTIVE_MSPEQ_SIGNALS]);
+
+        // Track trades by regime
+        const regimeTrades: Record<RegimeType, SimulatedTrade[]> = {
+            [RegimeType.HIGH_VOL_TRENDING]: [],
+            [RegimeType.HIGH_VOL_RANGING]: [],
+            [RegimeType.LOW_VOL_TRENDING]: [],
+            [RegimeType.LOW_VOL_RANGING]: [],
+        };
+
+        // Track regime periods
+        const regimePeriodCounts: Record<RegimeType, number> = {
+            [RegimeType.HIGH_VOL_TRENDING]: 0,
+            [RegimeType.HIGH_VOL_RANGING]: 0,
+            [RegimeType.LOW_VOL_TRENDING]: 0,
+            [RegimeType.LOW_VOL_RANGING]: 0,
+        };
+
+        let currentRegime: RegimeType | null = null;
+        let periodStartTradeIndex = 0;
+
+        // Create the bot with regime-aware components
+        const bot = botFactory({
+            name: botName,
+            clock,
+            marketInfo,
+            cdMarketData,
+            params,
+            targetedMarket: this.config.targetedMarket!,
+            shouldWriteLogs: options?.shouldWriteLogs ?? false,
+            logDirectory: options?.logDirectory,
+            tradeGate,
+            regimeDetector,
+        });
+
+        // Determine period event type
+        const isQuarterly = this.config.targetedMarket?.toString().includes('Quarterly');
+        const periodEvent = isQuarterly ? 'quarterly' : 'hourly';
+
+        // Register period change handler
+        clock.on(periodEvent, async () => {
+            // Classify trades from previous period to the locked regime
+            if (currentRegime !== null) {
+                const trades = bot.getTrades();
+                const periodTrades = trades.slice(periodStartTradeIndex);
+                regimeTrades[currentRegime].push(...periodTrades);
+                periodStartTradeIndex = trades.length;
+            }
+
+            // Detect regime for new period from bot's signals
+            const signals = bot.getLastSignals?.();
+            if (signals) {
+                currentRegime = regimeDetector.detect(signals);
+                regimePeriodCounts[currentRegime]++;
+            } else {
+                // Default to LOW_VOL_RANGING if no signals available
+                currentRegime = RegimeType.LOW_VOL_RANGING;
+                regimePeriodCounts[currentRegime]++;
+            }
+
+            await bot.onHourChange();
+        });
+
+        // Run the simulation
+        while (!clock.isComplete()) {
+            try {
+                await bot.onTick();
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                if (!errorMessage.includes('No data available')) {
+                    throw error;
+                }
+            }
+            await clock.tick();
+        }
+
+        // Classify final period's trades
+        if (currentRegime !== null) {
+            const trades = bot.getTrades();
+            const periodTrades = trades.slice(periodStartTradeIndex);
+            const targetArray = regimeTrades[currentRegime as RegimeType];
+            targetArray.push(...periodTrades);
+        }
+
+        // Calculate base results
+        const allTrades = bot.getTrades();
+        const result = this.calculateResults(botName, params, allTrades);
+
+        // Calculate per-regime statistics
+        result.regimeStats = this.calculateRegimeStats(regimeTrades, regimePeriodCounts);
+
+        // Copy trades before cleanup
+        const tradesCopy = [...allTrades];
+
+        // Cleanup
+        clock.clearListeners();
+        bot.reset();
+        if (bot.dispose) {
+            bot.dispose();
+        }
+
+        return { result, trades: tradesCopy };
+    }
+
+    /**
+     * Calculates per-regime statistics from classified trades.
+     */
+    private calculateRegimeStats(
+        regimeTrades: Record<RegimeType, SimulatedTrade[]>,
+        regimePeriodCounts: Record<RegimeType, number>
+    ): Record<RegimeType, RegimeStats> {
+        const stats: Record<RegimeType, RegimeStats> = {} as Record<RegimeType, RegimeStats>;
+
+        for (const regime of ALL_REGIME_TYPES) {
+            const trades = regimeTrades[regime];
+            const pnls = trades
+                .filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED')
+                .map(t => t.pnl ?? 0);
+
+            const totalPnl = pnls.reduce((a, b) => a + b, 0);
+            const avgPnl = pnls.length > 0 ? totalPnl / pnls.length : 0;
+
+            // Calculate Sharpe ratio for this regime
+            const variance = pnls.length > 1
+                ? pnls.reduce((sum, p) => sum + (p - avgPnl) ** 2, 0) / (pnls.length - 1)
+                : 0;
+            const sharpe = variance > 0 ? avgPnl / Math.sqrt(variance) : (avgPnl > 0 ? 1 : 0);
+
+            stats[regime] = {
+                regime,
+                periodCount: regimePeriodCounts[regime],
+                tradeCount: trades.length,
+                pnl: totalPnl,
+                sharpeRatio: sharpe,
+            };
+        }
+
+        return stats;
     }
 
     /**
@@ -811,7 +1005,7 @@ export class HistoricalSimulator {
         params: Record<string, number>
     ): Promise<{ trainPnl: number; validationPnl: number }> {
         const valConfig = this.config.validationConfig!;
-        const endTime = Date.now();
+        const endTime = this.config.endTime ?? Date.now();
         const totalMs = this.config.lookbackDays * 24 * 60 * 60 * 1000;
         const startTime = endTime - totalMs;
 
@@ -845,7 +1039,7 @@ export class HistoricalSimulator {
         params: Record<string, number>
     ): Promise<{ pnls: number[]; avg: number; stdDev: number }> {
         const valConfig = this.config.validationConfig!;
-        const endTime = Date.now();
+        const endTime = this.config.endTime ?? Date.now();
         const totalMs = this.config.lookbackDays * 24 * 60 * 60 * 1000;
         const startTime = endTime - totalMs;
 
@@ -888,7 +1082,7 @@ export class HistoricalSimulator {
         params: Record<string, number>
     ): Promise<number> {
         const valConfig = this.config.validationConfig!;
-        const endTime = Date.now();
+        const endTime = this.config.endTime ?? Date.now();
         const totalMs = this.config.lookbackDays * 24 * 60 * 60 * 1000;
 
         // Holdout is the most recent portion of data

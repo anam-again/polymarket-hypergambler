@@ -252,6 +252,7 @@ export class IterativeRefinement {
             const batchSize = paramSets.length;
 
             for (let i = 0; i < paramSets.length; i++) {
+                const currentBest = optimizer.getBest();
                 status.update({
                     strategy: this.strategyName || undefined,
                     optimizer: optimizer.name,
@@ -259,7 +260,8 @@ export class IterativeRefinement {
                     individual: i + 1,
                     batchSize,
                     phase: stageName,
-                    bestFitness: optimizer.getBest()?.fitness,
+                    bestFitness: currentBest?.fitness,
+                    bestTradeCount: currentBest?.tradeCount,
                     evaluating: true,
                 });
 
@@ -290,14 +292,16 @@ export class IterativeRefinement {
                 iteration: iterations,
                 phase: stageName,
                 bestFitness: best?.fitness,
+                bestTradeCount: best?.tradeCount,
             });
 
             // Check stopping
             const stopCondition = optimizer.shouldStop();
             if (stopCondition.stop) {
+                const tradeInfo = best?.tradeCount !== undefined ? ` (${best.tradeCount} trades)` : '';
                 status.finalize(
                     `${ANSI.GREEN}[${stageName}/${optimizer.name}]${ANSI.RESET} ` +
-                    `${stopCondition.reason} | Best: ${ANSI.BOLD}$${best?.fitness.toFixed(2) ?? 'N/A'}${ANSI.RESET}`
+                    `${stopCondition.reason} | Best: ${ANSI.BOLD}$${best?.fitness.toFixed(2) ?? 'N/A'}${ANSI.RESET}${tradeInfo}`
                 );
                 break;
             }
@@ -424,6 +428,7 @@ class StatusDisplay {
         batchSize?: number;
         phase?: string;
         bestFitness?: number;
+        bestTradeCount?: number;
         evaluating?: boolean;
     }): void {
         if (!this.enabled) return;
@@ -456,10 +461,14 @@ class StatusDisplay {
             parts.push(`[${status.individual}/${status.batchSize}] ${evalStatus}`);
         }
 
-        // Best fitness
+        // Best fitness and trade count
         if (status.bestFitness !== undefined) {
             const fitnessColor = status.bestFitness >= 0 ? ANSI.GREEN : ANSI.YELLOW;
-            parts.push(`Best: ${fitnessColor}$${status.bestFitness.toFixed(2)}${ANSI.RESET}`);
+            let bestStr = `Best: ${fitnessColor}$${status.bestFitness.toFixed(2)}${ANSI.RESET}`;
+            if (status.bestTradeCount !== undefined) {
+                bestStr += ` ${ANSI.DIM}(${status.bestTradeCount} trades)${ANSI.RESET}`;
+            }
+            parts.push(bestStr);
         }
 
         // Clear previous line and write new status
@@ -536,6 +545,7 @@ export async function runSingleStageOptimization(
 
         for (let i = 0; i < paramSets.length; i++) {
             // Update status before evaluation
+            const currentBest = optimizer.getBest();
             status.update({
                 strategy: context?.strategyName,
                 optimizer: optimizer.name,
@@ -544,7 +554,8 @@ export async function runSingleStageOptimization(
                 individual: i + 1,
                 batchSize,
                 phase: context?.phase,
-                bestFitness: optimizer.getBest()?.fitness,
+                bestFitness: currentBest?.fitness,
+                bestTradeCount: currentBest?.tradeCount,
                 evaluating: true,
             });
 
@@ -572,14 +583,16 @@ export async function runSingleStageOptimization(
             maxIterations,
             phase: context?.phase,
             bestFitness: best?.fitness,
+            bestTradeCount: best?.tradeCount,
         });
 
         const stopCondition = optimizer.shouldStop();
         if (stopCondition.stop) {
+            const tradeInfo = best?.tradeCount !== undefined ? ` (${best.tradeCount} trades)` : '';
             status.finalize(
                 `${ANSI.GREEN}[${optimizer.name}]${ANSI.RESET} ` +
                 `Completed ${iterations} iterations - ${stopCondition.reason} ` +
-                `| Best: ${ANSI.BOLD}$${best?.fitness.toFixed(2) ?? 'N/A'}${ANSI.RESET}`
+                `| Best: ${ANSI.BOLD}$${best?.fitness.toFixed(2) ?? 'N/A'}${ANSI.RESET}${tradeInfo}`
             );
             break;
         }

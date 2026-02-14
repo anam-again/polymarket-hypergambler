@@ -2,6 +2,7 @@ import { QuantBot, QuantBotProps } from "./QuantBot.js";
 import { MarketSchedule } from "../types/interfaces.js";
 import { ISignalProvider, SignalSnapshot } from "../signals/SignalProvider.js";
 import { HistoricalSignalProvider } from "../signals/MockSignalProvider.js";
+import { TradeGate, RegimeDetector, RegimeType } from "../regime/index.js";
 
 // ============================================================================
 // Types & Interfaces
@@ -10,6 +11,9 @@ import { HistoricalSignalProvider } from "../signals/MockSignalProvider.js";
 export interface MSPEQBotProps extends QuantBotProps {
     candleSizeReference: number;
     signalProvider?: ISignalProvider;
+    // Regime-aware trading (optional)
+    tradeGate?: TradeGate;
+    regimeDetector?: RegimeDetector;
 }
 
 // ============================================================================
@@ -49,12 +53,19 @@ export abstract class MSPEQBotBase extends QuantBot {
     protected candleHigh: number = 0;
     protected candleLow: number = Infinity;
 
+    // --- Regime-Aware Trading ---
+    protected tradeGate?: TradeGate;
+    protected regimeDetector?: RegimeDetector;
+    protected currentRegime: RegimeType = RegimeType.LOW_VOL_RANGING;
+
     // --- Constructor ---
 
     constructor(props: MSPEQBotProps) {
         super(props);
 
         this.candleSizeReference = props.candleSizeReference;
+        this.tradeGate = props.tradeGate;
+        this.regimeDetector = props.regimeDetector;
 
         // Signal provider (default to HistoricalSignalProvider for simulation)
         this.signalProvider = props.signalProvider ?? new HistoricalSignalProvider({
@@ -153,6 +164,48 @@ export abstract class MSPEQBotBase extends QuantBot {
         };
     }
 
+    // -------------------------------------------------------------------------
+    // Regime-Aware Trading
+    // -------------------------------------------------------------------------
+
+    /**
+     * Updates the current regime based on signals.
+     * Should be called after updateSignals() if regime-aware trading is enabled.
+     */
+    protected updateRegime(): void {
+        if (this.regimeDetector && this.lastSignals) {
+            this.currentRegime = this.regimeDetector.detect(this.lastSignals);
+        }
+    }
+
+    /**
+     * Checks if trading should proceed based on TradeGate evaluation.
+     * If no TradeGate is configured, always returns true (allow trading).
+     *
+     * @returns true if trading should proceed, false if gated
+     */
+    protected shouldTrade(): boolean {
+        if (!this.tradeGate) {
+            return true; // No gate configured, allow all trades
+        }
+
+        const signals = this.getSignalRecord();
+        const result = this.tradeGate.evaluate(signals, this.currentRegime);
+
+        if (!result.shouldTrade) {
+            this.writeLog(`TradeGate blocked trade: confidence=${result.confidence.toFixed(3)}, regime=${this.currentRegime}`);
+        }
+
+        return result.shouldTrade;
+    }
+
+    /**
+     * Gets the current regime type.
+     */
+    protected getRegime(): RegimeType {
+        return this.currentRegime;
+    }
+
     /**
      * Updates the signal provider's period timing.
      * Should be called on period reset.
@@ -169,6 +222,25 @@ export abstract class MSPEQBotBase extends QuantBot {
         const periodEnd = periodStart + periodLength;
 
         this.signalProvider.setPeriodTiming(periodStart, periodEnd);
+    }
+
+    /**
+     * Returns the last computed signals for regime detection.
+     * This is used by the simulator to determine the market regime.
+     */
+    public getLastSignals(): Record<string, number> | null {
+        if (!this.lastSignals) return null;
+        return {
+            candleSize: this.lastSignals.candleSize,
+            timeLeft: this.lastSignals.timeLeft,
+            volatility: this.lastSignals.volatility,
+            momentum: this.lastSignals.momentum,
+            priceImbalance: this.lastSignals.priceImbalance,
+            rangePosition: this.lastSignals.rangePosition,
+            trendStrength: this.lastSignals.trendStrength,
+            volatilityTrend: this.lastSignals.volatilityTrend,
+            hourOfDay: this.lastSignals.hourOfDay,
+        };
     }
 
     /**

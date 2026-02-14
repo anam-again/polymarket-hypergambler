@@ -11,8 +11,10 @@ import { BotParams, SimulatedBot } from './HistoricalSimulator.js';
 import { BtcDirection } from '../types/interfaces.js';
 import { createMockClobClient, QuantBotSimulationAdapter } from './QuantBotSimulationAdapter.js';
 import type { ParameterBounds } from './GeneticOptimizer.js';
+import { RegimeDetector, TradeGate, RegimeMSPEQManager } from '../regime/index.js';
 
 // Import bot classes
+import { Contrarian } from '../bots/Contrarian.js';
 import { ContrarianV2 } from '../bots/ContrarianV2.js';
 import { TrendFollowing } from '../bots/TrendFollowing.js';
 import { FirstCandle } from '../bots/FirstCandle.js';
@@ -401,12 +403,12 @@ const quarterlyMarketMakerBounds: ParameterBounds = {
 // ============================================================================
 
 const firstCandleMSPEQBounds: ParameterBounds = {
-    targetDollars: { min: 5, max: 20, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 5 },
     candleMinutes: { min: 2, max: 20, step: 2 },
     breakoutBuffer: { min: 0, max: 300 },
     pullbackBuffer: { min: 0, max: 500 },
     cutoffMinute: { min: 5, max: 55, step: 5 },
-    candleSizeReference: { min: 0, max: 1000},
+    candleSizeReference: { min: 0, max: 1000 },
     baseBuyPrice: { min: 0.10, max: 0.90, step: 0.01 },
     minProfitMargin: { min: 0.01, max: 0.50, step: 0.01 },
     ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
@@ -418,13 +420,13 @@ const firstCandleMSPEQBounds: ParameterBounds = {
 };
 
 const quarterlyFirstCandleMSPEQBounds: ParameterBounds = {
-    targetDollars: { min: 5, max: 20, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 5 },
     candleMinutes: { min: 1, max: 7, step: 1 },
     breakoutBuffer: { min: 0, max: 200 },
     pullbackBuffer: { min: 0, max: 300 },
-    cutoffMinute: { min: 5, max: 14, step: 1 },
-    candleSizeReference: { min: 0, max: 2000, step: 100 },
-    baseBuyPrice: { min: 0.30, max: 0.70, step: 0.02 },
+    cutoffMinute: { min: 3, max: 14, step: 1 },
+    candleSizeReference: { min: 0, max: 1000 },
+    baseBuyPrice: { min: 0.10, max: 0.70, step: 0.02 },
     minProfitMargin: { min: 0.01, max: 0.50, step: 0.01 },
     ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
     ...generateMSPEQBounds('sellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
@@ -438,11 +440,11 @@ const quarterlyFirstCandleMSPEQBounds: ParameterBounds = {
 // EarlyBuyerMSPEQ Full Bounds (base params + MSPEQ coefficients)
 const earlyBuyerMSPEQBounds: ParameterBounds = {
     // Base parameters
-    targetDollars: { min: 5, max: 20, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 5 },
     baseBuyPrice: { min: 0.10, max: 0.70, step: 0.02 },
     baseSellPrice: { min: 0.40, max: 0.95, step: 0.02 },
     baseCutoffMinute: { min: 5, max: 50, step: 5 },
-    candleSizeReference: { min: 0, max: 500, step: 50 },
+    candleSizeReference: { min: 0, max: 500 },
     minProfitMargin: { min: 0.01, max: 0.50, step: 0.01 },
     directionThreshold: { min: 0.3, max: 0.7, step: 0.02 },
     // MSPEQ coefficients
@@ -456,12 +458,12 @@ const earlyBuyerMSPEQBounds: ParameterBounds = {
 
 const quarterlyEarlyBuyerMSPEQBounds: ParameterBounds = {
     // Base parameters (quarterly-specific ranges)
-    targetDollars: { min: 5, max: 20, step: 1 },
-    baseBuyPrice: { min: 0.30, max: 0.60, step: 0.02 },
-    baseSellPrice: { min: 0.60, max: 0.90, step: 0.02 },
-    baseCutoffMinute: { min: 3, max: 12, step: 1 },
-    candleSizeReference: { min: 0, max: 500, step: 50 },
-    minProfitMargin: { min: 0.05, max: 0.25, step: 0.02 },
+    targetDollars: { min: 5, max: 20, step: 5 },
+    baseBuyPrice: { min: 0.10, max: 0.60, step: 0.02 },
+    baseSellPrice: { min: 0.30, max: 0.90, step: 0.02 },
+    baseCutoffMinute: { min: 2, max: 12, step: 1 },
+    candleSizeReference: { min: 0, max: 500},
+    minProfitMargin: { min: 0.02, max: 0.25, step: 0.02 },
     directionThreshold: { min: 0.3, max: 0.7, step: 0.02 },
     // MSPEQ coefficients
     ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
@@ -477,17 +479,17 @@ const marketMakerMSPEQBounds: ParameterBounds = {
     // Base parameters
     spreadSize: { min: 1, max: 5, step: 1 },
     baseSpreadDistance: { min: 0.01, max: 0.08, step: 0.01 },
-    baseProfitMargin: { min: 0.05, max: 0.20, step: 0.02 },
-    baseMinPrice: { min: 0.10, max: 0.30, step: 0.02 },
-    baseMaxPrice: { min: 0.60, max: 0.85, step: 0.02 },
-    baseStopLossAmount: { min: 0.05, max: 0.31, step: 0.02 },
+    baseProfitMargin: { min: 0.05, max: 0.49, step: 0.02 },
+    baseMinPrice: { min: 0.10, max: 0.60, step: 0.02 },
+    baseMaxPrice: { min: 0.40, max: 0.85, step: 0.02 },
+    baseStopLossAmount: { min: 0.05, max: 0.51, step: 0.02 },
     totalActiveTrades: { min: 2, max: 10, step: 1 },
     maxVolatility: { min: 0, max: 100, step: 1 },
     minVolatility: { min: 0, max: 100, step: 1 },
-    volatilityLookbackPeriods: { min: 3, max: 60, step: 1 },
-    targetDollars: { min: 5, max: 20, step: 1 },
+    volatilityLookbackPeriods: { min: 3, max: 160, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 5 },
     baseCutoffMinute: { min: 5, max: 50, step: 5 },
-    candleSizeReference: { min: 0, max: 500, step: 50 },
+    candleSizeReference: { min: 0, max: 500 },
     // MSPEQ coefficients
     ...generateMSPEQBounds('profitMargin', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
     ...generateMSPEQBounds('spreadDistance', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
@@ -501,17 +503,17 @@ const quarterlyMarketMakerMSPEQBounds: ParameterBounds = {
     // Base parameters (quarterly-specific ranges)
     spreadSize: { min: 1, max: 5, step: 1 },
     baseSpreadDistance: { min: 0.02, max: 0.08, step: 0.01 },
-    baseProfitMargin: { min: 0.05, max: 0.20, step: 0.02 },
-    baseMinPrice: { min: 0.10, max: 0.30, step: 0.02 },
-    baseMaxPrice: { min: 0.60, max: 0.85, step: 0.02 },
-    baseStopLossAmount: { min: 0.05, max: 0.15, step: 0.02 },
+    baseProfitMargin: { min: 0.05, max: 0.50, step: 0.02 },
+    baseMinPrice: { min: 0.10, max: 0.60, step: 0.02 },
+    baseMaxPrice: { min: 0.40, max: 0.90, step: 0.02 },
+    baseStopLossAmount: { min: 0.05, max: 0.40, step: 0.02 },
     totalActiveTrades: { min: 2, max: 10, step: 1 },
-    maxVolatility: { min: 0.05, max: 0.20, step: 0.02 },
-    minVolatility: { min: 0.001, max: 0.02, step: 0.002 },
-    volatilityLookbackPeriods: { min: 3, max: 10, step: 1 },
-    targetDollars: { min: 5, max: 20, step: 1 },
-    baseCutoffMinute: { min: 5, max: 12, step: 1 },
-    candleSizeReference: { min: 100, max: 500, step: 50 },
+    maxVolatility: { min: 0, max: 100 },
+    minVolatility: { min: 0, max: 100 },
+    volatilityLookbackPeriods: { min: 3, max: 160, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 5 },
+    baseCutoffMinute: { min: 5, max: 14, step: 1 },
+    candleSizeReference: { min: 0, max: 500},
     // MSPEQ coefficients
     ...generateMSPEQBounds('profitMargin', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
     ...generateMSPEQBounds('spreadDistance', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
@@ -525,18 +527,18 @@ const quarterlyMarketMakerMSPEQBounds: ParameterBounds = {
 const nCandleMSPEQBounds: ParameterBounds = {
     // Base parameters
     candleMinutes: { min: 2, max: 15, step: 1 },
-    buyPriceBuffer: { min: 10, max: 200, step: 10 },
-    sellPriceBuffer: { min: 10, max: 200, step: 10 },
-    minProfitMargin: { min: 0.05, max: 0.25, step: 0.02 },
+    buyPriceBuffer: { min: .01, max: .10, step: .01 },
+    sellPriceBuffer: { min: .01, max: .10, step: .01 },
+    minProfitMargin: { min: 0.05, max: 0.50, step: 0.02 },
     stopLossMultiplier: { min: 0.5, max: 2.0, step: 0.1 },
     stoplossTimeout: { min: 5000, max: 30000, step: 5000 },
     sellTimeout: { min: 5000, max: 30000, step: 5000 },
     stoplossFailureTimeout: { min: 5000, max: 30000, step: 5000 },
     earlySellScalar: { min: 0.5, max: 1.5, step: 0.1 },
-    targetDollars: { min: 5, max: 20, step: 1 },
+    targetDollars: { min: 5, max: 20, step: 5 },
     cutoffMinute: { min: 20, max: 55, step: 5 },
-    maxTradesPerHour: { min: 1, max: 5, step: 1 },
-    candleSizeReference: { min: 100, max: 500, step: 50 },
+    maxTradesPerHour: { min: 1, max: 10, step: 1 },
+    candleSizeReference: { min: 0, max: 500 },
     // MSPEQ coefficients
     ...generateMSPEQBounds('buyPriceBuffer', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
     ...generateMSPEQBounds('minProfitMargin', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
@@ -548,18 +550,18 @@ const nCandleMSPEQBounds: ParameterBounds = {
 const quarterlyNCandleMSPEQBounds: ParameterBounds = {
     // Base parameters (quarterly-specific ranges)
     candleMinutes: { min: 1, max: 5, step: 1 },
-    buyPriceBuffer: { min: 10, max: 150, step: 10 },
-    sellPriceBuffer: { min: 10, max: 150, step: 10 },
-    minProfitMargin: { min: 0.05, max: 0.25, step: 0.02 },
+    buyPriceBuffer: { min: .01, max: .05, step: .01 },
+    sellPriceBuffer: { min: .01, max: .05, step: .01 },
+    minProfitMargin: { min: 0.05, max: 0.50, step: 0.02 },
     stopLossMultiplier: { min: 0.5, max: 2.0, step: 0.1 },
     stoplossTimeout: { min: 3000, max: 15000, step: 2000 },
     sellTimeout: { min: 3000, max: 15000, step: 2000 },
     stoplossFailureTimeout: { min: 3000, max: 15000, step: 2000 },
     earlySellScalar: { min: 0.5, max: 1.5, step: 0.1 },
-    targetDollars: { min: 5, max: 20, step: 1 },
-    cutoffMinute: { min: 5, max: 12, step: 1 },
-    maxTradesPerHour: { min: 1, max: 5, step: 1 },
-    candleSizeReference: { min: 100, max: 500, step: 50 },
+    targetDollars: { min: 5, max: 20, step: 5 },
+    cutoffMinute: { min: 5, max: 13, step: 1 },
+    maxTradesPerHour: { min: 1, max: 10, step: 1 },
+    candleSizeReference: { min: 0, max: 500 },
     // MSPEQ coefficients
     ...generateMSPEQBounds('buyPriceBuffer', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
     ...generateMSPEQBounds('minProfitMargin', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
@@ -571,12 +573,12 @@ const quarterlyNCandleMSPEQBounds: ParameterBounds = {
 // CrossPeriodMomentumMSPEQ Full Bounds (base params + MSPEQ coefficients)
 const crossPeriodMomentumMSPEQBounds: ParameterBounds = {
     // Base parameters
-    targetDollars: { min: 5, max: 20, step: 1 },
-    baseBuyPrice: { min: 0.40, max: 0.60, step: 0.02 },
-    baseSellPrice: { min: 0.55, max: 0.75, step: 0.02 },
+    targetDollars: { min: 5, max: 20, step: 5 },
+    baseBuyPrice: { min: 0.20, max: 0.80, step: 0.02 },
+    baseSellPrice: { min: 0.20, max: 0.95, step: 0.02 },
     baseCutoffMinute: { min: 10, max: 50, step: 5 },
-    candleSizeReference: { min: 100, max: 500, step: 50 },
-    minProfitMargin: { min: 0.03, max: 0.15, step: 0.02 },
+    candleSizeReference: { min: 0, max: 500 },
+    minProfitMargin: { min: 0.03, max: 0.50, step: 0.02 },
     directionThreshold: { min: 0.3, max: 0.7, step: 0.05 },
     baseMomentumThreshold: { min: 0.05, max: 0.30, step: 0.05 },
     baseMinWinStreak: { min: 1, max: 4, step: 1 },
@@ -593,15 +595,15 @@ const crossPeriodMomentumMSPEQBounds: ParameterBounds = {
 
 const quarterlyCrossPeriodMomentumMSPEQBounds: ParameterBounds = {
     // Base parameters (quarterly-specific ranges)
-    targetDollars: { min: 5, max: 20, step: 1 },
-    baseBuyPrice: { min: 0.40, max: 0.60, step: 0.02 },
-    baseSellPrice: { min: 0.55, max: 0.75, step: 0.02 },
-    baseCutoffMinute: { min: 3, max: 12, step: 1 },
-    candleSizeReference: { min: 100, max: 500, step: 50 },
-    minProfitMargin: { min: 0.03, max: 0.15, step: 0.02 },
+    targetDollars: { min: 5, max: 20, step: 5 },
+    baseBuyPrice: { min: 0.20, max: 0.80, step: 0.02 },
+    baseSellPrice: { min: 0.30, max: 0.90, step: 0.02 },
+    baseCutoffMinute: { min: 3, max: 13, step: 1 },
+    candleSizeReference: { min: 0, max: 500 },
+    minProfitMargin: { min: 0.03, max: 0.50, step: 0.02 },
     directionThreshold: { min: 0.3, max: 0.7, step: 0.05 },
     baseMomentumThreshold: { min: 0.05, max: 0.30, step: 0.05 },
-    baseMinWinStreak: { min: 1, max: 4, step: 1 },
+    baseMinWinStreak: { min: 1, max: 5, step: 1 },
     // MSPEQ coefficients
     ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
     ...generateMSPEQBounds('sellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
@@ -740,7 +742,8 @@ function buildMSPEQConfig(
 function createContrarianBot(botParams: BotParams): SimulatedBot {
     const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory } = botParams;
 
-    const bot = new ContrarianV2({
+    // Use simpler Contrarian class (no cdMarketData filter)
+    const bot = new Contrarian({
         name,
         hourlyDollarLimit: 10000,
         client: createMockClobClient(),
@@ -756,7 +759,7 @@ function createContrarianBot(botParams: BotParams): SimulatedBot {
         targetDollars: params.targetDollars as number ?? 10,
         cutoffMinute: params.cutoffMinute as number ?? 30,
         lookbackHours: params.lookbackHours as number ?? 3,
-        cdLookbackHours: params.cdLookbackHours as number ?? 6,
+        invertSignal: params.invertSignal as boolean ?? false,
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
@@ -1332,7 +1335,7 @@ function createQuarterlyMarketMakerBot(botParams: BotParams): SimulatedBot {
 // ============================================================================
 
 function createFirstCandleMSPEQBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory } = botParams;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory, tradeGate, regimeDetector } = botParams;
 
     const bot = new FirstCandleMSPEQ({
         name,
@@ -1359,13 +1362,15 @@ function createFirstCandleMSPEQBot(botParams: BotParams): SimulatedBot {
         earlySellPriceMSPEQ: buildMSPEQConfig('earlySellPrice', params, ACTIVE_MSPEQ_SIGNALS),
         breakoutBufferMSPEQ: buildMSPEQConfig('breakoutBuffer', params, ACTIVE_MSPEQ_SIGNALS),
         pullbackBufferMSPEQ: buildMSPEQConfig('pullbackBuffer', params, ACTIVE_MSPEQ_SIGNALS),
+        tradeGate,
+        regimeDetector,
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
 }
 
 function createQuarterlyFirstCandleMSPEQBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory } = botParams;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory, tradeGate, regimeDetector } = botParams;
 
     const bot = new FirstCandleMSPEQ({
         name,
@@ -1392,13 +1397,15 @@ function createQuarterlyFirstCandleMSPEQBot(botParams: BotParams): SimulatedBot 
         earlySellPriceMSPEQ: buildMSPEQConfig('earlySellPrice', params, ACTIVE_MSPEQ_SIGNALS),
         breakoutBufferMSPEQ: buildMSPEQConfig('breakoutBuffer', params, ACTIVE_MSPEQ_SIGNALS),
         pullbackBufferMSPEQ: buildMSPEQConfig('pullbackBuffer', params, ACTIVE_MSPEQ_SIGNALS),
+        tradeGate,
+        regimeDetector,
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
 }
 
 function createEarlyBuyerMSPEQBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory } = botParams;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory, tradeGate, regimeDetector } = botParams;
 
     const bot = new EarlyBuyerMSPEQ({
         name,
@@ -1424,13 +1431,15 @@ function createEarlyBuyerMSPEQBot(botParams: BotParams): SimulatedBot {
         btcDirectionMSPEQ: buildMSPEQConfig('btcDirection', params, ACTIVE_MSPEQ_SIGNALS),
         earlySellTimeMSPEQ: buildMSPEQConfig('earlySellTime', params, ACTIVE_MSPEQ_SIGNALS),
         earlySellPriceMSPEQ: buildMSPEQConfig('earlySellPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        tradeGate,
+        regimeDetector,
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
 }
 
 function createQuarterlyEarlyBuyerMSPEQBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory } = botParams;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory, tradeGate, regimeDetector } = botParams;
 
     const bot = new EarlyBuyerMSPEQ({
         name,
@@ -1456,13 +1465,15 @@ function createQuarterlyEarlyBuyerMSPEQBot(botParams: BotParams): SimulatedBot {
         btcDirectionMSPEQ: buildMSPEQConfig('btcDirection', params, ACTIVE_MSPEQ_SIGNALS),
         earlySellTimeMSPEQ: buildMSPEQConfig('earlySellTime', params, ACTIVE_MSPEQ_SIGNALS),
         earlySellPriceMSPEQ: buildMSPEQConfig('earlySellPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        tradeGate,
+        regimeDetector,
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
 }
 
 function createMarketMakerMSPEQBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory } = botParams;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory, tradeGate, regimeDetector } = botParams;
 
     const bot = new MarketMakerMSPEQ({
         name,
@@ -1495,13 +1506,15 @@ function createMarketMakerMSPEQBot(botParams: BotParams): SimulatedBot {
         cutoffMinuteMSPEQ: buildMSPEQConfig('cutoffMinute', params, ACTIVE_MSPEQ_SIGNALS),
         minPriceMSPEQ: buildMSPEQConfig('minPrice', params, ACTIVE_MSPEQ_SIGNALS),
         maxPriceMSPEQ: buildMSPEQConfig('maxPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        tradeGate,
+        regimeDetector,
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
 }
 
 function createQuarterlyMarketMakerMSPEQBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory } = botParams;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory, tradeGate, regimeDetector } = botParams;
 
     const bot = new MarketMakerMSPEQ({
         name,
@@ -1534,13 +1547,15 @@ function createQuarterlyMarketMakerMSPEQBot(botParams: BotParams): SimulatedBot 
         cutoffMinuteMSPEQ: buildMSPEQConfig('cutoffMinute', params, ACTIVE_MSPEQ_SIGNALS),
         minPriceMSPEQ: buildMSPEQConfig('minPrice', params, ACTIVE_MSPEQ_SIGNALS),
         maxPriceMSPEQ: buildMSPEQConfig('maxPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        tradeGate,
+        regimeDetector,
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
 }
 
 function createNCandleMSPEQBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory } = botParams;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory, tradeGate, regimeDetector } = botParams;
 
     const bot = new NCandleMSPEQ({
         name,
@@ -1571,13 +1586,15 @@ function createNCandleMSPEQBot(botParams: BotParams): SimulatedBot {
         stoplossTimeoutMSPEQ: buildMSPEQConfig('stoplossTimeout', params, ACTIVE_MSPEQ_SIGNALS),
         sellTimeoutMSPEQ: buildMSPEQConfig('sellTimeout', params, ACTIVE_MSPEQ_SIGNALS),
         stoplossFailureTimeoutMSPEQ: buildMSPEQConfig('stoplossFailureTimeout', params, ACTIVE_MSPEQ_SIGNALS),
+        tradeGate,
+        regimeDetector,
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
 }
 
 function createQuarterlyNCandleMSPEQBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory } = botParams;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory, tradeGate, regimeDetector } = botParams;
 
     const bot = new NCandleMSPEQ({
         name,
@@ -1608,13 +1625,15 @@ function createQuarterlyNCandleMSPEQBot(botParams: BotParams): SimulatedBot {
         stoplossTimeoutMSPEQ: buildMSPEQConfig('stoplossTimeout', params, ACTIVE_MSPEQ_SIGNALS),
         sellTimeoutMSPEQ: buildMSPEQConfig('sellTimeout', params, ACTIVE_MSPEQ_SIGNALS),
         stoplossFailureTimeoutMSPEQ: buildMSPEQConfig('stoplossFailureTimeout', params, ACTIVE_MSPEQ_SIGNALS),
+        tradeGate,
+        regimeDetector,
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
 }
 
 function createCrossPeriodMomentumMSPEQBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory } = botParams;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory, tradeGate, regimeDetector } = botParams;
 
     const bot = new CrossPeriodMomentumMSPEQ({
         name,
@@ -1644,13 +1663,15 @@ function createCrossPeriodMomentumMSPEQBot(botParams: BotParams): SimulatedBot {
         winStreakThresholdMSPEQ: buildMSPEQConfig('winStreakThreshold', params, ACTIVE_MSPEQ_SIGNALS),
         earlySellTimeMSPEQ: buildMSPEQConfig('earlySellTime', params, ACTIVE_MSPEQ_SIGNALS),
         earlySellPriceMSPEQ: buildMSPEQConfig('earlySellPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        tradeGate,
+        regimeDetector,
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
 }
 
 function createQuarterlyCrossPeriodMomentumMSPEQBot(botParams: BotParams): SimulatedBot {
-    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory } = botParams;
+    const { name, clock, marketInfo, cdMarketData, params, targetedMarket, shouldWriteLogs, logDirectory, tradeGate, regimeDetector } = botParams;
 
     const bot = new CrossPeriodMomentumMSPEQ({
         name,
@@ -1680,6 +1701,8 @@ function createQuarterlyCrossPeriodMomentumMSPEQBot(botParams: BotParams): Simul
         winStreakThresholdMSPEQ: buildMSPEQConfig('winStreakThreshold', params, ACTIVE_MSPEQ_SIGNALS),
         earlySellTimeMSPEQ: buildMSPEQConfig('earlySellTime', params, ACTIVE_MSPEQ_SIGNALS),
         earlySellPriceMSPEQ: buildMSPEQConfig('earlySellPrice', params, ACTIVE_MSPEQ_SIGNALS),
+        tradeGate,
+        regimeDetector,
     });
 
     return new QuantBotSimulationAdapter(bot, clock, marketInfo);
@@ -1774,4 +1797,275 @@ export {
     createQuarterlyNCandleMSPEQBot,
     createCrossPeriodMomentumMSPEQBot,
     createQuarterlyCrossPeriodMomentumMSPEQBot,
+};
+
+// Signal names export (for TradeGate creation in HistoricalSimulator)
+export { ACTIVE_MSPEQ_SIGNALS };
+
+// ============================================================================
+// Regime-Aware Strategy Bounds and Factories
+// ============================================================================
+
+/**
+ * MSPEQ names used by FirstCandleMSPEQ for regime scaling.
+ */
+const FIRST_CANDLE_MSPEQ_NAMES = [
+    'buyPrice',
+    'sellPrice',
+    'earlySellTime',
+    'earlySellPrice',
+    'breakoutBuffer',
+    'pullbackBuffer',
+];
+
+/**
+ * MSPEQ names used by EarlyBuyerMSPEQ for regime scaling.
+ */
+const EARLY_BUYER_MSPEQ_NAMES = [
+    'buyPrice',
+    'sellPrice',
+    'cutoffMinute',
+    'btcDirection',
+    'earlySellTime',
+    'earlySellPrice',
+];
+
+/**
+ * MSPEQ names used by MarketMakerMSPEQ for regime scaling.
+ */
+const MARKET_MAKER_MSPEQ_NAMES = [
+    'profitMargin',
+    'spreadDistance',
+    'stopLossAmount',
+    'cutoffMinute',
+    'minPrice',
+    'maxPrice',
+];
+
+/**
+ * MSPEQ names used by NCandleMSPEQ for regime scaling.
+ */
+const NCANDLE_MSPEQ_NAMES = [
+    'buyPriceBuffer',
+    'minProfitMargin',
+    'stoplossTimeout',
+    'sellTimeout',
+    'stoplossFailureTimeout',
+];
+
+/**
+ * MSPEQ names used by CrossPeriodMomentumMSPEQ for regime scaling.
+ */
+const CROSS_PERIOD_MOMENTUM_MSPEQ_NAMES = [
+    'buyPrice',
+    'sellPrice',
+    'cutoffMinute',
+    'btcDirection',
+    'momentumThreshold',
+    'winStreakThreshold',
+    'earlySellTime',
+    'earlySellPrice',
+];
+
+/**
+ * Generates regime-aware parameter bounds by combining:
+ * - Base strategy bounds
+ * - Regime detection thresholds
+ * - Per-regime scaling factors
+ * - Trade gate parameters (optional)
+ */
+function generateRegimeAwareBounds(
+    baseBounds: ParameterBounds,
+    mspeqNames: string[],
+    signalNames: string[],
+    includeTradeGate: boolean = true
+): ParameterBounds {
+    const bounds: ParameterBounds = {
+        ...baseBounds,
+        ...RegimeDetector.getBounds(),
+        ...RegimeMSPEQManager.getBounds(mspeqNames),
+    };
+
+    if (includeTradeGate) {
+        Object.assign(bounds, TradeGate.getBounds(signalNames));
+    }
+
+    return bounds;
+}
+
+// ============================================================================
+// FirstCandleMSPEQ Regime-Aware Bounds
+// ============================================================================
+
+const regimeAwareFirstCandleMSPEQBounds = generateRegimeAwareBounds(
+    firstCandleMSPEQBounds,
+    FIRST_CANDLE_MSPEQ_NAMES,
+    [...ACTIVE_MSPEQ_SIGNALS],
+    true
+);
+
+const regimeAwareQuarterlyFirstCandleMSPEQBounds = generateRegimeAwareBounds(
+    quarterlyFirstCandleMSPEQBounds,
+    FIRST_CANDLE_MSPEQ_NAMES,
+    [...ACTIVE_MSPEQ_SIGNALS],
+    true
+);
+
+// ============================================================================
+// EarlyBuyerMSPEQ Regime-Aware Bounds
+// ============================================================================
+
+const regimeAwareEarlyBuyerMSPEQBounds = generateRegimeAwareBounds(
+    earlyBuyerMSPEQBounds,
+    EARLY_BUYER_MSPEQ_NAMES,
+    [...ACTIVE_MSPEQ_SIGNALS],
+    true
+);
+
+const regimeAwareQuarterlyEarlyBuyerMSPEQBounds = generateRegimeAwareBounds(
+    quarterlyEarlyBuyerMSPEQBounds,
+    EARLY_BUYER_MSPEQ_NAMES,
+    [...ACTIVE_MSPEQ_SIGNALS],
+    true
+);
+
+// ============================================================================
+// MarketMakerMSPEQ Regime-Aware Bounds
+// ============================================================================
+
+const regimeAwareMarketMakerMSPEQBounds = generateRegimeAwareBounds(
+    marketMakerMSPEQBounds,
+    MARKET_MAKER_MSPEQ_NAMES,
+    [...ACTIVE_MSPEQ_SIGNALS],
+    true
+);
+
+const regimeAwareQuarterlyMarketMakerMSPEQBounds = generateRegimeAwareBounds(
+    quarterlyMarketMakerMSPEQBounds,
+    MARKET_MAKER_MSPEQ_NAMES,
+    [...ACTIVE_MSPEQ_SIGNALS],
+    true
+);
+
+// ============================================================================
+// NCandleMSPEQ Regime-Aware Bounds
+// ============================================================================
+
+const regimeAwareNCandleMSPEQBounds = generateRegimeAwareBounds(
+    nCandleMSPEQBounds,
+    NCANDLE_MSPEQ_NAMES,
+    [...ACTIVE_MSPEQ_SIGNALS],
+    true
+);
+
+const regimeAwareQuarterlyNCandleMSPEQBounds = generateRegimeAwareBounds(
+    quarterlyNCandleMSPEQBounds,
+    NCANDLE_MSPEQ_NAMES,
+    [...ACTIVE_MSPEQ_SIGNALS],
+    true
+);
+
+// ============================================================================
+// CrossPeriodMomentumMSPEQ Regime-Aware Bounds
+// ============================================================================
+
+const regimeAwareCrossPeriodMomentumMSPEQBounds = generateRegimeAwareBounds(
+    crossPeriodMomentumMSPEQBounds,
+    CROSS_PERIOD_MOMENTUM_MSPEQ_NAMES,
+    [...ACTIVE_MSPEQ_SIGNALS],
+    true
+);
+
+const regimeAwareQuarterlyCrossPeriodMomentumMSPEQBounds = generateRegimeAwareBounds(
+    quarterlyCrossPeriodMomentumMSPEQBounds,
+    CROSS_PERIOD_MOMENTUM_MSPEQ_NAMES,
+    [...ACTIVE_MSPEQ_SIGNALS],
+    true
+);
+
+// ============================================================================
+// Add Regime-Aware Strategies to geneticStrategies
+// ============================================================================
+
+// Note: These use the same bot factory but with regime-aware bounds.
+// The regime tracking is handled by the simulator's runRegimeAwareSimulation method.
+geneticStrategies.push(
+    // FirstCandleMSPEQ
+    {
+        name: 'RegimeAwareFirstCandleMSPEQ',
+        factory: createFirstCandleMSPEQBot,
+        bounds: regimeAwareFirstCandleMSPEQBounds,
+    },
+    {
+        name: 'RegimeAwareQuarterlyFirstCandleMSPEQ',
+        factory: createQuarterlyFirstCandleMSPEQBot,
+        bounds: regimeAwareQuarterlyFirstCandleMSPEQBounds,
+    },
+    // EarlyBuyerMSPEQ
+    {
+        name: 'RegimeAwareEarlyBuyerMSPEQ',
+        factory: createEarlyBuyerMSPEQBot,
+        bounds: regimeAwareEarlyBuyerMSPEQBounds,
+    },
+    {
+        name: 'RegimeAwareQuarterlyEarlyBuyerMSPEQ',
+        factory: createQuarterlyEarlyBuyerMSPEQBot,
+        bounds: regimeAwareQuarterlyEarlyBuyerMSPEQBounds,
+    },
+    // MarketMakerMSPEQ
+    {
+        name: 'RegimeAwareMarketMakerMSPEQ',
+        factory: createMarketMakerMSPEQBot,
+        bounds: regimeAwareMarketMakerMSPEQBounds,
+    },
+    {
+        name: 'RegimeAwareQuarterlyMarketMakerMSPEQ',
+        factory: createQuarterlyMarketMakerMSPEQBot,
+        bounds: regimeAwareQuarterlyMarketMakerMSPEQBounds,
+    },
+    // NCandleMSPEQ
+    {
+        name: 'RegimeAwareNCandleMSPEQ',
+        factory: createNCandleMSPEQBot,
+        bounds: regimeAwareNCandleMSPEQBounds,
+    },
+    {
+        name: 'RegimeAwareQuarterlyNCandleMSPEQ',
+        factory: createQuarterlyNCandleMSPEQBot,
+        bounds: regimeAwareQuarterlyNCandleMSPEQBounds,
+    },
+    // CrossPeriodMomentumMSPEQ
+    {
+        name: 'RegimeAwareCrossPeriodMomentumMSPEQ',
+        factory: createCrossPeriodMomentumMSPEQBot,
+        bounds: regimeAwareCrossPeriodMomentumMSPEQBounds,
+    },
+    {
+        name: 'RegimeAwareQuarterlyCrossPeriodMomentumMSPEQ',
+        factory: createQuarterlyCrossPeriodMomentumMSPEQBot,
+        bounds: regimeAwareQuarterlyCrossPeriodMomentumMSPEQBounds,
+    }
+);
+
+// Export regime-aware bounds and MSPEQ name constants
+export {
+    // Bounds
+    regimeAwareFirstCandleMSPEQBounds,
+    regimeAwareQuarterlyFirstCandleMSPEQBounds,
+    regimeAwareEarlyBuyerMSPEQBounds,
+    regimeAwareQuarterlyEarlyBuyerMSPEQBounds,
+    regimeAwareMarketMakerMSPEQBounds,
+    regimeAwareQuarterlyMarketMakerMSPEQBounds,
+    regimeAwareNCandleMSPEQBounds,
+    regimeAwareQuarterlyNCandleMSPEQBounds,
+    regimeAwareCrossPeriodMomentumMSPEQBounds,
+    regimeAwareQuarterlyCrossPeriodMomentumMSPEQBounds,
+    // Helper function
+    generateRegimeAwareBounds,
+    // MSPEQ name constants
+    FIRST_CANDLE_MSPEQ_NAMES,
+    EARLY_BUYER_MSPEQ_NAMES,
+    MARKET_MAKER_MSPEQ_NAMES,
+    NCANDLE_MSPEQ_NAMES,
+    CROSS_PERIOD_MOMENTUM_MSPEQ_NAMES,
 };

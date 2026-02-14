@@ -169,7 +169,9 @@ function SimulatorDashboard() {
             <thead>
               <tr>
                 <th>Strategy</th>
-                <th>Generation</th>
+                <th>Optimizer</th>
+                <th>PnL</th>
+                <th>Trades</th>
                 <th>Date</th>
                 <th>Actions</th>
               </tr>
@@ -178,7 +180,11 @@ function SimulatorDashboard() {
               {filteredFiles.slice(0, 20).map(file => (
                 <tr key={file.filename}>
                   <td>{file.strategy}</td>
-                  <td>{file.generation || '-'}</td>
+                  <td>{file.optimizer || file.generation ? `Gen ${file.generation}` : '-'}</td>
+                  <td className={file.bestPnl >= 0 ? 'positive' : file.bestPnl < 0 ? 'negative' : ''}>
+                    {file.bestPnl !== null && file.bestPnl !== undefined ? `$${file.bestPnl.toFixed(2)}` : '-'}
+                  </td>
+                  <td>{file.totalTrades || '-'}</td>
                   <td>{new Date(file.modified).toLocaleString()}</td>
                   <td>
                     <button
@@ -209,10 +215,10 @@ function SimulatorDashboard() {
               <span className="stat-label">Strategy</span>
               <span className="stat-value">{stats.strategy}</span>
             </div>
-            {stats.generation && (
+            {(stats.generation || stats.optimizer) && (
               <div className="stat-card">
-                <span className="stat-label">Generation</span>
-                <span className="stat-value">{stats.generation}</span>
+                <span className="stat-label">{stats.optimizer ? 'Optimizer' : 'Generation'}</span>
+                <span className="stat-value">{stats.optimizer || stats.generation}</span>
               </div>
             )}
             <div className="stat-card">

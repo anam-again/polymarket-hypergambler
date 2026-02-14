@@ -1,5 +1,6 @@
 import { SimulationResult } from './HistoricalSimulator.js';
 import { SimulatorLogger } from './SimulatorLogger.js';
+import { RegimeType, ALL_REGIME_TYPES } from '../regime/index.js';
 
 // ============================================================================
 // Types & Interfaces
@@ -333,6 +334,72 @@ export class GeneticOptimizer {
         }
 
         return fitness;
+    }
+
+    /**
+     * Calculates fitness with regime-aware weighting.
+     *
+     * When regimeStats is present, computes a combined fitness that ensures
+     * all regimes perform reasonably well (penalizes strategies that only
+     * work in one regime).
+     *
+     * Formula: 70% min(regime_fitness) + 30% avg(regime_fitness)
+     *
+     * @param result - Simulation result with optional regimeStats
+     * @param mode - Fitness mode ('sharpe' | 'sortino' | 'pnl')
+     * @returns Combined regime fitness score
+     */
+    public calculateRegimeFitness(
+        result: SimulationResult,
+        mode: 'sharpe' | 'sortino' | 'pnl' = 'sortino'
+    ): number {
+        const regimeStats = result.regimeStats;
+
+        // Fall back to standard fitness if no regime stats
+        if (!regimeStats) {
+            const tradeCount = result.matchedTrades + result.expiredTrades;
+            return this.calculateMultiMetricFitness(result, tradeCount);
+        }
+
+        const RATIO_SCALE = 20;  // Scale ratios to be comparable to PnL
+        const regimeFitnesses: number[] = [];
+
+        for (const regime of ALL_REGIME_TYPES) {
+            const stats = regimeStats[regime];
+
+            // Skip regimes with no trades (don't penalize for lack of opportunity)
+            if (!stats || stats.tradeCount === 0) continue;
+
+            let fitness: number;
+            switch (mode) {
+                case 'sharpe':
+                    fitness = stats.sharpeRatio * RATIO_SCALE;
+                    break;
+                case 'pnl':
+                    fitness = stats.pnl;
+                    break;
+                case 'sortino':
+                default:
+                    // Use sharpe as proxy for sortino (we don't have sortino per regime)
+                    fitness = stats.sharpeRatio * RATIO_SCALE;
+                    break;
+            }
+
+            regimeFitnesses.push(fitness);
+        }
+
+        // If no regimes had trades, return very low fitness
+        if (regimeFitnesses.length === 0) {
+            return -Infinity;
+        }
+
+        // Weighted combination: favor strategies that work across all regimes
+        const minFitness = Math.min(...regimeFitnesses);
+        const avgFitness = regimeFitnesses.reduce((a, b) => a + b, 0) / regimeFitnesses.length;
+
+        // 70% weight on worst-performing regime + 30% on average
+        // This ensures the optimizer doesn't overfit to one market condition
+        return 0.7 * minFitness + 0.3 * avgFitness;
     }
 
     /**

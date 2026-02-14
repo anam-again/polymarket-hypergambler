@@ -222,6 +222,14 @@ export class SimulationClock implements IClock {
         this.quarterlyListeners = [];
     }
 
+    /**
+     * Stop the clock and clean up resources.
+     * For SimulationClock, this just clears listeners (no cron jobs to stop).
+     */
+    public stop(): void {
+        this.clearListeners();
+    }
+
     private async emitHourlyChange(): Promise<void> {
         const resetPromise = (async () => {
             for (const listener of this.hourlyListeners) {
