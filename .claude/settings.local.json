@@ -32,7 +32,8 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:www.npmjs.com)",
       "Bash(npx eslint:*)",
-      "Bash(npm search:*)"
+      "Bash(npm search:*)",
+      "WebFetch(domain:docs.polymarket.com)"
     ]
   }
 }
