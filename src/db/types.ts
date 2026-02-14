@@ -125,3 +125,34 @@ export interface CumulativePnlPoint {
     strategy: string;
     status: string;
 }
+
+// =============================================================================
+// Confirmed Winners Types (RedemptionSolver)
+// =============================================================================
+
+export interface ConfirmedWinnerRecord {
+    id?: number;
+    periodId: string;
+    market: string;
+    clobTokenIdUp: string;
+    clobTokenIdDown: string;
+    winningSide: 'UP' | 'DOWN';
+    coinOpenPrice: number | null;
+    coinClosePrice: number | null;
+    polymarketConfirmed: boolean;
+    coinPriceConfirmed: boolean;
+    pmarketConvergenceConfirmed: boolean;
+    mismatchDetected: boolean;
+    verifiedAt: number;
+    notes: string | null;
+}
+
+export interface HistoricalRevision {
+    timestamp: string;
+    periodId: string;
+    clobTokenId: string;
+    field: string;
+    oldValue: string;
+    newValue: string;
+    source: 'polymarket_api' | 'coin_price' | 'pmarket_convergence';
+}

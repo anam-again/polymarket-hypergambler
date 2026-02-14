@@ -17,6 +17,7 @@ import type {
     StatsResult,
     StrategyPnlResult,
     CumulativePnlPoint,
+    ConfirmedWinnerRecord,
 } from './types.js';
 
 const DEFAULT_DB_PATH = './data/trading.db';
@@ -32,6 +33,8 @@ export class TradingDatabase {
     private insertBinanceHourlyStmt: Database.Statement;
     private insertBinanceMinuteStmt: Database.Statement;
     private upsertSyncStateStmt: Database.Statement;
+    private insertConfirmedWinnerStmt: Database.Statement;
+    private getConfirmedWinnerStmt: Database.Statement;
 
     private constructor(dbPath: string) {
         // Ensure directory exists
@@ -85,6 +88,19 @@ export class TradingDatabase {
             INSERT OR REPLACE INTO sync_state (
                 file_path, last_byte_position, last_sync_timestamp
             ) VALUES (?, ?, ?)
+        `);
+
+        this.insertConfirmedWinnerStmt = this.db.prepare(`
+            INSERT OR REPLACE INTO confirmed_winners (
+                period_id, market, clob_token_id_up, clob_token_id_down,
+                winning_side, coin_open_price, coin_close_price,
+                polymarket_confirmed, coin_price_confirmed, pmarket_convergence_confirmed,
+                mismatch_detected, verified_at, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        this.getConfirmedWinnerStmt = this.db.prepare(`
+            SELECT * FROM confirmed_winners WHERE period_id = ?
         `);
     }
 
@@ -718,5 +734,202 @@ export class TradingDatabase {
     public getTradeCount(): number {
         const row = this.db.prepare('SELECT COUNT(*) as count FROM trade_audits').get() as { count: number };
         return row.count;
+    }
+
+    // =========================================================================
+    // P-Market Price Query Methods
+    // =========================================================================
+
+    /**
+     * Query p-market prices for a time range.
+     */
+    public queryPmarketPrices(market: string, startTime: number, endTime: number): PmarketPriceRecord[] {
+        const sql = `
+            SELECT * FROM pmarket_prices
+            WHERE market = ? AND timestamp >= ? AND timestamp <= ?
+            ORDER BY timestamp ASC
+        `;
+        const rows = this.db.prepare(sql).all(market, startTime, endTime) as {
+            id: number;
+            timestamp: number;
+            market: string;
+            up_bid: number;
+            up_ask: number;
+            down_bid: number | null;
+            down_ask: number | null;
+        }[];
+
+        return rows.map(row => ({
+            id: row.id,
+            timestamp: row.timestamp,
+            market: row.market,
+            upBid: row.up_bid,
+            upAsk: row.up_ask,
+            downBid: row.down_bid,
+            downAsk: row.down_ask,
+        }));
+    }
+
+    // =========================================================================
+    // Binance Hourly Query Methods
+    // =========================================================================
+
+    /**
+     * Query Binance hourly prices for a symbol and time range.
+     */
+    public queryBinanceHourly(symbol: string, startTime: number, endTime: number): BinancePriceHourlyRecord[] {
+        const sql = `
+            SELECT * FROM binance_prices_hourly
+            WHERE symbol = ? AND timestamp >= ? AND timestamp <= ?
+            ORDER BY timestamp ASC
+        `;
+        const rows = this.db.prepare(sql).all(symbol, startTime, endTime) as {
+            id: number;
+            timestamp: number;
+            symbol: string;
+            hourly_open: number;
+            average_price: number;
+            hourly_min: number;
+            hourly_max: number;
+            open_flops: number | null;
+            average_flops: number | null;
+            total_change: number | null;
+        }[];
+
+        return rows.map(row => ({
+            id: row.id,
+            timestamp: row.timestamp,
+            symbol: row.symbol,
+            hourlyOpen: row.hourly_open,
+            averagePrice: row.average_price,
+            hourlyMin: row.hourly_min,
+            hourlyMax: row.hourly_max,
+            openFlops: row.open_flops,
+            averageFlops: row.average_flops,
+            totalChange: row.total_change,
+        }));
+    }
+
+    // =========================================================================
+    // Confirmed Winners Methods
+    // =========================================================================
+
+    /**
+     * Insert or update a confirmed winner record.
+     */
+    public insertConfirmedWinner(winner: ConfirmedWinnerRecord): void {
+        this.insertConfirmedWinnerStmt.run(
+            winner.periodId,
+            winner.market,
+            winner.clobTokenIdUp,
+            winner.clobTokenIdDown,
+            winner.winningSide,
+            winner.coinOpenPrice,
+            winner.coinClosePrice,
+            winner.polymarketConfirmed ? 1 : 0,
+            winner.coinPriceConfirmed ? 1 : 0,
+            winner.pmarketConvergenceConfirmed ? 1 : 0,
+            winner.mismatchDetected ? 1 : 0,
+            winner.verifiedAt,
+            winner.notes
+        );
+    }
+
+    /**
+     * Get a confirmed winner by period ID.
+     */
+    public getConfirmedWinner(periodId: string): ConfirmedWinnerRecord | null {
+        const row = this.getConfirmedWinnerStmt.get(periodId) as {
+            id: number;
+            period_id: string;
+            market: string;
+            clob_token_id_up: string;
+            clob_token_id_down: string;
+            winning_side: string;
+            coin_open_price: number | null;
+            coin_close_price: number | null;
+            polymarket_confirmed: number;
+            coin_price_confirmed: number;
+            pmarket_convergence_confirmed: number;
+            mismatch_detected: number;
+            verified_at: number;
+            notes: string | null;
+        } | undefined;
+
+        if (!row) return null;
+
+        return {
+            id: row.id,
+            periodId: row.period_id,
+            market: row.market,
+            clobTokenIdUp: row.clob_token_id_up,
+            clobTokenIdDown: row.clob_token_id_down,
+            winningSide: row.winning_side as 'UP' | 'DOWN',
+            coinOpenPrice: row.coin_open_price,
+            coinClosePrice: row.coin_close_price,
+            polymarketConfirmed: row.polymarket_confirmed === 1,
+            coinPriceConfirmed: row.coin_price_confirmed === 1,
+            pmarketConvergenceConfirmed: row.pmarket_convergence_confirmed === 1,
+            mismatchDetected: row.mismatch_detected === 1,
+            verifiedAt: row.verified_at,
+            notes: row.notes,
+        };
+    }
+
+    /**
+     * Get all confirmed winners.
+     */
+    public getAllConfirmedWinners(): ConfirmedWinnerRecord[] {
+        const sql = 'SELECT * FROM confirmed_winners ORDER BY verified_at DESC';
+        const rows = this.db.prepare(sql).all() as {
+            id: number;
+            period_id: string;
+            market: string;
+            clob_token_id_up: string;
+            clob_token_id_down: string;
+            winning_side: string;
+            coin_open_price: number | null;
+            coin_close_price: number | null;
+            polymarket_confirmed: number;
+            coin_price_confirmed: number;
+            pmarket_convergence_confirmed: number;
+            mismatch_detected: number;
+            verified_at: number;
+            notes: string | null;
+        }[];
+
+        return rows.map(row => ({
+            id: row.id,
+            periodId: row.period_id,
+            market: row.market,
+            clobTokenIdUp: row.clob_token_id_up,
+            clobTokenIdDown: row.clob_token_id_down,
+            winningSide: row.winning_side as 'UP' | 'DOWN',
+            coinOpenPrice: row.coin_open_price,
+            coinClosePrice: row.coin_close_price,
+            polymarketConfirmed: row.polymarket_confirmed === 1,
+            coinPriceConfirmed: row.coin_price_confirmed === 1,
+            pmarketConvergenceConfirmed: row.pmarket_convergence_confirmed === 1,
+            mismatchDetected: row.mismatch_detected === 1,
+            verifiedAt: row.verified_at,
+            notes: row.notes,
+        }));
+    }
+
+    /**
+     * Update trade audit PnL and gross by market hash for expiry trades.
+     */
+    public updateTradeAuditByMarketHash(
+        marketHash: string,
+        newPnl: number,
+        newGross: number
+    ): number {
+        const sql = `
+            UPDATE trade_audits
+            SET pnl = ?, gross = ?, status = 'EXPIRED'
+            WHERE market_hash = ? AND trade_id LIKE '%expiry%'
+        `;
+        const result = this.db.prepare(sql).run(newPnl, newGross, marketHash);
+        return result.changes;
     }
 }

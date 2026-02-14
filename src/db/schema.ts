@@ -107,6 +107,29 @@ export function initializeSchema(db: Database.Database): void {
             last_sync_timestamp INTEGER NOT NULL
         )
     `);
+
+    // Confirmed winners tracking for RedemptionSolver
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS confirmed_winners (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            period_id TEXT NOT NULL UNIQUE,
+            market TEXT NOT NULL,
+            clob_token_id_up TEXT NOT NULL,
+            clob_token_id_down TEXT NOT NULL,
+            winning_side TEXT NOT NULL,
+            coin_open_price REAL,
+            coin_close_price REAL,
+            polymarket_confirmed INTEGER DEFAULT 0,
+            coin_price_confirmed INTEGER DEFAULT 0,
+            pmarket_convergence_confirmed INTEGER DEFAULT 0,
+            mismatch_detected INTEGER DEFAULT 0,
+            verified_at INTEGER NOT NULL,
+            notes TEXT
+        )
+    `);
+
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_confirmed_winners_period ON confirmed_winners(period_id)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_confirmed_winners_market ON confirmed_winners(market)`);
 }
 
 /**
@@ -122,6 +145,28 @@ export function runMigrations(db: Database.Database): void {
         db.pragma('user_version = 1');
     }
 
-    // Future migrations would go here:
-    // if (versionResult < 2) { ... db.pragma('user_version = 2'); }
+    // Migration v2: Add confirmed_winners table
+    if (versionResult < 2) {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS confirmed_winners (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                period_id TEXT NOT NULL UNIQUE,
+                market TEXT NOT NULL,
+                clob_token_id_up TEXT NOT NULL,
+                clob_token_id_down TEXT NOT NULL,
+                winning_side TEXT NOT NULL,
+                coin_open_price REAL,
+                coin_close_price REAL,
+                polymarket_confirmed INTEGER DEFAULT 0,
+                coin_price_confirmed INTEGER DEFAULT 0,
+                pmarket_convergence_confirmed INTEGER DEFAULT 0,
+                mismatch_detected INTEGER DEFAULT 0,
+                verified_at INTEGER NOT NULL,
+                notes TEXT
+            )
+        `);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_confirmed_winners_period ON confirmed_winners(period_id)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_confirmed_winners_market ON confirmed_winners(market)`);
+        db.pragma('user_version = 2');
+    }
 }
