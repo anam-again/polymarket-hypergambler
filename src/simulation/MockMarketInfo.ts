@@ -433,9 +433,19 @@ export class MockMarketInfo implements IMarketInfo {
      * Gets the midpoint price for a token (average of bid and ask).
      * Used for more realistic order matching in simulation.
      */
-    public async getMidPrice(clobTokenId: string, market: TargetedMarket): Promise<number> {
+    public async getMidPrice(clobTokenId: string, market: TargetedMarket): Promise<number | null> {
         const now = this.clock.now();
         const data = this.getDataForMarket(market);
+
+        // Validate that the clobTokenId matches the current period's tokens
+        const periodKey = this.getPeriodKey(now, market);
+        const currentUpTokenId = `UP-${periodKey}`;
+        const currentDownTokenId = `DOWN-${periodKey}`;
+
+        if (clobTokenId !== currentUpTokenId && clobTokenId !== currentDownTokenId) {
+            // Token is from a different period - return null to prevent matching
+            return null;
+        }
 
         let entry: UpDownPriceEntry | null;
 

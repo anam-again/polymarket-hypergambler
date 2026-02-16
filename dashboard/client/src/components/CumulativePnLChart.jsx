@@ -108,8 +108,22 @@ function CumulativePnLChart({ data, precomputedData, startTime, endTime }) {
   const strategyCheckboxRefs = useRef({});
 
   // Strategy search filter (use ref to avoid re-renders while typing)
-  const [strategySearch, setStrategySearch] = useState('');
+  // Load initial value from localStorage
+  const [strategySearch, setStrategySearch] = useState(() => {
+    try {
+      return localStorage.getItem('cumulativePnlSearch') || '';
+    } catch {
+      return '';
+    }
+  });
   const searchInputRef = useRef(null);
+
+  // Initialize search input with saved value on mount
+  useEffect(() => {
+    if (searchInputRef.current && strategySearch) {
+      searchInputRef.current.value = strategySearch;
+    }
+  }, []); // Only run on mount
 
   // Resizable chart height
   const [chartHeight, setChartHeight] = useState(400);
@@ -259,6 +273,12 @@ function CumulativePnLChart({ data, precomputedData, startTime, endTime }) {
   const applySearch = () => {
     const value = searchInputRef.current?.value || '';
     setStrategySearch(value);
+    // Save to localStorage
+    try {
+      localStorage.setItem('cumulativePnlSearch', value);
+    } catch {
+      // Ignore localStorage errors
+    }
   };
 
   // Handle Enter key in search input
@@ -319,6 +339,49 @@ function CumulativePnLChart({ data, precomputedData, startTime, endTime }) {
   // Calculate domain - use startTime if set, auto for endTime if null
   const domain = [startTime || 'auto', endTime || 'auto'];
 
+  // Generate period boundary timestamps for vertical reference lines
+  const periodBoundaries = useMemo(() => {
+    if (chartData.length === 0) return { hourly: [], quarterly: [] };
+
+    const minTime = startTime || chartData[0]?.timestamp;
+    const maxTime = endTime || chartData[chartData.length - 1]?.timestamp;
+    if (!minTime || !maxTime) return { hourly: [], quarterly: [] };
+
+    const hourly = [];
+    const quarterly = [];
+
+    // Round up to next hour boundary
+    const firstHour = new Date(minTime);
+    firstHour.setMinutes(0, 0, 0);
+    if (firstHour.getTime() < minTime) {
+      firstHour.setHours(firstHour.getHours() + 1);
+    }
+
+    // Generate hourly boundaries
+    for (let t = firstHour.getTime(); t <= maxTime; t += 60 * 60 * 1000) {
+      hourly.push(t);
+    }
+
+    // Round up to next 15-minute boundary
+    const firstQuarter = new Date(minTime);
+    const mins = firstQuarter.getMinutes();
+    const nextQuarter = Math.ceil(mins / 15) * 15;
+    firstQuarter.setMinutes(nextQuarter, 0, 0);
+    if (firstQuarter.getTime() < minTime) {
+      firstQuarter.setMinutes(firstQuarter.getMinutes() + 15);
+    }
+
+    // Generate 15-minute boundaries (excluding hourly ones)
+    for (let t = firstQuarter.getTime(); t <= maxTime; t += 15 * 60 * 1000) {
+      // Skip if this is also an hourly boundary
+      if (!hourly.includes(t)) {
+        quarterly.push(t);
+      }
+    }
+
+    return { hourly, quarterly };
+  }, [chartData, startTime, endTime]);
+
   return (
     <div className="cumulative-pnl-chart">
       <div className="chart-filters">
@@ -368,6 +431,11 @@ function CumulativePnLChart({ data, precomputedData, startTime, endTime }) {
                   searchInputRef.current.value = '';
                 }
                 setStrategySearch('');
+                try {
+                  localStorage.removeItem('cumulativePnlSearch');
+                } catch {
+                  // Ignore localStorage errors
+                }
               }}
               title="Clear search"
             >
@@ -431,6 +499,26 @@ function CumulativePnLChart({ data, precomputedData, startTime, endTime }) {
             iconType="line"
           />
           <ReferenceLine y={0} stroke="#8b949e" strokeDasharray="3 3" />
+          {/* Hourly period boundaries - golden yellow */}
+          {periodBoundaries.hourly.map((timestamp) => (
+            <ReferenceLine
+              key={`hourly-${timestamp}`}
+              x={timestamp}
+              stroke="#d29922"
+              strokeWidth={1}
+              strokeOpacity={0.6}
+            />
+          ))}
+          {/* 15-minute period boundaries - light blue */}
+          {periodBoundaries.quarterly.map((timestamp) => (
+            <ReferenceLine
+              key={`quarterly-${timestamp}`}
+              x={timestamp}
+              stroke="#79c0ff"
+              strokeWidth={1}
+              strokeOpacity={0.4}
+            />
+          ))}
           {showTotal && (
             <Line
               type="monotone"

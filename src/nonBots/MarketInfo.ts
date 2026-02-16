@@ -354,7 +354,7 @@ export class MarketInfo {
      * @param market - The targeted market.
      * @returns The midpoint price, or 0.5 if no bids/asks available.
      */
-    public async getMidPrice(clobTokenId: string, market: TargetedMarket): Promise<number> {
+    public async getMidPrice(clobTokenId: string, market: TargetedMarket): Promise<number | null> {
         const liveData = await this.getLiveData(market);
 
         // Determine which token we're looking at
@@ -364,8 +364,8 @@ export class MarketInfo {
         } else if (clobTokenId === liveData.BtcDownTokenId) {
             orderBook = liveData.BtcDown;
         } else {
-            // Token not found in current period's order books
-            return 0.5;
+            // Token not found in current period's order books - return null to prevent matching
+            return null;
         }
 
         // Get best bid (highest) and best ask (lowest)

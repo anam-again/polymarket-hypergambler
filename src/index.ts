@@ -21,6 +21,7 @@ import { PredictionStyle } from "./ml/types.js";
 import { ScalingPEQ, ScalingPEQCoefficients } from "./utils/ScalingPEQ.js";
 import { TradingDatabase } from "./db/TradingDatabase.js";
 import { loadBotsFromYamlDir } from "./adapters/SimulatorParamsAdapter.js";
+import { SuddenArb } from "./bots/SuddenArb.js";
 
 // Initialize database on startup
 console.log('[SYSTEM] Initializing database...');
@@ -259,6 +260,35 @@ const testBots: QuantBotRun[] = [
   ]).map((v) => {
     return new YOLOMLBot({
       name: `yoloml-${targetMarketToShortname(v.targetedMarket)}-${v.predictionStyle}`,
+      ...v,
+      ...commonTestProps,
+    })
+  }),
+  // SuddenArb - ML-powered arbitrage bot using real-time price feeds
+  ...([
+    {
+      targetedMarket: TargetedMarket.BITCOIN_HOURLY,
+      mispricingThreshold: 0.05,    // 5% divergence (wider for test)
+      targetProfitMargin: 0.03,     // 3% profit target
+      maxPositionDollars: 5,        // Small positions for testing
+      learningRate: 0.01,
+      modelId: 'btc-hourly-1',
+      binanceSymbol: 'BTCUSDT' as const,
+      simulationOrderDelayMs: 2000, // Reduced delay for arb testing
+    },
+    {
+      targetedMarket: TargetedMarket.BITCOIN_QUARTERLY,
+      mispricingThreshold: 0.05,
+      targetProfitMargin: 0.03,
+      maxPositionDollars: 5,
+      learningRate: 0.01,
+      modelId: 'btc-quarterly-1',
+      binanceSymbol: 'BTCUSDT' as const,
+      simulationOrderDelayMs: 2000,
+    },
+  ]).map((v) => {
+    return new SuddenArb({
+      name: `suddenarb-${targetMarketToShortname(v.targetedMarket)}-${v.modelId}`,
       ...v,
       ...commonTestProps,
     })

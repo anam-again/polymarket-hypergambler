@@ -174,6 +174,49 @@ function App() {
       return [...prev, ...newPoints];
     });
 
+    // Update cumulative PnL by strategy (precomputed format for chart)
+    setCumulativePnlByStrategy(prev => {
+      if (!prev) return prev;
+      const completedTrades = filteredTrades.filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED');
+      if (completedTrades.length === 0) return prev;
+
+      // Clone the previous state
+      const updated = {
+        strategies: [...(prev.strategies || [])],
+        points: [...(prev.points || [])],
+        tags: prev.tags ? [...prev.tags] : []
+      };
+
+      // Get last cumulative values per strategy
+      const lastPoint = updated.points.length > 0 ? updated.points[updated.points.length - 1] : null;
+      const cumulativeByStrategy = lastPoint ? { ...lastPoint.strategies } : {};
+      let totalCumulative = lastPoint ? lastPoint.total : 0;
+
+      // Process each new trade
+      completedTrades.forEach(trade => {
+        if (!trade.strategy) return;
+
+        // Add new strategy if not seen before
+        if (!updated.strategies.includes(trade.strategy)) {
+          updated.strategies.push(trade.strategy);
+          updated.strategies.sort();
+        }
+
+        // Update cumulative values
+        cumulativeByStrategy[trade.strategy] = (cumulativeByStrategy[trade.strategy] || 0) + trade.pnl;
+        totalCumulative += trade.pnl;
+
+        // Add new point
+        updated.points.push({
+          timestamp: trade.timestamp,
+          total: parseFloat(totalCumulative.toFixed(2)),
+          strategies: { ...cumulativeByStrategy }
+        });
+      });
+
+      return updated;
+    });
+
     // Update strategy PnL
     setStrategyPnl(prev => {
       const completedTrades = filteredTrades.filter(t => t.status === 'MATCHED' || t.status === 'EXPIRED');
