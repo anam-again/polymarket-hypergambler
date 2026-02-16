@@ -22,7 +22,8 @@
       "WebSearch",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:www.npmjs.com)",
-      "WebFetch(domain:docs.polymarket.com)"
+      "WebFetch(domain:docs.polymarket.com)",
+      "Bash(npx vitest run:*)"
     ]
   }
 }

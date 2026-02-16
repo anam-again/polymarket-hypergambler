@@ -399,6 +399,24 @@ const quarterlyMarketMakerBounds: ParameterBounds = {
 };
 
 // ============================================================================
+// ML Gating Parameter Bounds (shared across MSPEQ strategies)
+// ============================================================================
+
+/**
+ * ML gating parameters for genetic optimization.
+ * These control how ML predictions gate and size trades.
+ *
+ * useMLGating: 0 = disabled, 1 = enabled (treated as boolean)
+ * minMLConfidence: Minimum confidence threshold to proceed with trade
+ * mlPositionMultiplier: Scale position size by ML confidence
+ */
+const ML_GATING_BOUNDS: ParameterBounds = {
+    useMLGating: { min: 0, max: 1, step: 1 },           // Boolean: 0 = off, 1 = on
+    minMLConfidence: { min: 0.3, max: 0.9, step: 0.05 }, // Confidence threshold
+    mlPositionMultiplier: { min: 0.5, max: 1.5, step: 0.1 }, // Position scaling
+};
+
+// ============================================================================
 // Multi-Signal PEQ Bounds
 // ============================================================================
 
@@ -411,6 +429,8 @@ const firstCandleMSPEQBounds: ParameterBounds = {
     candleSizeReference: { min: 0, max: 1000 },
     baseBuyPrice: { min: 0.10, max: 0.90, step: 0.01 },
     minProfitMargin: { min: 0.01, max: 0.50, step: 0.01 },
+    // ML gating parameters
+    ...ML_GATING_BOUNDS,
     ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
     ...generateMSPEQBounds('sellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
     ...generateMSPEQBounds('earlySellTime', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
@@ -428,6 +448,8 @@ const quarterlyFirstCandleMSPEQBounds: ParameterBounds = {
     candleSizeReference: { min: 0, max: 1000 },
     baseBuyPrice: { min: 0.10, max: 0.70, step: 0.02 },
     minProfitMargin: { min: 0.01, max: 0.50, step: 0.01 },
+    // ML gating parameters
+    ...ML_GATING_BOUNDS,
     ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
     ...generateMSPEQBounds('sellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
     ...generateMSPEQBounds('earlySellTime', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 1 }, { min: -0.5, max: 0.5, c0Min: 0.1, c0Max: 0.4 }),
@@ -447,6 +469,8 @@ const earlyBuyerMSPEQBounds: ParameterBounds = {
     candleSizeReference: { min: 0, max: 500 },
     minProfitMargin: { min: 0.01, max: 0.50, step: 0.01 },
     directionThreshold: { min: 0.3, max: 0.7, step: 0.02 },
+    // ML gating parameters
+    ...ML_GATING_BOUNDS,
     // MSPEQ coefficients
     ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
     ...generateMSPEQBounds('sellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
@@ -465,6 +489,8 @@ const quarterlyEarlyBuyerMSPEQBounds: ParameterBounds = {
     candleSizeReference: { min: 0, max: 500},
     minProfitMargin: { min: 0.02, max: 0.25, step: 0.02 },
     directionThreshold: { min: 0.3, max: 0.7, step: 0.02 },
+    // ML gating parameters
+    ...ML_GATING_BOUNDS,
     // MSPEQ coefficients
     ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
     ...generateMSPEQBounds('sellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
@@ -490,6 +516,8 @@ const marketMakerMSPEQBounds: ParameterBounds = {
     targetDollars: { min: 5, max: 20, step: 5 },
     baseCutoffMinute: { min: 5, max: 50, step: 5 },
     candleSizeReference: { min: 0, max: 500 },
+    // ML gating parameters
+    ...ML_GATING_BOUNDS,
     // MSPEQ coefficients
     ...generateMSPEQBounds('profitMargin', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
     ...generateMSPEQBounds('spreadDistance', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
@@ -514,6 +542,8 @@ const quarterlyMarketMakerMSPEQBounds: ParameterBounds = {
     targetDollars: { min: 5, max: 20, step: 5 },
     baseCutoffMinute: { min: 5, max: 14, step: 1 },
     candleSizeReference: { min: 0, max: 500},
+    // ML gating parameters
+    ...ML_GATING_BOUNDS,
     // MSPEQ coefficients
     ...generateMSPEQBounds('profitMargin', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
     ...generateMSPEQBounds('spreadDistance', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
@@ -539,6 +569,8 @@ const nCandleMSPEQBounds: ParameterBounds = {
     cutoffMinute: { min: 20, max: 55, step: 5 },
     maxTradesPerHour: { min: 1, max: 10, step: 1 },
     candleSizeReference: { min: 0, max: 500 },
+    // ML gating parameters
+    ...ML_GATING_BOUNDS,
     // MSPEQ coefficients
     ...generateMSPEQBounds('buyPriceBuffer', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
     ...generateMSPEQBounds('minProfitMargin', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
@@ -562,6 +594,8 @@ const quarterlyNCandleMSPEQBounds: ParameterBounds = {
     cutoffMinute: { min: 5, max: 13, step: 1 },
     maxTradesPerHour: { min: 1, max: 10, step: 1 },
     candleSizeReference: { min: 0, max: 500 },
+    // ML gating parameters
+    ...ML_GATING_BOUNDS,
     // MSPEQ coefficients
     ...generateMSPEQBounds('buyPriceBuffer', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
     ...generateMSPEQBounds('minProfitMargin', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
@@ -582,6 +616,8 @@ const crossPeriodMomentumMSPEQBounds: ParameterBounds = {
     directionThreshold: { min: 0.3, max: 0.7, step: 0.05 },
     baseMomentumThreshold: { min: 0.05, max: 0.30, step: 0.05 },
     baseMinWinStreak: { min: 1, max: 4, step: 1 },
+    // ML gating parameters
+    ...ML_GATING_BOUNDS,
     // MSPEQ coefficients
     ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
     ...generateMSPEQBounds('sellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
@@ -604,6 +640,8 @@ const quarterlyCrossPeriodMomentumMSPEQBounds: ParameterBounds = {
     directionThreshold: { min: 0.3, max: 0.7, step: 0.05 },
     baseMomentumThreshold: { min: 0.05, max: 0.30, step: 0.05 },
     baseMinWinStreak: { min: 1, max: 5, step: 1 },
+    // ML gating parameters
+    ...ML_GATING_BOUNDS,
     // MSPEQ coefficients
     ...generateMSPEQBounds('buyPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.5, c0Max: 1.5 }),
     ...generateMSPEQBounds('sellPrice', [...ACTIVE_MSPEQ_SIGNALS], { min: 0, max: 2 }, { min: -1, max: 1, c0Min: 0.8, c0Max: 1.2 }),
@@ -1801,6 +1839,9 @@ export {
 
 // Signal names export (for TradeGate creation in HistoricalSimulator)
 export { ACTIVE_MSPEQ_SIGNALS };
+
+// ML gating bounds export (for use in two-stage optimization)
+export { ML_GATING_BOUNDS };
 
 // ============================================================================
 // Regime-Aware Strategy Bounds and Factories

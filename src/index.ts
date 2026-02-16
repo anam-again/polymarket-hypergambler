@@ -20,7 +20,7 @@ import { YOLOMLBot } from "./bots/YOLOMLBot.js";
 import { PredictionStyle } from "./ml/types.js";
 import { ScalingPEQ, ScalingPEQCoefficients } from "./utils/ScalingPEQ.js";
 import { TradingDatabase } from "./db/TradingDatabase.js";
-import { loadBotsFromYamlDir } from "./adapters/SimulatorParamsAdapter.js";
+import { loadBotsFromYamlDir, MLBotConfig } from "./adapters/SimulatorParamsAdapter.js";
 import { SuddenArb } from "./bots/SuddenArb.js";
 
 // Initialize database on startup
@@ -40,6 +40,16 @@ const commonProps = {
   client: clobClient,
   marketInfo,
 }
+
+// ML configuration for MSPEQ bots
+// Enable ML gating to reject trades below confidence threshold
+const mlConfig: MLBotConfig = {
+  useMLGating: true,           // Enable ML-powered trade gating
+  minMLConfidence: 0.5,        // Minimum confidence to proceed with trade
+  mlPositionMultiplier: 1.0,   // Base position multiplier (adjusted by confidence)
+  mlModelBasePath: './models', // Per-strategy model storage
+};
+
 const commonTestProps = {
   ...commonProps,
   PROD_MODE: false,
@@ -47,9 +57,21 @@ const commonTestProps = {
   targetDollars: 20,
 }
 
+// Test props with ML enabled for MSPEQ bots
+const commonTestPropsWithML = {
+  ...commonTestProps,
+  ml: mlConfig,
+}
+
 const commonProdProps = {
   ...commonProps,
   PROD_MODE: true,
+}
+
+// Prod props with ML enabled for MSPEQ bots
+const commonProdPropsWithML = {
+  ...commonProdProps,
+  ml: mlConfig,
 }
 
 const logCleaner = new LogCleaner({
@@ -68,8 +90,9 @@ OrderBatcher.initialize(clobClient, 200);
 const prodBots: QuantBotRun[] = []
 
 const testBots: QuantBotRun[] = [
+  // MSPEQ bots with ML features enabled
   ...loadBotsFromYamlDir('./MSPEQSYamls', {
-    ...commonTestProps,
+    ...commonTestPropsWithML,
   }, {
     pattern: /\.yaml$/,
   }),

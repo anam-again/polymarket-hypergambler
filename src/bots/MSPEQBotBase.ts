@@ -3,6 +3,8 @@ import { MarketSchedule } from "../types/interfaces.js";
 import { ISignalProvider, SignalSnapshot } from "../signals/SignalProvider.js";
 import { HistoricalSignalProvider } from "../signals/MockSignalProvider.js";
 import { TradeGate, RegimeDetector, RegimeType } from "../regime/index.js";
+import { MLPredictionService, MLPrediction, TradeOutcome } from "../ml/MLPredictionService.js";
+import { MarketRegime } from "../ml/MarketRegimeDetector.js";
 
 // ============================================================================
 // Types & Interfaces
@@ -14,6 +16,16 @@ export interface MSPEQBotProps extends QuantBotProps {
     // Regime-aware trading (optional)
     tradeGate?: TradeGate;
     regimeDetector?: RegimeDetector;
+
+    // ML Integration (optional)
+    /** MLPredictionService instance for ML-powered predictions */
+    mlService?: MLPredictionService;
+    /** Enable ML gating (reject trades below minMLConfidence) */
+    useMLGating?: boolean;
+    /** Minimum ML confidence threshold to proceed with trade (default: 0.5) */
+    minMLConfidence?: number;
+    /** Position size multiplier based on ML confidence (default: 1.0) */
+    mlPositionMultiplier?: number;
 }
 
 // ============================================================================
@@ -58,6 +70,14 @@ export abstract class MSPEQBotBase extends QuantBot {
     protected regimeDetector?: RegimeDetector;
     protected currentRegime: RegimeType = RegimeType.LOW_VOL_RANGING;
 
+    // --- ML Integration ---
+    protected mlService?: MLPredictionService;
+    protected useMLGating: boolean = false;
+    protected minMLConfidence: number = 0.5;
+    protected mlPositionMultiplier: number = 1.0;
+    protected lastMLPrediction?: MLPrediction;
+    protected lastMLFeatures?: Record<string, number>;
+
     // --- Constructor ---
 
     constructor(props: MSPEQBotProps) {
@@ -66,6 +86,12 @@ export abstract class MSPEQBotBase extends QuantBot {
         this.candleSizeReference = props.candleSizeReference;
         this.tradeGate = props.tradeGate;
         this.regimeDetector = props.regimeDetector;
+
+        // ML Integration
+        this.mlService = props.mlService;
+        this.useMLGating = props.useMLGating ?? false;
+        this.minMLConfidence = props.minMLConfidence ?? 0.5;
+        this.mlPositionMultiplier = props.mlPositionMultiplier ?? 1.0;
 
         // Signal provider (default to HistoricalSignalProvider for simulation)
         this.signalProvider = props.signalProvider ?? new HistoricalSignalProvider({
@@ -206,6 +232,274 @@ export abstract class MSPEQBotBase extends QuantBot {
         return this.currentRegime;
     }
 
+    // -------------------------------------------------------------------------
+    // ML Integration
+    // -------------------------------------------------------------------------
+
+    /**
+     * Computes ML features from current market state.
+     * Returns a feature record suitable for FairValueModel (56 features).
+     *
+     * Subclasses can override this to add strategy-specific features.
+     */
+    protected computeMLFeatures(): Record<string, number> {
+        const now = this.clock.now();
+        const signals = this.getSignalRecord();
+
+        // Time features
+        const date = new Date(now);
+        const minuteInHour = date.getMinutes() / 60;
+        const secondInMinute = date.getSeconds() / 60;
+        const periodLength = this.marketSchedule === MarketSchedule.QUARTERLY
+            ? 15 * 60 * 1000
+            : 60 * 60 * 1000;
+        const periodStart = Math.floor(now / periodLength) * periodLength;
+        const periodProgress = (now - periodStart) / periodLength;
+        const timeToHourEnd = 1 - periodProgress;
+        const isFirstQuarter = periodProgress < 0.25 ? 1 : 0;
+        const isLastQuarter = periodProgress > 0.75 ? 1 : 0;
+
+        // Cyclic time encoding
+        const minuteSin = Math.sin(2 * Math.PI * minuteInHour);
+        const minuteCos = Math.cos(2 * Math.PI * minuteInHour);
+        const hourSin = Math.sin(2 * Math.PI * date.getHours() / 24);
+        const hourCos = Math.cos(2 * Math.PI * date.getHours() / 24);
+
+        // Base features from signals
+        const features: Record<string, number> = {
+            // Price candle features (use signals where available)
+            candle10s: signals.candleSize * 0.1,
+            candle20s: signals.candleSize * 0.2,
+            candle30s: signals.candleSize * 0.3,
+            candle60s: signals.candleSize * 0.6,
+            candle5m: signals.candleSize,
+
+            // Moving average features
+            ma30s: 0,
+            ma60s: 0,
+            ma5m: 0,
+
+            // Volatility features
+            volatility30s: signals.volatility,
+            volatility60s: signals.volatility * 0.9,
+
+            // Momentum and trend
+            momentum: signals.momentum,
+            priceVsMa: signals.momentum * 5,
+
+            // Token prices
+            upMid: this.cachedUpMid,
+            downMid: this.cachedDownMid,
+            upSpread: 0.02,
+            downSpread: 0.02,
+            imbalance: signals.priceImbalance,
+
+            // Order book depth (placeholder - filled by subclasses with real data)
+            upBidDepth1pct: 0,
+            upAskDepth1pct: 0,
+            upBidDepth5pct: 0,
+            upAskDepth5pct: 0,
+            upVolumeImbalance: 0,
+            upBidVWAP: 0.5,
+            upAskVWAP: 0.5,
+            upBookPressure: 1,
+
+            downBidDepth1pct: 0,
+            downAskDepth1pct: 0,
+            downBidDepth5pct: 0,
+            downAskDepth5pct: 0,
+            downVolumeImbalance: 0,
+            downBidVWAP: 0.5,
+            downAskVWAP: 0.5,
+            downBookPressure: 1,
+
+            // Time features
+            minuteInHour,
+            secondInMinute,
+            timeToHourEnd,
+            isFirstQuarter,
+            isLastQuarter,
+            minuteSin,
+            minuteCos,
+            hourSin,
+            hourCos,
+            periodProgress,
+
+            // Order flow features
+            upBidAskRatio: 1,
+            downBidAskRatio: 1,
+            upTopBidConcentration: 0,
+            upTopAskConcentration: 0,
+            downTopBidConcentration: 0,
+            downTopAskConcentration: 0,
+
+            // Cross-token features
+            upDownCorrelation: 0,
+            upDownSpreadRatio: 1,
+            combinedLiquidity: 0,
+            imbalanceVelocity: 0,
+
+            // Period start features
+            upPriceVsPeriodStart: 0,
+            downPriceVsPeriodStart: 0,
+            binancePriceVsPeriodStart: 0,
+        };
+
+        // Cache for training
+        this.lastMLFeatures = features;
+
+        return features;
+    }
+
+    /**
+     * Checks if trading should proceed based on ML confidence.
+     * Returns { shouldTrade, confidence, reason? }
+     *
+     * If ML gating is disabled or no ML service, returns { shouldTrade: true }.
+     */
+    protected shouldTradeML(): { shouldTrade: boolean; confidence: number; reason?: string } {
+        if (!this.useMLGating || !this.mlService) {
+            return { shouldTrade: true, confidence: 1.0 };
+        }
+
+        const features = this.computeMLFeatures();
+        const result = this.mlService.shouldTrade(features, this.minMLConfidence);
+
+        if (!result.shouldTrade) {
+            this.writeLog(`ML gate blocked: ${result.reason}`);
+        }
+
+        // Cache the prediction for later use
+        this.lastMLPrediction = this.mlService.predictFairValue(features);
+
+        return result;
+    }
+
+    /**
+     * Gets ML-adjusted position size based on confidence and regime.
+     *
+     * @param baseSize Base position size in dollars
+     * @returns Adjusted position size
+     */
+    protected getMLAdjustedPositionSize(baseSize: number): number {
+        if (!this.mlService) {
+            return baseSize;
+        }
+
+        const features = this.lastMLFeatures ?? this.computeMLFeatures();
+        return this.mlService.getAdjustedPositionSize(
+            baseSize,
+            features,
+            this.mlPositionMultiplier
+        );
+    }
+
+    /**
+     * Gets the ML prediction for the current market state.
+     * Updates cached prediction if needed.
+     */
+    protected getMLPrediction(): MLPrediction | undefined {
+        if (!this.mlService) {
+            return undefined;
+        }
+
+        if (!this.lastMLPrediction) {
+            const features = this.computeMLFeatures();
+            this.lastMLPrediction = this.mlService.predictFairValue(features);
+        }
+
+        return this.lastMLPrediction;
+    }
+
+    /**
+     * Finds optimal exit price using ML ExitModel.
+     *
+     * @param direction Trade direction ('UP' or 'DOWN')
+     * @param currentMidPrice Current mid price of the token
+     * @returns Enhanced exit prediction or undefined if no ML service
+     */
+    protected findMLOptimalExitPrice(
+        direction: 'UP' | 'DOWN',
+        currentMidPrice: number
+    ) {
+        if (!this.mlService) {
+            return undefined;
+        }
+
+        const features = this.lastMLFeatures ?? this.computeMLFeatures();
+        return this.mlService.findOptimalExitPrice(features, direction, currentMidPrice);
+    }
+
+    /**
+     * Trains ML models on trade outcome.
+     * Should be called when a trade completes (fills or expires).
+     *
+     * @param entryPrice The price at which the trade was entered
+     * @param exitPrice The price at which the trade exited (if filled)
+     * @param tokenId The token ID (used to determine UP/DOWN direction)
+     * @param filled Whether the order filled
+     * @param pnl Realized profit/loss
+     * @param actualUpPrice Actual UP token price at outcome time
+     * @param actualDownPrice Actual DOWN token price at outcome time
+     */
+    protected onTradeOutcome(
+        entryPrice: number,
+        exitPrice: number | undefined,
+        tokenId: string,
+        filled: boolean,
+        pnl: number,
+        actualUpPrice: number,
+        actualDownPrice: number
+    ): void {
+        if (!this.mlService || !this.lastMLFeatures) {
+            return;
+        }
+
+        const outcome: TradeOutcome = {
+            entryFeatures: this.lastMLFeatures,
+            actualUpPrice,
+            actualDownPrice,
+            pnl,
+            filled,
+            entryPrice,
+            exitPrice: filled ? exitPrice : undefined,
+            direction: tokenId.toLowerCase().includes('up') ? 'UP' : 'DOWN',
+        };
+
+        this.mlService.trainOnOutcome(outcome);
+    }
+
+    /**
+     * Gets the current ML regime (different from TradeGate regime).
+     */
+    protected getMLRegime(): MarketRegime | undefined {
+        return this.mlService?.getCurrentRegime();
+    }
+
+    /**
+     * Gets ML regime multipliers for position sizing and timeouts.
+     */
+    protected getMLRegimeMultipliers() {
+        return this.mlService?.getRegimeMultipliers();
+    }
+
+    /**
+     * Saves ML model weights to disk.
+     */
+    protected saveMLModels(): void {
+        this.mlService?.save();
+    }
+
+    /**
+     * Resets ML models to fresh state.
+     * Used for fresh simulation starts.
+     */
+    protected resetMLModels(): void {
+        this.mlService?.reset();
+        this.lastMLPrediction = undefined;
+        this.lastMLFeatures = undefined;
+    }
+
     /**
      * Updates the signal provider's period timing.
      * Should be called on period reset.
@@ -252,6 +546,10 @@ export abstract class MSPEQBotBase extends QuantBot {
         this.lastOrderBookUpdateTime = 0;
         this.candleHigh = 0;
         this.candleLow = Infinity;
+
+        // Clear ML prediction cache (but keep model weights)
+        this.lastMLPrediction = undefined;
+        this.lastMLFeatures = undefined;
 
         // Clear signal provider history to avoid carrying stale data across periods
         if (this.signalProvider instanceof HistoricalSignalProvider) {

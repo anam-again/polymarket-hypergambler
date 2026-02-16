@@ -33,6 +33,7 @@ import { QuantBotRun } from '../bots/QuantBot.js';
 import { ClobClient } from '@polymarket/clob-client';
 import { MarketInfo } from '../nonBots/MarketInfo.js';
 import { targetMarketToShortname } from '../utils/utils.js';
+import { MLPredictionService, MLServiceConfig } from '../ml/MLPredictionService.js';
 
 // ============================================================================
 // Types
@@ -103,6 +104,22 @@ export interface SimulatorYamlOutput {
 }
 
 /**
+ * ML configuration for MSPEQ bots
+ */
+export interface MLBotConfig {
+    /** Enable ML gating (reject trades below minMLConfidence) */
+    useMLGating?: boolean;
+    /** Minimum ML confidence threshold to proceed with trade (default: 0.5) */
+    minMLConfidence?: number;
+    /** Position size multiplier based on ML confidence (default: 1.0) */
+    mlPositionMultiplier?: number;
+    /** Base path for ML model storage (strategy name will be appended) */
+    mlModelBasePath?: string;
+    /** ML service config overrides */
+    mlServiceConfig?: Partial<MLServiceConfig>;
+}
+
+/**
  * Common bot configuration passed to all bots
  */
 export interface CommonBotConfig {
@@ -111,6 +128,8 @@ export interface CommonBotConfig {
     PROD_MODE: boolean;
     hourlyDollarLimit: number;
     targetDollars?: number;
+    /** ML configuration (optional, enables ML features when provided) */
+    ml?: MLBotConfig;
 }
 
 /**
@@ -310,6 +329,64 @@ export function loadSimulatorYaml(filePath: string): SimulatorYamlOutput {
 }
 
 // ============================================================================
+// ML Service Factory
+// ============================================================================
+
+/**
+ * Cache of MLPredictionService instances by strategy name.
+ * This ensures each strategy gets a single shared service instance.
+ */
+const mlServiceCache = new Map<string, MLPredictionService>();
+
+/**
+ * Creates or retrieves an MLPredictionService for a given strategy.
+ * Uses caching to ensure each strategy gets a single shared instance.
+ *
+ * @param strategyName Strategy name (e.g., 'FirstCandleMSPEQ-btc15')
+ * @param config ML configuration
+ * @returns MLPredictionService instance
+ */
+export function getOrCreateMLService(
+    strategyName: string,
+    config?: MLBotConfig
+): MLPredictionService | undefined {
+    if (!config?.useMLGating) {
+        return undefined; // ML not enabled
+    }
+
+    // Check cache first
+    const cacheKey = strategyName;
+    if (mlServiceCache.has(cacheKey)) {
+        return mlServiceCache.get(cacheKey);
+    }
+
+    // Create new service with per-strategy model path
+    const basePath = config.mlModelBasePath ?? './models';
+    const modelPath = `${basePath}/${strategyName.replace(/[^a-zA-Z0-9-]/g, '_')}/`;
+
+    const serviceConfig: MLServiceConfig = {
+        modelPath,
+        strategyName,
+        loadExisting: true, // Load existing weights if available
+        ...config.mlServiceConfig,
+    };
+
+    const service = new MLPredictionService(serviceConfig);
+    mlServiceCache.set(cacheKey, service);
+
+    console.log(`[SimulatorParamsAdapter] Created MLPredictionService for ${strategyName} at ${modelPath}`);
+
+    return service;
+}
+
+/**
+ * Clears the ML service cache. Useful for testing.
+ */
+export function clearMLServiceCache(): void {
+    mlServiceCache.clear();
+}
+
+// ============================================================================
 // FirstCandleMSPEQ Adapter
 // ============================================================================
 
@@ -363,6 +440,9 @@ export function extractFirstCandleMSPEQProps(
     const baseFilename = filePath ? getBaseFilename(filePath) : 'fcmspeq';
     const name = `${baseFilename}-${shortname}`;
 
+    // Create ML service if ML config is provided
+    const mlService = getOrCreateMLService(name, config.ml);
+
     return {
         // Identity
         name,
@@ -373,6 +453,12 @@ export function extractFirstCandleMSPEQProps(
         marketInfo: config.marketInfo,
         PROD_MODE: config.PROD_MODE,
         hourlyDollarLimit: config.hourlyDollarLimit,
+
+        // ML Integration
+        mlService,
+        useMLGating: config.ml?.useMLGating ?? false,
+        minMLConfidence: config.ml?.minMLConfidence ?? 0.5,
+        mlPositionMultiplier: config.ml?.mlPositionMultiplier ?? 1.0,
 
         // Base parameters from YAML
         candleMinutes: params.candleMinutes,
@@ -470,6 +556,9 @@ export function extractEarlyBuyerMSPEQProps(
     const baseFilename = filePath ? getBaseFilename(filePath) : 'ebmspeq';
     const name = `${baseFilename}-${shortname}`;
 
+    // Create ML service if ML config is provided
+    const mlService = getOrCreateMLService(name, config.ml);
+
     return {
         // Identity
         name,
@@ -480,6 +569,12 @@ export function extractEarlyBuyerMSPEQProps(
         marketInfo: config.marketInfo,
         PROD_MODE: config.PROD_MODE,
         hourlyDollarLimit: config.hourlyDollarLimit,
+
+        // ML Integration
+        mlService,
+        useMLGating: config.ml?.useMLGating ?? false,
+        minMLConfidence: config.ml?.minMLConfidence ?? 0.5,
+        mlPositionMultiplier: config.ml?.mlPositionMultiplier ?? 1.0,
 
         // Base parameters from YAML
         targetDollars: config.targetDollars ?? params.targetDollars ?? 10,
@@ -575,6 +670,9 @@ export function extractNCandleMSPEQProps(
     const baseFilename = filePath ? getBaseFilename(filePath) : 'ncmspeq';
     const name = `${baseFilename}-${shortname}`;
 
+    // Create ML service if ML config is provided
+    const mlService = getOrCreateMLService(name, config.ml);
+
     return {
         // Identity
         name,
@@ -585,6 +683,12 @@ export function extractNCandleMSPEQProps(
         marketInfo: config.marketInfo,
         PROD_MODE: config.PROD_MODE,
         hourlyDollarLimit: config.hourlyDollarLimit,
+
+        // ML Integration
+        mlService,
+        useMLGating: config.ml?.useMLGating ?? false,
+        minMLConfidence: config.ml?.minMLConfidence ?? 0.5,
+        mlPositionMultiplier: config.ml?.mlPositionMultiplier ?? 1.0,
 
         // Base parameters from YAML
         candleMinutes: params.candleMinutes,
@@ -685,6 +789,9 @@ export function extractCrossPeriodMomentumMSPEQProps(
     const baseFilename = filePath ? getBaseFilename(filePath) : 'cpmmspeq';
     const name = `${baseFilename}-${shortname}`;
 
+    // Create ML service if ML config is provided
+    const mlService = getOrCreateMLService(name, config.ml);
+
     return {
         // Identity
         name,
@@ -695,6 +802,12 @@ export function extractCrossPeriodMomentumMSPEQProps(
         marketInfo: config.marketInfo,
         PROD_MODE: config.PROD_MODE,
         hourlyDollarLimit: config.hourlyDollarLimit,
+
+        // ML Integration
+        mlService,
+        useMLGating: config.ml?.useMLGating ?? false,
+        minMLConfidence: config.ml?.minMLConfidence ?? 0.5,
+        mlPositionMultiplier: config.ml?.mlPositionMultiplier ?? 1.0,
 
         // Base parameters from YAML
         targetDollars: config.targetDollars ?? params.targetDollars ?? 10,
@@ -786,15 +899,25 @@ function extractMarketMakerMSPEQProps(
     const params = yaml.params;
     const market = resolveMarket(yaml.market);
     const shortname = targetMarketToShortname(market);
+    const name = `mmaker-mspeq-${shortname}-${filePath.split('/').pop()?.replace('.yaml', '')}`;
+
+    // Create ML service if ML config is provided
+    const mlService = getOrCreateMLService(name, config.ml);
 
     return {
         // Common props
-        name: `mmaker-mspeq-${shortname}-${filePath.split('/').pop()?.replace('.yaml', '')}`,
+        name,
         client: config.client,
         marketInfo: config.marketInfo,
         targetedMarket: market,
         PROD_MODE: config.PROD_MODE,
         hourlyDollarLimit: config.hourlyDollarLimit,
+
+        // ML Integration
+        mlService,
+        useMLGating: config.ml?.useMLGating ?? false,
+        minMLConfidence: config.ml?.minMLConfidence ?? 0.5,
+        mlPositionMultiplier: config.ml?.mlPositionMultiplier ?? 1.0,
 
         // MarketMaker specific
         spreadSize: params.spreadSize ?? 5,

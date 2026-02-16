@@ -16,7 +16,7 @@ export * from './types.js';
 
 // Core Models
 export { FairValueModel, type PredictionWithUncertainty } from './FairValueModel.js';
-export { MLPFairValueModel, type MLPConfig, type MLPStats } from './MLPFairValueModel.js';
+export { MLPFairValueModel, type MLPConfig, type MLPPrediction } from './MLPFairValueModel.js';
 export { ExitModel, type SimulatedExitLevel, type EnhancedExitPrediction } from './ExitModel.js';
 export { TimeoutModel } from './TimeoutModel.js';
 export { MarketRegimeDetector, type MarketRegime, type RegimeFeatures } from './MarketRegimeDetector.js';
@@ -27,6 +27,14 @@ export {
     type TrainingSample,
     type IReplayTrainable,
 } from './ExperienceReplayBuffer.js';
+
+// ML Prediction Service (unified wrapper for strategies)
+export {
+    MLPredictionService,
+    type MLServiceConfig,
+    type MLPrediction,
+    type TradeOutcome,
+} from './MLPredictionService.js';
 
 // Performance Tracking
 export { ModelPerformanceTracker } from './ModelPerformanceTracker.js';

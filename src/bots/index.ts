@@ -14,7 +14,7 @@
 export {
     QuantBot,
     OrderBatcher,
-    runBotWithRestartOnFailure,
+    runBotsWithRestartOnFailure,
     type QuantBotProps,
     type QuantBotRun,
     type TradeOrder,
@@ -23,7 +23,7 @@ export {
 
 export { OrderBatcher as OrderBatcherDirect } from './OrderBatcher.js';
 
-export { MSPEQBotBase, type MSPEQBotConfig } from './MSPEQBotBase.js';
+export { MSPEQBotBase, type MSPEQBotProps } from './MSPEQBotBase.js';
 
 // ML-Powered Strategies
 export { SuddenArb, type SuddenArbMLConfig } from './SuddenArb.js';
