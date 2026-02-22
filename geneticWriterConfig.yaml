@@ -2,10 +2,12 @@
 # This file configures which bot/market combinations to optimize
 
 settings:
-  lookbackDays: 3          # Days of historical data to use
-  maxGenerations: 12       # Maximum optimization generations
+  lookbackDays: 7          # Days of historical data to use (increased from 3 — all prior
+                           # genetic yamls used only 1-3 days and overfit badly in live trading)
+  maxGenerations: 20       # Maximum optimization generations (increased from 12)
   populationSize: 75       # Population size per generation
-  intervalHours: 8         # Hours between optimization runs
+  intervalHours: 24        # Hours between optimization runs (changed from 8 — daily re-opt
+                           # is safer than 3x/day to avoid chasing short-term noise)
   concurrentSimulations: 2 # Number of simulations to run in parallel
 
 # List of bot/market combinations to optimize

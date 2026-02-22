@@ -289,8 +289,20 @@ export class GeneticOptimizedWriter {
         // Round all params to 0.01
         const roundedParams = roundParams(result.bestIndividual.params) as Record<string, number>;
 
-        // Determine if enabled (both best and avg PnL must be > 0)
-        const enabled = bestPnl > 0 && avgPnl > 0;
+        // Determine if enabled — requires positive PnL AND passing validation gates.
+        // These gates guard against overfitting (the primary cause of live trading losses):
+        //   1. bestPnl > 0 && avgPnl > 0: basic profitability in simulation
+        //   2. !overfit: walk-forward validation PnL must be reasonable vs training PnL
+        //   3. isStable: parameter perturbation test must pass (avoids knife-edge params)
+        const overfit = result.validationResult?.overfit ?? false;
+        const isStable = result.stabilityResult?.isStable ?? false;
+        const enabled = bestPnl > 0 && avgPnl > 0 && !overfit && isStable;
+
+        if (bestPnl > 0 && avgPnl > 0 && (!isStable || overfit)) {
+            console.log(`  [GATE] PnL is positive but bot disabled due to:`);
+            if (overfit) console.log(`    - Overfitting detected (validation PnL << training PnL)`);
+            if (!isStable) console.log(`    - Unstable parameters (stability score: ${((result.stabilityResult?.stabilityScore ?? 0) * 100).toFixed(1)}%)`);
+        }
 
         // Build output config
         const yamlConfig: GeneticYamlConfig = {
