@@ -38,7 +38,13 @@ export type BotStyle =
     | 'QuarterlyNCandle'
     | 'QuarterlyEarlyBuyerV2'
     | 'QuarterlyEsotericNormalization'
-    | 'QuarterlyMarketMaker';
+    | 'QuarterlyMarketMaker'
+    | 'VWAPMSPEQ'
+    | 'OrderFlowImbalanceMSPEQ'
+    | 'BollingerBandBreakoutMSPEQ'
+    | 'QuarterlyVWAPMSPEQ'
+    | 'QuarterlyOrderFlowImbalanceMSPEQ'
+    | 'QuarterlyBollingerBandBreakoutMSPEQ';
 
 // ============================================================================
 // Output YAML Schema (written by GeneticOptimizedWriter)
@@ -171,6 +177,12 @@ export const validBotStyles: BotStyle[] = [
     'QuarterlyEarlyBuyerV2',
     'QuarterlyEsotericNormalization',
     'QuarterlyMarketMaker',
+    'VWAPMSPEQ',
+    'OrderFlowImbalanceMSPEQ',
+    'BollingerBandBreakoutMSPEQ',
+    'QuarterlyVWAPMSPEQ',
+    'QuarterlyOrderFlowImbalanceMSPEQ',
+    'QuarterlyBollingerBandBreakoutMSPEQ',
 ];
 
 // ============================================================================

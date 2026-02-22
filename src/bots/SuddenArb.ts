@@ -35,6 +35,7 @@ interface SuddenArbProps extends QuantBotProps {
     targetProfitMargin: number;     // Target sell price margin (e.g., 0.03 = 3%) - DEPRECATED: used as fallback
     minProfitMargin?: number;       // Minimum acceptable profit margin (floor for ExitModel)
     maxPositionDollars: number;     // Max position size
+    maxConcurrentTrades?: number;   // Max simultaneous open positions (default: 5)
     learningRate: number;           // Online learning rate
     modelId: string;                // Unique ID for model persistence
     binanceSymbol: BinanceSymbol;   // Which symbol to track (e.g., 'BTCUSDT')
@@ -141,7 +142,11 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
     private targetProfitMargin: number;  // DEPRECATED: Used as fallback when ExitModel not ready
     private minProfitMargin: number;     // Minimum acceptable profit (floor for ExitModel)
     private maxPositionDollars: number;
+    private maxConcurrentTrades: number;
     private binanceSymbol: BinanceSymbol;
+
+    // Model sanity: if divergence exceeds this, the model is likely miscalibrated — skip trade
+    private static readonly MAX_SANE_DIVERGENCE = 0.35;  // 35% max believable mispricing
 
     // Replay training interval
     private replayTrainInterval: NodeJS.Timeout | null = null;
@@ -154,6 +159,7 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
         this.targetProfitMargin = props.targetProfitMargin;  // Fallback when ExitModel not ready
         this.minProfitMargin = props.minProfitMargin ?? 0.01;  // Default 1% minimum profit
         this.maxPositionDollars = props.maxPositionDollars;
+        this.maxConcurrentTrades = props.maxConcurrentTrades ?? 5;  // Default max 5 concurrent positions
         this.binanceSymbol = props.binanceSymbol;
         this.convergenceWindowMs = props.convergenceWindowMs ?? 30 * 1000;
 
@@ -973,13 +979,27 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
         }
 
         if (upDivergence > this.mispricingThreshold && upDivergence > downDivergence) {
-            // Log confidence for debugging
-            this.writeLog(`Signal UP: div=${(upDivergence * 100).toFixed(2)}%, conf=${prediction.upConfidence.toFixed(3)}, threshold=${this.mlConfig.minConfidenceToTrade}`);
-            await this.executeArbitrage('UP', pmarketPrices.upMid, fairUpPrice, this.upTokenId, prediction, currentRegime);
+            // Sanity check: divergence above MAX_SANE_DIVERGENCE suggests a miscalibrated model
+            if (upDivergence > SuddenArb.MAX_SANE_DIVERGENCE) {
+                this.writeLog(`[SANITY] Skipping UP trade: divergence ${(upDivergence * 100).toFixed(1)}% exceeds sane limit (${(SuddenArb.MAX_SANE_DIVERGENCE * 100).toFixed(0)}%). Model may be miscalibrated. fair=${fairUpPrice.toFixed(3)}, market=${pmarketPrices.upMid.toFixed(3)}`);
+            } else if (this.activeTrades.length >= this.maxConcurrentTrades) {
+                this.writeLog(`[LIMIT] Skipping UP trade: already at max concurrent trades (${this.activeTrades.length}/${this.maxConcurrentTrades})`);
+            } else {
+                // Log confidence for debugging
+                this.writeLog(`Signal UP: div=${(upDivergence * 100).toFixed(2)}%, conf=${prediction.upConfidence.toFixed(3)}, threshold=${this.mlConfig.minConfidenceToTrade}`);
+                await this.executeArbitrage('UP', pmarketPrices.upMid, fairUpPrice, this.upTokenId, prediction, currentRegime);
+            }
         } else if (downDivergence > this.mispricingThreshold) {
-            // Log confidence for debugging
-            this.writeLog(`Signal DOWN: div=${(downDivergence * 100).toFixed(2)}%, conf=${prediction.downConfidence.toFixed(3)}, threshold=${this.mlConfig.minConfidenceToTrade}`);
-            await this.executeArbitrage('DOWN', pmarketPrices.downMid, fairDownPrice, this.downTokenId, prediction, currentRegime);
+            // Sanity check: divergence above MAX_SANE_DIVERGENCE suggests a miscalibrated model
+            if (downDivergence > SuddenArb.MAX_SANE_DIVERGENCE) {
+                this.writeLog(`[SANITY] Skipping DOWN trade: divergence ${(downDivergence * 100).toFixed(1)}% exceeds sane limit (${(SuddenArb.MAX_SANE_DIVERGENCE * 100).toFixed(0)}%). Model may be miscalibrated. fair=${fairDownPrice.toFixed(3)}, market=${pmarketPrices.downMid.toFixed(3)}`);
+            } else if (this.activeTrades.length >= this.maxConcurrentTrades) {
+                this.writeLog(`[LIMIT] Skipping DOWN trade: already at max concurrent trades (${this.activeTrades.length}/${this.maxConcurrentTrades})`);
+            } else {
+                // Log confidence for debugging
+                this.writeLog(`Signal DOWN: div=${(downDivergence * 100).toFixed(2)}%, conf=${prediction.downConfidence.toFixed(3)}, threshold=${this.mlConfig.minConfidenceToTrade}`);
+                await this.executeArbitrage('DOWN', pmarketPrices.downMid, fairDownPrice, this.downTokenId, prediction, currentRegime);
+            }
         } else {
             const minTrackDivergence = this.mispricingThreshold * SuddenArb.MISSED_OPP_DIVERGENCE_THRESHOLD;
 

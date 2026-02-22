@@ -59,12 +59,23 @@ function parseLogLine(line, source) {
   return null;
 }
 
+// Maximum bytes to read at once to prevent memory issues
+const MAX_READ_BYTES = 100 * 1024; // 100KB max per read
+const MAX_ENTRIES_PER_BROADCAST = 100; // Limit entries per broadcast
+
 // Read new lines from a file since last position
 function readNewLines(filePath, source) {
   try {
     const stats = fs.statSync(filePath);
     const currentSize = stats.size;
-    const lastPosition = filePositions.get(filePath) || 0;
+    let lastPosition = filePositions.get(filePath);
+
+    // If this is the first read, start from near the end to avoid reading huge files
+    if (lastPosition === undefined) {
+      lastPosition = Math.max(0, currentSize - MAX_READ_BYTES);
+      filePositions.set(filePath, currentSize);
+      return []; // Skip initial read, just set position
+    }
 
     if (currentSize <= lastPosition) {
       // File was truncated or no new data
@@ -72,10 +83,14 @@ function readNewLines(filePath, source) {
       return [];
     }
 
+    // Limit how much we read at once
+    const bytesToRead = Math.min(currentSize - lastPosition, MAX_READ_BYTES);
+    const readPosition = currentSize - bytesToRead;
+
     // Read only the new portion
     const fd = fs.openSync(filePath, 'r');
-    const buffer = Buffer.alloc(currentSize - lastPosition);
-    fs.readSync(fd, buffer, 0, buffer.length, lastPosition);
+    const buffer = Buffer.alloc(bytesToRead);
+    fs.readSync(fd, buffer, 0, buffer.length, Math.max(lastPosition, readPosition));
     fs.closeSync(fd);
 
     filePositions.set(filePath, currentSize);
@@ -83,7 +98,9 @@ function readNewLines(filePath, source) {
     const newContent = buffer.toString('utf-8');
     const lines = newContent.split('\n').filter(line => line.trim());
 
-    return lines.map(line => parseLogLine(line, source)).filter(Boolean);
+    // Limit number of entries
+    const entries = lines.map(line => parseLogLine(line, source)).filter(Boolean);
+    return entries.slice(-MAX_ENTRIES_PER_BROADCAST);
   } catch (err) {
     return [];
   }
@@ -91,12 +108,21 @@ function readNewLines(filePath, source) {
 
 // Broadcast to all connected clients
 function broadcast(data) {
-  const message = JSON.stringify(data);
-  wss.clients.forEach(client => {
-    if (client.readyState === 1) { // WebSocket.OPEN
-      client.send(message);
+  try {
+    const message = JSON.stringify(data);
+    // Safety check: don't broadcast extremely large messages
+    if (message.length > 1024 * 1024) { // 1MB limit
+      console.warn(`[WebSocket] Skipping broadcast: message too large (${(message.length / 1024).toFixed(0)}KB)`);
+      return;
     }
-  });
+    wss.clients.forEach(client => {
+      if (client.readyState === 1) { // WebSocket.OPEN
+        client.send(message);
+      }
+    });
+  } catch (err) {
+    console.error('[WebSocket] Broadcast error:', err.message);
+  }
 }
 
 // Watch log files for changes
@@ -1686,6 +1712,138 @@ app.get('/api/live-trades', (req, res) => {
     positions: Object.values(positions),
     lastUpdated: Date.now()
   });
+});
+
+// ============================================================================
+// Pipeline API Endpoints
+// ============================================================================
+
+app.get('/api/pipeline/bots', (req, res) => {
+  try {
+    const { state } = req.query;
+    const bots = db.getPipelineBots(state || null);
+    res.json(bots);
+  } catch (err) {
+    console.error('Error fetching pipeline bots:', err);
+    res.status(500).json({ error: 'Failed to fetch pipeline bots' });
+  }
+});
+
+app.get('/api/pipeline/bot/:botId', (req, res) => {
+  try {
+    const bot = db.getPipelineBot(req.params.botId);
+    if (!bot) {
+      return res.status(404).json({ error: 'Bot not found' });
+    }
+    res.json(bot);
+  } catch (err) {
+    console.error('Error fetching pipeline bot:', err);
+    res.status(500).json({ error: 'Failed to fetch pipeline bot' });
+  }
+});
+
+app.get('/api/pipeline/events', (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 100;
+    const events = db.getPipelineEvents(limit);
+    res.json(events);
+  } catch (err) {
+    console.error('Error fetching pipeline events:', err);
+    res.status(500).json({ error: 'Failed to fetch pipeline events' });
+  }
+});
+
+app.get('/api/pipeline/stages', (req, res) => {
+  try {
+    const stages = db.getPipelineStages();
+    res.json(stages);
+  } catch (err) {
+    console.error('Error fetching pipeline stages:', err);
+    res.status(500).json({ error: 'Failed to fetch pipeline stages' });
+  }
+});
+
+app.get('/api/pipeline/summary', (req, res) => {
+  try {
+    const summary = db.getPipelineSummary();
+    res.json(summary);
+  } catch (err) {
+    console.error('Error fetching pipeline summary:', err);
+    res.status(500).json({ error: 'Failed to fetch pipeline summary' });
+  }
+});
+
+// Get live metrics for all running bots
+app.get('/api/pipeline/live-metrics', (req, res) => {
+  try {
+    const metrics = db.getAllRunningBotsLiveMetrics();
+    res.json(metrics);
+  } catch (err) {
+    console.error('Error fetching live metrics:', err);
+    res.status(500).json({ error: 'Failed to fetch live metrics' });
+  }
+});
+
+// Delete a retired bot
+app.delete('/api/pipeline/bot/:botId', (req, res) => {
+  try {
+    const { botId } = req.params;
+    const result = db.deleteRetiredBot(botId);
+    res.json(result);
+  } catch (err) {
+    console.error('Error deleting bot:', err);
+    res.status(500).json({ success: false, error: 'Failed to delete bot' });
+  }
+});
+
+// Note: POST endpoints for approve/reject/retire require the running BotPipeline instance.
+// These are handled by importing botPipeline from the main app when running in production.
+// For the dashboard server running standalone, these return a helpful error.
+
+app.post('/api/pipeline/bot/:botId/approve', (req, res) => {
+  try {
+    // In production, this calls botPipeline.approveProdCandidate()
+    // The dashboard server needs access to the pipeline instance
+    if (global.botPipeline) {
+      global.botPipeline.approveProdCandidate(req.params.botId);
+      res.json({ success: true, message: `Bot ${req.params.botId} approved for production` });
+    } else {
+      res.status(503).json({ error: 'Pipeline not available - main application must be running' });
+    }
+  } catch (err) {
+    console.error('Error approving bot:', err);
+    res.status(500).json({ error: err.message || 'Failed to approve bot' });
+  }
+});
+
+app.post('/api/pipeline/bot/:botId/reject', (req, res) => {
+  try {
+    const { reason } = req.body || {};
+    if (global.botPipeline) {
+      global.botPipeline.rejectProdCandidate(req.params.botId, reason || 'Rejected via dashboard');
+      res.json({ success: true, message: `Bot ${req.params.botId} rejected` });
+    } else {
+      res.status(503).json({ error: 'Pipeline not available - main application must be running' });
+    }
+  } catch (err) {
+    console.error('Error rejecting bot:', err);
+    res.status(500).json({ error: err.message || 'Failed to reject bot' });
+  }
+});
+
+app.post('/api/pipeline/bot/:botId/retire', (req, res) => {
+  try {
+    const { reason } = req.body || {};
+    if (global.botPipeline) {
+      global.botPipeline.forceRetireBot(req.params.botId, reason || 'Retired via dashboard');
+      res.json({ success: true, message: `Bot ${req.params.botId} retired` });
+    } else {
+      res.status(503).json({ error: 'Pipeline not available - main application must be running' });
+    }
+  } catch (err) {
+    console.error('Error retiring bot:', err);
+    res.status(500).json({ error: err.message || 'Failed to retire bot' });
+  }
 });
 
 // WebSocket handler for live trades price streaming

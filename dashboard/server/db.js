@@ -17,7 +17,7 @@ let db = null;
 export function getDb() {
     if (!db) {
         const dbPath = process.env.DB_PATH || DEFAULT_DB_PATH;
-        db = new Database(dbPath, { readonly: true });
+        db = new Database(dbPath);
         db.pragma('journal_mode = WAL');
     }
     return db;
@@ -695,4 +695,248 @@ export function getLogsBySource(source, limit = 100) {
         message: row.message,
         source: row.source
     }));
+}
+
+// ============================================================================
+// Pipeline Database Functions
+// ============================================================================
+
+/**
+ * Check if pipeline tables exist.
+ */
+export function hasPipelineTables() {
+    try {
+        const database = getDb();
+        const result = database.prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='bot_lifecycle'"
+        ).get();
+        return !!result;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Get all bots from bot_lifecycle table.
+ */
+export function getPipelineBots(state = null) {
+    try {
+        const database = getDb();
+        if (!hasPipelineTables()) return [];
+
+        let sql = `SELECT
+            id, bot_id as botId, strategy, market, state,
+            yaml_path as yamlPath, params_json as paramsJson,
+            sim_pnl as simPnl, sim_sharpe as simSharpe, sim_sortino as simSortino,
+            sim_calmar as simCalmar, sim_win_rate as simWinRate,
+            sim_max_drawdown as simMaxDrawdown, sim_total_trades as simTotalTrades,
+            sim_timestamp as simTimestamp,
+            test_start_timestamp as testStartTimestamp, test_pnl as testPnl,
+            test_win_rate as testWinRate, test_trade_count as testTradeCount,
+            test_sharpe as testSharpe, test_evaluated_at as testEvaluatedAt,
+            prod_start_timestamp as prodStartTimestamp, prod_pnl as prodPnl,
+            prod_win_rate as prodWinRate, prod_trade_count as prodTradeCount,
+            prod_last_checked as prodLastChecked,
+            created_at as createdAt, updated_at as updatedAt,
+            retired_at as retiredAt, retire_reason as retireReason,
+            promoted_by as promotedBy, demoted_from as demotedFrom
+        FROM bot_lifecycle`;
+        const params = [];
+        if (state) {
+            sql += ' WHERE state = ?';
+            params.push(state);
+        }
+        sql += ' ORDER BY updated_at DESC';
+
+        return database.prepare(sql).all(...params);
+    } catch (e) {
+        console.error('Error in getPipelineBots:', e);
+        return [];
+    }
+}
+
+/**
+ * Get a single bot by ID.
+ */
+export function getPipelineBot(botId) {
+    try {
+        const database = getDb();
+        if (!hasPipelineTables()) return null;
+        return database.prepare(`SELECT
+            id, bot_id as botId, strategy, market, state,
+            yaml_path as yamlPath, params_json as paramsJson,
+            sim_pnl as simPnl, sim_sharpe as simSharpe, sim_sortino as simSortino,
+            sim_calmar as simCalmar, sim_win_rate as simWinRate,
+            sim_max_drawdown as simMaxDrawdown, sim_total_trades as simTotalTrades,
+            sim_timestamp as simTimestamp,
+            test_start_timestamp as testStartTimestamp, test_pnl as testPnl,
+            test_win_rate as testWinRate, test_trade_count as testTradeCount,
+            test_sharpe as testSharpe, test_evaluated_at as testEvaluatedAt,
+            prod_start_timestamp as prodStartTimestamp, prod_pnl as prodPnl,
+            prod_win_rate as prodWinRate, prod_trade_count as prodTradeCount,
+            prod_last_checked as prodLastChecked,
+            created_at as createdAt, updated_at as updatedAt,
+            retired_at as retiredAt, retire_reason as retireReason,
+            promoted_by as promotedBy, demoted_from as demotedFrom
+        FROM bot_lifecycle WHERE bot_id = ?`).get(botId);
+    } catch (e) {
+        console.error('Error in getPipelineBot:', e);
+        return null;
+    }
+}
+
+/**
+ * Get pipeline events (audit trail).
+ */
+export function getPipelineEvents(limit = 100) {
+    try {
+        const database = getDb();
+        if (!hasPipelineTables()) return [];
+        return database.prepare(`SELECT
+            id, timestamp, stage_name as stageName,
+            event_type as eventType, bot_id as botId,
+            details_json as detailsJson, severity
+        FROM pipeline_events ORDER BY timestamp DESC LIMIT ?`).all(limit);
+    } catch (e) {
+        console.error('Error in getPipelineEvents:', e);
+        return [];
+    }
+}
+
+/**
+ * Get pipeline stage status.
+ */
+export function getPipelineStages() {
+    try {
+        const database = getDb();
+        if (!hasPipelineTables()) return [];
+        return database.prepare(`SELECT
+            id, stage_name as stageName,
+            last_run_timestamp as lastRunTimestamp,
+            next_scheduled_run as nextScheduledRun,
+            status, last_error as lastError,
+            run_count as runCount,
+            last_run_duration_ms as lastRunDurationMs,
+            config_json as configJson
+        FROM pipeline_state ORDER BY stage_name`).all();
+    } catch (e) {
+        console.error('Error in getPipelineStages:', e);
+        return [];
+    }
+}
+
+/**
+ * Get live metrics for a bot from trade_audits.
+ * This calculates real-time PnL, win rate, and trade count.
+ */
+export function getBotLiveMetrics(botId, sinceTimestamp = 0) {
+    try {
+        const database = getDb();
+        const row = database.prepare(`
+            SELECT
+                COALESCE(SUM(pnl), 0) as totalPnl,
+                COUNT(*) as tradeCount,
+                SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins
+            FROM trade_audits
+            WHERE strategy = ? AND timestamp >= ? AND status IN ('MATCHED', 'EXPIRED')
+        `).get(botId, sinceTimestamp);
+
+        const tradeCount = row?.tradeCount || 0;
+        const wins = row?.wins || 0;
+
+        return {
+            pnl: row?.totalPnl || 0,
+            tradeCount,
+            winRate: tradeCount > 0 ? (wins / tradeCount) * 100 : 0,
+        };
+    } catch (e) {
+        console.error('Error in getBotLiveMetrics:', e);
+        return { pnl: 0, tradeCount: 0, winRate: 0 };
+    }
+}
+
+/**
+ * Get live metrics for all running bots (TEST_RUNNING and PROD_RUNNING).
+ */
+export function getAllRunningBotsLiveMetrics() {
+    try {
+        const database = getDb();
+        if (!hasPipelineTables()) return {};
+
+        const runningBots = database.prepare(`
+            SELECT bot_id as botId, state, test_start_timestamp as testStartTimestamp, prod_start_timestamp as prodStartTimestamp
+            FROM bot_lifecycle
+            WHERE state IN ('TEST_RUNNING', 'PROD_RUNNING')
+        `).all();
+
+        const metrics = {};
+        for (const bot of runningBots) {
+            const sinceTimestamp = bot.state === 'PROD_RUNNING'
+                ? (bot.prodStartTimestamp || 0)
+                : (bot.testStartTimestamp || 0);
+            metrics[bot.botId] = getBotLiveMetrics(bot.botId, sinceTimestamp);
+        }
+
+        return metrics;
+    } catch (e) {
+        console.error('Error in getAllRunningBotsLiveMetrics:', e);
+        return {};
+    }
+}
+
+/**
+ * Get pipeline summary statistics.
+ */
+export function getPipelineSummary() {
+    try {
+        const database = getDb();
+        if (!hasPipelineTables()) return { total: 0, byState: {} };
+
+        const rows = database.prepare(
+            'SELECT state, COUNT(*) as count FROM bot_lifecycle GROUP BY state'
+        ).all();
+
+        const byState = {};
+        let total = 0;
+        for (const row of rows) {
+            byState[row.state] = row.count;
+            total += row.count;
+        }
+
+        return { total, byState };
+    } catch {
+        return { total: 0, byState: {} };
+    }
+}
+
+/**
+ * Delete a retired bot from the database.
+ * Only allows deletion of RETIRED bots for safety.
+ */
+export function deleteRetiredBot(botId) {
+    try {
+        const database = getDb();
+        if (!hasPipelineTables()) return { success: false, error: 'Pipeline tables not found' };
+
+        // First check if the bot exists and is retired
+        const bot = database.prepare('SELECT state FROM bot_lifecycle WHERE bot_id = ?').get(botId);
+        if (!bot) {
+            return { success: false, error: 'Bot not found' };
+        }
+        if (bot.state !== 'RETIRED') {
+            return { success: false, error: 'Can only delete RETIRED bots' };
+        }
+
+        // Delete the bot
+        const result = database.prepare('DELETE FROM bot_lifecycle WHERE bot_id = ?').run(botId);
+
+        if (result.changes > 0) {
+            return { success: true };
+        } else {
+            return { success: false, error: 'Failed to delete bot' };
+        }
+    } catch (e) {
+        console.error('Error in deleteRetiredBot:', e);
+        return { success: false, error: e.message };
+    }
 }

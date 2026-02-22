@@ -25,6 +25,9 @@ export type StrategyBaseType =
     | 'MarketMakerMSPEQ'
     | 'NCandleMSPEQ'
     | 'CrossPeriodMomentumMSPEQ'
+    | 'VWAPMSPEQ'
+    | 'OrderFlowImbalanceMSPEQ'
+    | 'BollingerBandBreakoutMSPEQ'
     | 'Contrarian'
     | 'TrendFollowing'
     | 'FirstCandle'
@@ -136,6 +139,38 @@ const CROSSPERIODMOMENTUM_MSPEQ_BASE_PARAMS = [
     'directionThreshold',
     'baseMomentumThreshold',
     'baseMinWinStreak',
+] as const;
+
+const VWAP_MSPEQ_BASE_PARAMS = [
+    'targetDollars',
+    'vwapLookbackMinutes',
+    'baseBuyDistance',
+    'baseSellDistance',
+    'baseCutoffMinute',
+    'candleSizeReference',
+    'minProfitMargin',
+] as const;
+
+const ORDERFLOWIMBALANCE_MSPEQ_BASE_PARAMS = [
+    'targetDollars',
+    'baseImbalanceThreshold',
+    'depthLookbackLevels',
+    'baseBuyPrice',
+    'baseSellPrice',
+    'baseCutoffMinute',
+    'candleSizeReference',
+    'minProfitMargin',
+] as const;
+
+const BOLLINGERBANDBREAKOUT_MSPEQ_BASE_PARAMS = [
+    'targetDollars',
+    'lookbackPeriods',
+    'baseBandWidth',
+    'baseBuyPrice',
+    'baseSellPrice',
+    'baseCutoffMinute',
+    'candleSizeReference',
+    'minProfitMargin',
 ] as const;
 
 // ============================================================================
@@ -346,6 +381,33 @@ export const STRATEGY_REGISTRY: Record<string, StrategyMetadata> = {
         signalNames: FULL_4_SIGNALS,
         baseParamNames: CROSSPERIODMOMENTUM_MSPEQ_BASE_PARAMS,
     },
+    'VWAPMSPEQ': {
+        name: 'VWAPMSPEQ',
+        baseType: 'VWAPMSPEQ',
+        isQuarterly: false,
+        isRegimeAware: false,
+        isMSPEQ: true,
+        signalNames: FULL_4_SIGNALS,
+        baseParamNames: VWAP_MSPEQ_BASE_PARAMS,
+    },
+    'OrderFlowImbalanceMSPEQ': {
+        name: 'OrderFlowImbalanceMSPEQ',
+        baseType: 'OrderFlowImbalanceMSPEQ',
+        isQuarterly: false,
+        isRegimeAware: false,
+        isMSPEQ: true,
+        signalNames: FULL_4_SIGNALS,
+        baseParamNames: ORDERFLOWIMBALANCE_MSPEQ_BASE_PARAMS,
+    },
+    'BollingerBandBreakoutMSPEQ': {
+        name: 'BollingerBandBreakoutMSPEQ',
+        baseType: 'BollingerBandBreakoutMSPEQ',
+        isQuarterly: false,
+        isRegimeAware: false,
+        isMSPEQ: true,
+        signalNames: FULL_4_SIGNALS,
+        baseParamNames: BOLLINGERBANDBREAKOUT_MSPEQ_BASE_PARAMS,
+    },
 
     // =========================================================================
     // MSPEQ Quarterly Strategies
@@ -394,6 +456,33 @@ export const STRATEGY_REGISTRY: Record<string, StrategyMetadata> = {
         isMSPEQ: true,
         signalNames: FULL_4_SIGNALS,
         baseParamNames: CROSSPERIODMOMENTUM_MSPEQ_BASE_PARAMS,
+    },
+    'QuarterlyVWAPMSPEQ': {
+        name: 'QuarterlyVWAPMSPEQ',
+        baseType: 'VWAPMSPEQ',
+        isQuarterly: true,
+        isRegimeAware: false,
+        isMSPEQ: true,
+        signalNames: FULL_4_SIGNALS,
+        baseParamNames: VWAP_MSPEQ_BASE_PARAMS,
+    },
+    'QuarterlyOrderFlowImbalanceMSPEQ': {
+        name: 'QuarterlyOrderFlowImbalanceMSPEQ',
+        baseType: 'OrderFlowImbalanceMSPEQ',
+        isQuarterly: true,
+        isRegimeAware: false,
+        isMSPEQ: true,
+        signalNames: FULL_4_SIGNALS,
+        baseParamNames: ORDERFLOWIMBALANCE_MSPEQ_BASE_PARAMS,
+    },
+    'QuarterlyBollingerBandBreakoutMSPEQ': {
+        name: 'QuarterlyBollingerBandBreakoutMSPEQ',
+        baseType: 'BollingerBandBreakoutMSPEQ',
+        isQuarterly: true,
+        isRegimeAware: false,
+        isMSPEQ: true,
+        signalNames: FULL_4_SIGNALS,
+        baseParamNames: BOLLINGERBANDBREAKOUT_MSPEQ_BASE_PARAMS,
     },
 
     // =========================================================================

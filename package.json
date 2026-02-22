@@ -20,7 +20,9 @@
     "lint:fix": "eslint src/ --fix",
     "test": "vitest",
     "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "pipeline": "tsx src/pipeline/index.ts",
+    "pipeline:start": "node dist/pipeline/index.js"
   },
   "keywords": [],
   "author": "",

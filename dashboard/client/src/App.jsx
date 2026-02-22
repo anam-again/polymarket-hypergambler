@@ -10,6 +10,7 @@ import TimeRangeSelector from './components/TimeRangeSelector';
 import LiveLogs from './components/LiveLogs';
 import LiveTrades from './components/LiveTrades';
 import SimulatorDashboard from './components/SimulatorDashboard';
+import BotPipelineDashboard from './components/BotPipelineDashboard';
 import DancingStickFigure from './components/DancingStickFigure';
 
 const WS_URL = 'ws://localhost:3001/ws';
@@ -377,6 +378,12 @@ function App() {
             >
               Simulator
             </button>
+            <button
+              className={`view-btn ${activeView === 'pipeline' ? 'active' : ''}`}
+              onClick={() => setActiveView('pipeline')}
+            >
+              Pipeline
+            </button>
           </div>
           {activeView === 'live' && (
             <>
@@ -430,6 +437,8 @@ function App() {
 
       {activeView === 'simulator' ? (
         <SimulatorDashboard />
+      ) : activeView === 'pipeline' ? (
+        <BotPipelineDashboard />
       ) : (
         <>
           <TimeRangeSelector

@@ -1630,3 +1630,265 @@ body {
     max-width: 100px;
   }
 }
+
+/* ============================================================================
+   Pipeline Dashboard Styles
+   ============================================================================ */
+
+.pipeline-dashboard {
+  padding: 0;
+}
+
+.pipeline-loading {
+  text-align: center;
+  padding: 40px;
+  color: #8b949e;
+}
+
+.pipeline-section {
+  margin-top: 24px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.pipeline-section h2 {
+  margin: 0 0 12px 0;
+  color: #e6edf3;
+  font-size: 1.1rem;
+}
+
+/* Approval Panel */
+.pipeline-approval-panel {
+  margin-top: 16px;
+  background: #1c1f24;
+  border: 2px solid #ffa657;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.pipeline-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pipeline-candidate-card {
+  background: #21262d;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.candidate-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.candidate-metrics {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  font-size: 0.9rem;
+  color: #c9d1d9;
+}
+
+.candidate-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.approve-btn {
+  background: #238636;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 16px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.approve-btn:hover {
+  background: #2ea043;
+}
+
+.approve-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.reject-btn {
+  background: #da3633;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 16px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.reject-btn:hover {
+  background: #f85149;
+}
+
+.reject-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.retire-btn {
+  background: #30363d;
+  color: #8b949e;
+  border: 1px solid #484f58;
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.retire-btn:hover {
+  background: #484f58;
+  color: #c9d1d9;
+}
+
+/* Pipeline Stages Grid */
+.pipeline-stages-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.pipeline-stage-card {
+  background: #21262d;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.pipeline-stage-card h3 {
+  margin: 0 0 8px 0;
+  font-size: 0.9rem;
+  color: #e6edf3;
+}
+
+.stage-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8rem;
+  color: #8b949e;
+}
+
+/* Pipeline Table */
+.pipeline-table-container {
+  overflow-x: auto;
+}
+
+.pipeline-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.pipeline-table th {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 2px solid #30363d;
+  color: #8b949e;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pipeline-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid #21262d;
+  color: #c9d1d9;
+}
+
+.pipeline-table tr:hover {
+  background: #1c2128;
+}
+
+.pipeline-table tr.selected {
+  background: #1c2128;
+  border-left: 3px solid #1da1f2;
+}
+
+/* Bot Detail Panel */
+.pipeline-bot-detail {
+  margin-top: 12px;
+  background: #21262d;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 16px;
+}
+
+.pipeline-bot-detail h3 {
+  margin: 0 0 12px 0;
+  color: #e6edf3;
+}
+
+.bot-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 8px;
+  font-size: 0.85rem;
+  color: #c9d1d9;
+}
+
+/* Events Timeline */
+.pipeline-events {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.pipeline-event {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  color: #c9d1d9;
+  padding: 6px 8px;
+  transition: background 0.15s ease;
+}
+
+.pipeline-event:hover {
+  background: #21262d;
+}
+
+.pipeline-event.selected {
+  background: #21262d;
+}
+
+.event-time {
+  color: #8b949e;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.event-type {
+  font-weight: 600;
+}
+
+.event-details-expanded {
+  animation: slideDown 0.15s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

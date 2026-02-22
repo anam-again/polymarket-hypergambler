@@ -169,4 +169,81 @@ export function runMigrations(db: Database.Database): void {
         db.exec(`CREATE INDEX IF NOT EXISTS idx_confirmed_winners_market ON confirmed_winners(market)`);
         db.pragma('user_version = 2');
     }
+
+    // Migration v3: Bot Pipeline tables
+    if (versionResult < 3) {
+        // Bot lifecycle tracking - state machine for managed bots
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS bot_lifecycle (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bot_id TEXT NOT NULL UNIQUE,
+                strategy TEXT NOT NULL,
+                market TEXT NOT NULL,
+                state TEXT NOT NULL,
+                yaml_path TEXT,
+                params_json TEXT,
+                sim_pnl REAL,
+                sim_sharpe REAL,
+                sim_sortino REAL,
+                sim_calmar REAL,
+                sim_win_rate REAL,
+                sim_max_drawdown REAL,
+                sim_total_trades INTEGER,
+                sim_timestamp INTEGER,
+                test_start_timestamp INTEGER,
+                test_pnl REAL,
+                test_win_rate REAL,
+                test_trade_count INTEGER,
+                test_sharpe REAL,
+                test_evaluated_at INTEGER,
+                prod_start_timestamp INTEGER,
+                prod_pnl REAL,
+                prod_win_rate REAL,
+                prod_trade_count INTEGER,
+                prod_last_checked INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                retired_at INTEGER,
+                retire_reason TEXT,
+                promoted_by TEXT,
+                demoted_from TEXT
+            )
+        `);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_lifecycle_state ON bot_lifecycle(state)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_lifecycle_strategy ON bot_lifecycle(strategy)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_lifecycle_market ON bot_lifecycle(market)`);
+
+        // Pipeline stage run tracking
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS pipeline_state (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stage_name TEXT NOT NULL UNIQUE,
+                last_run_timestamp INTEGER,
+                next_scheduled_run INTEGER,
+                status TEXT NOT NULL DEFAULT 'IDLE',
+                last_error TEXT,
+                run_count INTEGER DEFAULT 0,
+                last_run_duration_ms INTEGER,
+                config_json TEXT
+            )
+        `);
+
+        // Pipeline event audit trail
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS pipeline_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp INTEGER NOT NULL,
+                stage_name TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                bot_id TEXT,
+                details_json TEXT,
+                severity TEXT DEFAULT 'INFO'
+            )
+        `);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_pipeline_events_timestamp ON pipeline_events(timestamp)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_pipeline_events_stage ON pipeline_events(stage_name)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_pipeline_events_bot ON pipeline_events(bot_id)`);
+
+        db.pragma('user_version = 3');
+    }
 }

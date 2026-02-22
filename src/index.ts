@@ -288,12 +288,16 @@ const testBots: QuantBotRun[] = [
     })
   }),
   // SuddenArb - ML-powered arbitrage bot using real-time price feeds
+  // NOTE: mispricingThreshold raised from 0.05 to 0.15 — the FairValueModel was generating
+  // false 50%+ divergence signals due to miscalibration, causing massive losses.
+  // maxConcurrentTrades added to prevent unbounded position accumulation.
   ...([
     {
       targetedMarket: TargetedMarket.BITCOIN_HOURLY,
-      mispricingThreshold: 0.05,    // 5% divergence (wider for test)
+      mispricingThreshold: 0.15,    // 15% minimum divergence (raised from 5% to filter model noise)
       targetProfitMargin: 0.03,     // 3% profit target
       maxPositionDollars: 5,        // Small positions for testing
+      maxConcurrentTrades: 5,       // Hard cap on simultaneous open positions
       learningRate: 0.01,
       modelId: 'btc-hourly-1',
       binanceSymbol: 'BTCUSDT' as const,
@@ -301,9 +305,10 @@ const testBots: QuantBotRun[] = [
     },
     {
       targetedMarket: TargetedMarket.BITCOIN_QUARTERLY,
-      mispricingThreshold: 0.05,
+      mispricingThreshold: 0.15,    // 15% minimum divergence (raised from 5%)
       targetProfitMargin: 0.03,
       maxPositionDollars: 5,
+      maxConcurrentTrades: 5,       // Hard cap on simultaneous open positions
       learningRate: 0.01,
       modelId: 'btc-quarterly-1',
       binanceSymbol: 'BTCUSDT' as const,

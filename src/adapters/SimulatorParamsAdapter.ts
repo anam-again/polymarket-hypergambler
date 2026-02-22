@@ -29,6 +29,9 @@ import { EarlyBuyerMSPEQ, EarlyBuyerMSPEQProps } from '../bots/EarlyBuyerMSPEQ.j
 import { NCandleMSPEQ, NCandleMSPEQProps } from '../bots/NCandleMSPEQ.js';
 import { CrossPeriodMomentumMSPEQ, CrossPeriodMomentumMSPEQProps } from '../bots/CrossPeriodMomentumMSPEQ.js';
 import { MarketMakerMSPEQ, MarketMakerMSPEQProps } from '../bots/MarketMakerMSPEQ.js';
+import { VWAPMSPEQ, VWAPMSPEQProps } from '../bots/VWAPMSPEQ.js';
+import { OrderFlowImbalanceMSPEQ, OrderFlowImbalanceMSPEQProps } from '../bots/OrderFlowImbalanceMSPEQ.js';
+import { BollingerBandBreakoutMSPEQ, BollingerBandBreakoutMSPEQProps } from '../bots/BollingerBandBreakoutMSPEQ.js';
 import { QuantBotRun } from '../bots/QuantBot.js';
 import { ClobClient } from '@polymarket/clob-client';
 import { MarketInfo } from '../nonBots/MarketInfo.js';
@@ -891,15 +894,16 @@ function extractMarketMakerMSPEQConfig(
 /**
  * Extracts MarketMakerMSPEQ props from YAML
  */
-function extractMarketMakerMSPEQProps(
+export function extractMarketMakerMSPEQProps(
     yaml: SimulatorYamlOutput,
     config: CommonBotConfig,
-    filePath: string
+    filePath?: string
 ): MarketMakerMSPEQProps {
     const params = yaml.params;
     const market = resolveMarket(yaml.market);
     const shortname = targetMarketToShortname(market);
-    const name = `mmaker-mspeq-${shortname}-${filePath.split('/').pop()?.replace('.yaml', '')}`;
+    const baseFilename = filePath ? filePath.split('/').pop()?.replace('.yaml', '') : 'mmmspeq';
+    const name = `mmaker-mspeq-${shortname}-${baseFilename}`;
 
     // Create ML service if ML config is provided
     const mlService = getOrCreateMLService(name, config.ml);
@@ -967,6 +971,182 @@ export function loadMarketMakerMSPEQFromYaml(
 
 // ============================================================================
 // Batch Loading
+// ============================================================================
+
+// ============================================================================
+// VWAPMSPEQ Adapter
+// ============================================================================
+
+function extractVWAPMSPEQConfig(
+    prefix: string,
+    params: Record<string, number>,
+    signalNames?: readonly string[]
+): MultiSignalPEQConfig {
+    const signals = signalNames ?? detectSignalsForPrefix(prefix, params);
+    return MultiSignalPEQ.fromFlatParams(
+        prefix, params, [...signals],
+        { normalizations: { candleSize: STANDARD_NORMALIZATIONS.candleSize, timeLeft: STANDARD_NORMALIZATIONS.timeLeft, volatility: STANDARD_NORMALIZATIONS.volatility, momentum: STANDARD_NORMALIZATIONS.momentum } }
+    ).getConfig();
+}
+
+export function extractVWAPMSPEQProps(
+    yaml: SimulatorYamlOutput,
+    config: CommonBotConfig,
+    filePath?: string
+): VWAPMSPEQProps {
+    const { params } = yaml;
+    const targetedMarket = resolveMarket(yaml.market);
+    const shortname = targetMarketToShortname(targetedMarket);
+    const baseFilename = filePath ? getBaseFilename(filePath) : 'vwapmspeq';
+    const name = `${baseFilename}-${shortname}`;
+    const mlService = getOrCreateMLService(name, config.ml);
+
+    return {
+        name, targetedMarket,
+        client: config.client, marketInfo: config.marketInfo,
+        PROD_MODE: config.PROD_MODE, hourlyDollarLimit: config.hourlyDollarLimit,
+        mlService, useMLGating: config.ml?.useMLGating ?? false,
+        minMLConfidence: config.ml?.minMLConfidence ?? 0.5,
+        mlPositionMultiplier: config.ml?.mlPositionMultiplier ?? 1.0,
+        targetDollars: config.targetDollars ?? params.targetDollars ?? 10,
+        vwapLookbackMinutes: params.vwapLookbackMinutes ?? 10,
+        baseBuyDistance: params.baseBuyDistance ?? 0.03,
+        baseSellDistance: params.baseSellDistance ?? 0.03,
+        baseCutoffMinute: params.baseCutoffMinute ?? 10,
+        candleSizeReference: params.candleSizeReference ?? 1000,
+        minProfitMargin: params.minProfitMargin ?? 0.05,
+        buyDistanceMSPEQ: extractVWAPMSPEQConfig('buyDistance', params),
+        sellDistanceMSPEQ: extractVWAPMSPEQConfig('sellDistance', params),
+        cutoffMinuteMSPEQ: extractVWAPMSPEQConfig('cutoffMinute', params),
+        earlySellTimeMSPEQ: extractVWAPMSPEQConfig('earlySellTime', params),
+        earlySellPriceMSPEQ: extractVWAPMSPEQConfig('earlySellPrice', params),
+    };
+}
+
+export function loadVWAPMSPEQFromYaml(filePath: string, config: CommonBotConfig): VWAPMSPEQ {
+    const yaml = loadSimulatorYaml(filePath);
+    const props = extractVWAPMSPEQProps(yaml, config, filePath);
+    return new VWAPMSPEQ(props);
+}
+
+// ============================================================================
+// OrderFlowImbalanceMSPEQ Adapter
+// ============================================================================
+
+function extractOrderFlowImbalanceMSPEQConfig(
+    prefix: string,
+    params: Record<string, number>,
+    signalNames?: readonly string[]
+): MultiSignalPEQConfig {
+    const signals = signalNames ?? detectSignalsForPrefix(prefix, params);
+    return MultiSignalPEQ.fromFlatParams(
+        prefix, params, [...signals],
+        { normalizations: { candleSize: STANDARD_NORMALIZATIONS.candleSize, timeLeft: STANDARD_NORMALIZATIONS.timeLeft, volatility: STANDARD_NORMALIZATIONS.volatility, momentum: STANDARD_NORMALIZATIONS.momentum } }
+    ).getConfig();
+}
+
+export function extractOrderFlowImbalanceMSPEQProps(
+    yaml: SimulatorYamlOutput,
+    config: CommonBotConfig,
+    filePath?: string
+): OrderFlowImbalanceMSPEQProps {
+    const { params } = yaml;
+    const targetedMarket = resolveMarket(yaml.market);
+    const shortname = targetMarketToShortname(targetedMarket);
+    const baseFilename = filePath ? getBaseFilename(filePath) : 'ofimspeq';
+    const name = `${baseFilename}-${shortname}`;
+    const mlService = getOrCreateMLService(name, config.ml);
+
+    return {
+        name, targetedMarket,
+        client: config.client, marketInfo: config.marketInfo,
+        PROD_MODE: config.PROD_MODE, hourlyDollarLimit: config.hourlyDollarLimit,
+        mlService, useMLGating: config.ml?.useMLGating ?? false,
+        minMLConfidence: config.ml?.minMLConfidence ?? 0.5,
+        mlPositionMultiplier: config.ml?.mlPositionMultiplier ?? 1.0,
+        targetDollars: config.targetDollars ?? params.targetDollars ?? 10,
+        baseImbalanceThreshold: params.baseImbalanceThreshold ?? 1.5,
+        depthLookbackLevels: params.depthLookbackLevels ?? 5,
+        baseBuyPrice: params.baseBuyPrice ?? 0.50,
+        baseSellPrice: params.baseSellPrice ?? 0.80,
+        baseCutoffMinute: params.baseCutoffMinute ?? 10,
+        candleSizeReference: params.candleSizeReference ?? 1000,
+        minProfitMargin: params.minProfitMargin ?? 0.05,
+        imbalanceThresholdMSPEQ: extractOrderFlowImbalanceMSPEQConfig('imbalanceThreshold', params),
+        buyPriceMSPEQ: extractOrderFlowImbalanceMSPEQConfig('buyPrice', params),
+        sellPriceMSPEQ: extractOrderFlowImbalanceMSPEQConfig('sellPrice', params),
+        cutoffMinuteMSPEQ: extractOrderFlowImbalanceMSPEQConfig('cutoffMinute', params),
+        earlySellTimeMSPEQ: extractOrderFlowImbalanceMSPEQConfig('earlySellTime', params),
+        earlySellPriceMSPEQ: extractOrderFlowImbalanceMSPEQConfig('earlySellPrice', params),
+    };
+}
+
+export function loadOrderFlowImbalanceMSPEQFromYaml(filePath: string, config: CommonBotConfig): OrderFlowImbalanceMSPEQ {
+    const yaml = loadSimulatorYaml(filePath);
+    const props = extractOrderFlowImbalanceMSPEQProps(yaml, config, filePath);
+    return new OrderFlowImbalanceMSPEQ(props);
+}
+
+// ============================================================================
+// BollingerBandBreakoutMSPEQ Adapter
+// ============================================================================
+
+function extractBollingerBandBreakoutMSPEQConfig(
+    prefix: string,
+    params: Record<string, number>,
+    signalNames?: readonly string[]
+): MultiSignalPEQConfig {
+    const signals = signalNames ?? detectSignalsForPrefix(prefix, params);
+    return MultiSignalPEQ.fromFlatParams(
+        prefix, params, [...signals],
+        { normalizations: { candleSize: STANDARD_NORMALIZATIONS.candleSize, timeLeft: STANDARD_NORMALIZATIONS.timeLeft, volatility: STANDARD_NORMALIZATIONS.volatility, momentum: STANDARD_NORMALIZATIONS.momentum } }
+    ).getConfig();
+}
+
+export function extractBollingerBandBreakoutMSPEQProps(
+    yaml: SimulatorYamlOutput,
+    config: CommonBotConfig,
+    filePath?: string
+): BollingerBandBreakoutMSPEQProps {
+    const { params } = yaml;
+    const targetedMarket = resolveMarket(yaml.market);
+    const shortname = targetMarketToShortname(targetedMarket);
+    const baseFilename = filePath ? getBaseFilename(filePath) : 'bbmspeq';
+    const name = `${baseFilename}-${shortname}`;
+    const mlService = getOrCreateMLService(name, config.ml);
+
+    return {
+        name, targetedMarket,
+        client: config.client, marketInfo: config.marketInfo,
+        PROD_MODE: config.PROD_MODE, hourlyDollarLimit: config.hourlyDollarLimit,
+        mlService, useMLGating: config.ml?.useMLGating ?? false,
+        minMLConfidence: config.ml?.minMLConfidence ?? 0.5,
+        mlPositionMultiplier: config.ml?.mlPositionMultiplier ?? 1.0,
+        targetDollars: config.targetDollars ?? params.targetDollars ?? 10,
+        lookbackPeriods: params.lookbackPeriods ?? 20,
+        baseBandWidth: params.baseBandWidth ?? 2.0,
+        baseBuyPrice: params.baseBuyPrice ?? 0.50,
+        baseSellPrice: params.baseSellPrice ?? 0.80,
+        baseCutoffMinute: params.baseCutoffMinute ?? 10,
+        candleSizeReference: params.candleSizeReference ?? 1000,
+        minProfitMargin: params.minProfitMargin ?? 0.05,
+        bandWidthMSPEQ: extractBollingerBandBreakoutMSPEQConfig('bandWidth', params),
+        buyPriceMSPEQ: extractBollingerBandBreakoutMSPEQConfig('buyPrice', params),
+        sellPriceMSPEQ: extractBollingerBandBreakoutMSPEQConfig('sellPrice', params),
+        cutoffMinuteMSPEQ: extractBollingerBandBreakoutMSPEQConfig('cutoffMinute', params),
+        earlySellTimeMSPEQ: extractBollingerBandBreakoutMSPEQConfig('earlySellTime', params),
+        earlySellPriceMSPEQ: extractBollingerBandBreakoutMSPEQConfig('earlySellPrice', params),
+    };
+}
+
+export function loadBollingerBandBreakoutMSPEQFromYaml(filePath: string, config: CommonBotConfig): BollingerBandBreakoutMSPEQ {
+    const yaml = loadSimulatorYaml(filePath);
+    const props = extractBollingerBandBreakoutMSPEQProps(yaml, config, filePath);
+    return new BollingerBandBreakoutMSPEQ(props);
+}
+
+// ============================================================================
+// Batch Bot Loading
 // ============================================================================
 
 /**
@@ -1059,6 +1239,18 @@ export function loadBotsFromYamlDir(
                 console.log(`[SimulatorParamsAdapter] Loaded ${bot.name} from ${file}`);
             } else if (baseType === 'CrossPeriodMomentumMSPEQ') {
                 const bot = loadCrossPeriodMomentumMSPEQFromYaml(filePath, config);
+                bots.push(bot);
+                console.log(`[SimulatorParamsAdapter] Loaded ${bot.name} from ${file}`);
+            } else if (baseType === 'VWAPMSPEQ') {
+                const bot = loadVWAPMSPEQFromYaml(filePath, config);
+                bots.push(bot);
+                console.log(`[SimulatorParamsAdapter] Loaded ${bot.name} from ${file}`);
+            } else if (baseType === 'OrderFlowImbalanceMSPEQ') {
+                const bot = loadOrderFlowImbalanceMSPEQFromYaml(filePath, config);
+                bots.push(bot);
+                console.log(`[SimulatorParamsAdapter] Loaded ${bot.name} from ${file}`);
+            } else if (baseType === 'BollingerBandBreakoutMSPEQ') {
+                const bot = loadBollingerBandBreakoutMSPEQFromYaml(filePath, config);
                 bots.push(bot);
                 console.log(`[SimulatorParamsAdapter] Loaded ${bot.name} from ${file}`);
             } else {
