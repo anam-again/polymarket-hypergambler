@@ -743,6 +743,62 @@ export class ExitModel {
     }
 
     /**
+     * Detects and recovers from degenerate model state.
+     *
+     * The ExitModel can get stuck predicting near-0 fill probability for ALL
+     * price levels when it receives predominantly non-fill training signals
+     * (weights pushed deeply negative). This causes find OptimalPrice to always
+     * choose the lowest-offset level (or random noise), effectively disabling
+     * the exit model entirely.
+     *
+     * Degeneracy condition: avg P(fill) across all SIMULATION_OFFSETS < threshold.
+     *
+     * @param threshold If average P(fill) is below this, model is degenerate (default: 0.08)
+     * @param minSamples Minimum training samples before checking (default: 50)
+     * @returns true if model was reset, false if healthy
+     */
+    checkAndResetIfDegenerate(lowThreshold: number = 0.08, highThreshold: number = 0.92, minSamples: number = 50): boolean {
+        if (this.trainingSamples < minSamples) return false;
+
+        // Sample fill probability at each simulation level using a neutral feature vector
+        const probs = ExitModel.SIMULATION_OFFSETS.map(
+            offset => this.predictFillProbability({ targetOffset: offset }, offset)
+        );
+        const avgProb = probs.reduce((a, b) => a + b, 0) / probs.length;
+        const maxProb = Math.max(...probs);
+        const minProb = Math.min(...probs);
+
+        // Two degenerate states:
+        // 1. TOO LOW  (avgP < lowThreshold):  weights pushed deeply negative by too many non-fills.
+        //    Model never recommends any exit price → positions expire unexited.
+        // 2. TOO HIGH (avgP > highThreshold): weights pushed positive by early fill training.
+        //    Model is overconfident → sets prices too high, fills stop, model doesn't update.
+        const tooLow = avgProb < lowThreshold || maxProb < lowThreshold * 2;
+        const tooHigh = avgProb > highThreshold && minProb > highThreshold * 0.8;
+
+        if (tooLow || tooHigh) {
+            const reason = tooLow ? `stuck low (avg=${avgProb.toFixed(4)})` : `stuck high (avg=${avgProb.toFixed(4)})`;
+            console.warn(
+                `[ExitModel] Degenerate state detected: ${reason}. Resetting weights.`
+            );
+            this.reset();
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Returns the average fill probability across all simulation offsets using neutral features.
+     * Used for health monitoring and degeneracy detection.
+     */
+    getAverageFillProbability(): number {
+        const probs = ExitModel.SIMULATION_OFFSETS.map(
+            offset => this.predictFillProbability({ targetOffset: offset }, offset)
+        );
+        return probs.reduce((a, b) => a + b, 0) / probs.length;
+    }
+
+    /**
      * Returns performance metrics.
      */
     getPerformanceMetrics() {

@@ -94,6 +94,13 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
     private tradeCounter: number = 0;
     private tradesThisPeriod: number = 0;
 
+    // Win rate tracking for confidence calibration
+    // Tracks actual directional outcomes vs predictions over a rolling window
+    private winRateWindow: Array<{ predicted: 'UP' | 'DOWN'; wasCorrect: boolean }> = [];
+    private static readonly WIN_RATE_WINDOW_SIZE = 30;  // Rolling 30 periods
+    private static readonly WIN_RATE_PAUSE_THRESHOLD = 0.40;  // Pause if win rate < 40%
+    private winRatePauseActive: boolean = false;
+
     // Training samples waiting for convergence
     private pendingTrainingSamples: PendingTrainingSample[] = [];
     private convergenceWindowMs: number;
@@ -161,7 +168,10 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
         this.maxPositionDollars = props.maxPositionDollars;
         this.maxConcurrentTrades = props.maxConcurrentTrades ?? 5;  // Default max 5 concurrent positions
         this.binanceSymbol = props.binanceSymbol;
-        this.convergenceWindowMs = props.convergenceWindowMs ?? 30 * 1000;
+        // 90s convergence: train on price ~90s after prediction rather than 30s.
+        // At 30s, market prices barely move; 90s captures a more meaningful signal
+        // about whether the prediction direction was correct.
+        this.convergenceWindowMs = props.convergenceWindowMs ?? 90 * 1000;
 
         // ML config with defaults (all enabled)
         this.mlConfig = {
@@ -330,6 +340,18 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
         await new Promise(resolve => setTimeout(resolve, 30 * 1000));
         this.writeLog('Price buffers warmed up, starting trading');
 
+        // Startup health check: detect and reset degenerate ExitModel from previous session.
+        // The ExitModel can load from disk in a degenerate state (stuck predicting ~0 fill prob)
+        // if prior training was dominated by non-fill signals. Check immediately so the bot
+        // doesn't trade with a broken ExitModel for the first 5 minutes.
+        // Lower minSamples to 20 on startup so even lightly-trained models are checked
+        if (this.exitModel.checkAndResetIfDegenerate(0.08, 0.92, 20)) {
+            this.writeLog(`[STARTUP] ExitModel was degenerate on load — reset to initial weights. Will retrain from live data.`);
+        } else {
+            const avgFill = this.exitModel.getAverageFillProbability();
+            this.writeLog(`[STARTUP] ExitModel health OK — avg P(fill)=${(avgFill * 100).toFixed(1)}%`);
+        }
+
         // Log connection status for debugging
         this.writeLog(`Binance buffer live: ${this.binancePriceBuffer.isLive()}, buffer size: ${this.binancePriceBuffer.getBufferSize()}`);
         this.writeLog(`Polymarket manager active: ${this.polymarketManager.isActive()}`);
@@ -373,7 +395,22 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
         const mlpStats = this.mlpModel?.getStats();
         const mlpInfo = mlpStats ? `, MLP: ${mlpStats.trainingEpochs} epochs` : '';
 
-        this.writeLog(`Models saved (FV: ${this.fairValueModel.getTrainingSamples()}, Exit: ${this.exitModel.getTrainingSamples()}, Replay: ${stats.size}${mlpInfo})`);
+        // Periodic ExitModel health check: detect and recover from degenerate state
+        // (weights pushed negative by too many non-fill training signals)
+        const wasReset = this.exitModel.checkAndResetIfDegenerate();
+        if (wasReset) {
+            this.writeLog(`[HEALTH] ExitModel was degenerate (stuck at ~0) and has been reset to initial state`);
+        } else {
+            const avgFill = this.exitModel.getAverageFillProbability();
+            this.writeLog(`Models saved (FV: ${this.fairValueModel.getTrainingSamples()}, Exit: ${this.exitModel.getTrainingSamples()}, Exit avg P(fill): ${(avgFill * 100).toFixed(1)}%, Replay: ${stats.size}${mlpInfo})`);
+        }
+
+        // Win rate summary
+        if (this.winRateWindow.length >= 10) {
+            const wins = this.winRateWindow.filter(w => w.wasCorrect).length;
+            const winRate = wins / this.winRateWindow.length;
+            this.writeLog(`[WIN_RATE] ${wins}/${this.winRateWindow.length} correct (${(winRate * 100).toFixed(1)}%) over last ${this.winRateWindow.length} periods${this.winRatePauseActive ? ' — PAUSED (too low)' : ''}`);
+        }
     }
 
     private performReplayTraining(): void {
@@ -474,6 +511,40 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
                 }
             } else {
                 this.writeLog(`Made ${this.tradesThisPeriod} trades this period`);
+
+                // Record win rate: use final market price as resolution proxy.
+                // At period end, upMid > 0.70 strongly indicates UP resolved YES.
+                // This lets us calibrate model accuracy over time.
+                const endPrices = this.getCurrentPolymarketPrices();
+                if (endPrices && this.tradesThisPeriod > 0) {
+                    const upResolvedYes = endPrices.upMid > 0.70;
+
+                    // For each distinct direction traded this period, record outcome
+                    const directionsTraded = new Set(this.activeTrades.map(t => t.direction));
+                    for (const direction of directionsTraded) {
+                        const wasCorrect = direction === 'UP' ? upResolvedYes : !upResolvedYes;
+                        this.winRateWindow.push({ predicted: direction as 'UP' | 'DOWN', wasCorrect });
+                    }
+
+                    // Keep window at fixed size
+                    while (this.winRateWindow.length > SuddenArb.WIN_RATE_WINDOW_SIZE) {
+                        this.winRateWindow.shift();
+                    }
+
+                    // Update pause state
+                    if (this.winRateWindow.length >= 10) {
+                        const wins = this.winRateWindow.filter(w => w.wasCorrect).length;
+                        const winRate = wins / this.winRateWindow.length;
+                        const wasAlreadyPaused = this.winRatePauseActive;
+                        this.winRatePauseActive = winRate < SuddenArb.WIN_RATE_PAUSE_THRESHOLD;
+
+                        if (this.winRatePauseActive && !wasAlreadyPaused) {
+                            this.writeLog(`[WIN_RATE] ⚠️  Win rate dropped to ${(winRate * 100).toFixed(1)}% (threshold: ${(SuddenArb.WIN_RATE_PAUSE_THRESHOLD * 100).toFixed(0)}%). Trading PAUSED until model improves.`);
+                        } else if (!this.winRatePauseActive && wasAlreadyPaused) {
+                            this.writeLog(`[WIN_RATE] ✅ Win rate recovered to ${(winRate * 100).toFixed(1)}%. Trading RESUMED.`);
+                        }
+                    }
+                }
             }
 
             await this.updateOrders();
@@ -970,18 +1041,32 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
             }
         }
 
-        const upDivergence = fairUpPrice - pmarketPrices.upMid;
-        const downDivergence = fairDownPrice - pmarketPrices.downMid;
+        const rawUpDivergence = fairUpPrice - pmarketPrices.upMid;
+        const rawDownDivergence = fairDownPrice - pmarketPrices.downMid;
+
+        // Win rate calibration: scale effective divergence by model accuracy.
+        // A model at 50% win rate has zero edge; at 70%+ it has meaningful edge.
+        // calibrationFactor = clamp(0.3, 1.0) based on rolling win rate:
+        //   winRate < 50% → factor = 0.3  (strong headwind — allow only very large signals)
+        //   winRate = 60% → factor = 0.7
+        //   winRate >= 70% → factor = 1.0 (full signal)
+        const calibrationFactor = this.getWinRateCalibrationFactor();
+        const upDivergence = rawUpDivergence * calibrationFactor;
+        const downDivergence = rawDownDivergence * calibrationFactor;
 
         // Periodic logging to show model vs market (every ~30 seconds)
         if (Math.random() < 0.033) {
-            this.writeLog(`Model: fairUp=${fairUpPrice.toFixed(3)}, fairDown=${fairDownPrice.toFixed(3)} | Market: up=${pmarketPrices.upMid.toFixed(3)}, down=${pmarketPrices.downMid.toFixed(3)} | Div: up=${(upDivergence * 100).toFixed(2)}%, down=${(downDivergence * 100).toFixed(2)}% | Threshold=${(this.mispricingThreshold * 100).toFixed(2)}%`);
+            const winRate = this.getCurrentWinRate();
+            const winRateStr = winRate !== null ? ` | WinRate=${(winRate * 100).toFixed(0)}% cal=${calibrationFactor.toFixed(2)}` : '';
+            this.writeLog(`Model: fairUp=${fairUpPrice.toFixed(3)}, fairDown=${fairDownPrice.toFixed(3)} | Market: up=${pmarketPrices.upMid.toFixed(3)}, down=${pmarketPrices.downMid.toFixed(3)} | Div: up=${(upDivergence * 100).toFixed(2)}%, down=${(downDivergence * 100).toFixed(2)}% | Threshold=${(this.mispricingThreshold * 100).toFixed(2)}%${winRateStr}`);
         }
 
         if (upDivergence > this.mispricingThreshold && upDivergence > downDivergence) {
             // Sanity check: divergence above MAX_SANE_DIVERGENCE suggests a miscalibrated model
             if (upDivergence > SuddenArb.MAX_SANE_DIVERGENCE) {
                 this.writeLog(`[SANITY] Skipping UP trade: divergence ${(upDivergence * 100).toFixed(1)}% exceeds sane limit (${(SuddenArb.MAX_SANE_DIVERGENCE * 100).toFixed(0)}%). Model may be miscalibrated. fair=${fairUpPrice.toFixed(3)}, market=${pmarketPrices.upMid.toFixed(3)}`);
+            } else if (this.winRatePauseActive) {
+                this.writeLog(`[WIN_RATE] Skipping UP trade: model win rate below ${(SuddenArb.WIN_RATE_PAUSE_THRESHOLD * 100).toFixed(0)}% threshold`);
             } else if (this.activeTrades.length >= this.maxConcurrentTrades) {
                 this.writeLog(`[LIMIT] Skipping UP trade: already at max concurrent trades (${this.activeTrades.length}/${this.maxConcurrentTrades})`);
             } else {
@@ -993,6 +1078,8 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
             // Sanity check: divergence above MAX_SANE_DIVERGENCE suggests a miscalibrated model
             if (downDivergence > SuddenArb.MAX_SANE_DIVERGENCE) {
                 this.writeLog(`[SANITY] Skipping DOWN trade: divergence ${(downDivergence * 100).toFixed(1)}% exceeds sane limit (${(SuddenArb.MAX_SANE_DIVERGENCE * 100).toFixed(0)}%). Model may be miscalibrated. fair=${fairDownPrice.toFixed(3)}, market=${pmarketPrices.downMid.toFixed(3)}`);
+            } else if (this.winRatePauseActive) {
+                this.writeLog(`[WIN_RATE] Skipping DOWN trade: model win rate below ${(SuddenArb.WIN_RATE_PAUSE_THRESHOLD * 100).toFixed(0)}% threshold`);
             } else if (this.activeTrades.length >= this.maxConcurrentTrades) {
                 this.writeLog(`[LIMIT] Skipping DOWN trade: already at max concurrent trades (${this.activeTrades.length}/${this.maxConcurrentTrades})`);
             } else {
@@ -1009,6 +1096,32 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
                 this.trackMissedOpportunity('DOWN', features, fairDownPrice, pmarketPrices.downMid, downDivergence);
             }
         }
+    }
+
+    /**
+     * Returns the current rolling win rate, or null if insufficient data.
+     */
+    private getCurrentWinRate(): number | null {
+        if (this.winRateWindow.length < 5) return null;
+        const wins = this.winRateWindow.filter(w => w.wasCorrect).length;
+        return wins / this.winRateWindow.length;
+    }
+
+    /**
+     * Returns a calibration multiplier [0.3, 1.0] that scales divergence signals
+     * based on the model's recent directional accuracy.
+     *
+     * - No data yet (< 5 periods): return 1.0 (no penalty until we have evidence)
+     * - win rate >= 70%: factor = 1.0  (full signal — model has real edge)
+     * - win rate = 50%: factor = 0.3  (severe reduction — model barely beats random)
+     * - win rate <= 40%: factor = 0.0  (see winRatePauseActive for hard stop)
+     */
+    private getWinRateCalibrationFactor(): number {
+        const winRate = this.getCurrentWinRate();
+        if (winRate === null) return 1.0;  // Insufficient data — assume normal operation
+        if (winRate >= 0.70) return 1.0;
+        // Linear interpolation: 0.40→0.0, 0.70→1.0
+        return Math.max(0.0, Math.min(1.0, (winRate - 0.40) / 0.30));
     }
 
     /**
@@ -1776,12 +1889,31 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
 
         // Use enhanced ExitModel if enabled, otherwise fall back to legacy 50/50 blend
         let newSellPrice: number;
-        if (this.mlConfig.useEnhancedExitModel) {
-            const pmarketPrices = this.getCurrentPolymarketPrices();
-            const currentMid = pmarketPrices
-                ? (trade.direction === 'UP' ? pmarketPrices.upMid : pmarketPrices.downMid)
-                : 0.5;
+        const pmarketPrices = this.getCurrentPolymarketPrices();
+        const currentMid = pmarketPrices
+            ? (trade.direction === 'UP' ? pmarketPrices.upMid : pmarketPrices.downMid)
+            : 0.5;
+        const periodProgress = features.periodProgress ?? 0;
 
+        // Emergency stop-loss: if market has dropped >12% below buy price, cut the loss
+        // immediately rather than waiting for further reprices. Better to take a 12% loss
+        // now than a 100% loss at expiry.
+        const drawdownPct = (buyPrice - currentMid) / buyPrice;
+        if (drawdownPct > 0.12 && trade.repriceCount > 0) {
+            const emergencyPrice = Math.max(0.01, currentMid - 0.01);  // Just below bid to fill fast
+            this.writeLog(`[STOP_LOSS] Market dropped ${(drawdownPct * 100).toFixed(1)}% below buy price (${buyPrice.toFixed(3)} → ${currentMid.toFixed(3)}). Emergency exit at ${emergencyPrice.toFixed(3)}`);
+            trade.sellOrder = await this.makeOrder(
+                `arb-${trade.id}-sell-stoploss`,
+                trade.buyOrder.clobTokenId,
+                emergencyPrice,
+                trade.buyOrder.amount,
+                Side.SELL,
+            );
+            trade.repriceCount++;
+            return;
+        }
+
+        if (this.mlConfig.useEnhancedExitModel) {
             const enhancedPrediction = this.exitModel.findOptimalPrice(
                 exitFeatures,
                 this.mlConfig.minFillProbability,
@@ -1792,10 +1924,6 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
             // Use expected value optimization with stop-loss floor
             newSellPrice = Math.max(stopLossFloor, Math.min(0.99, enhancedPrediction.suggestedPrice));
 
-            // Log the expected value optimization results
-            const levelStr = enhancedPrediction.levelPredictions
-                .map(l => `${(l.offset * 100).toFixed(1)}%:P=${(l.fillProbability * 100).toFixed(0)}%,EV=${(l.expectedValue * 100).toFixed(2)}`)
-                .join(' | ');
             const profitPct = ((newSellPrice - buyPrice) / buyPrice * 100).toFixed(1);
             this.writeLog(`ExitModel reprice #${trade.repriceCount + 1}: price=${newSellPrice.toFixed(3)} (${profitPct}%), EV=${(enhancedPrediction.expectedValue * 100).toFixed(2)}, P(fill)=${(enhancedPrediction.fillProbability * 100).toFixed(0)}%, floor=${stopLossFloor.toFixed(3)}`);
         } else {
@@ -1803,6 +1931,17 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
             const exitPrediction = this.exitModel.predict(exitFeatures);
             const suggestedPrice = exitPrediction.suggestedPrice;
             newSellPrice = Math.max(stopLossFloor, Math.min(0.99, (originalSellPrice + suggestedPrice) / 2));
+        }
+
+        // Apply time-aware cap: lower price aggressively if period is near expiry
+        const timeAwareCap = this.getTimeAwareSellPriceCap(periodProgress, currentMid, buyPrice);
+        if (timeAwareCap !== null) {
+            // In reprice context, override the stop-loss floor too — expiry is worse than a small loss
+            const cappedPrice = Math.max(0.01, Math.min(newSellPrice, timeAwareCap));
+            if (cappedPrice < newSellPrice) {
+                this.writeLog(`[TIME_AWARE] Reprice capped from ${newSellPrice.toFixed(3)} to ${cappedPrice.toFixed(3)} (progress: ${(periodProgress * 100).toFixed(0)}%)`);
+                newSellPrice = cappedPrice;
+            }
         }
 
         // Sell timeout derived from ExitModel using fill probability
@@ -1867,9 +2006,41 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
         }
     }
 
+    /**
+     * Returns the time-aware sell price cap based on period progress.
+     *
+     * As the period approaches expiry, we lower the sell target to ensure the
+     * position exits before the period resets. Holding through period end means
+     * tokens resolve at 0 or 1 — acceptable for a winning bet, catastrophic for
+     * a losing one.
+     *
+     * - periodProgress < 0.70: full profit target (use normal pricing)
+     * - periodProgress 0.70-0.85: moderate urgency, cap at mid + 1.5%
+     * - periodProgress 0.85-0.95: high urgency, cap at mid + 0.3%
+     * - periodProgress > 0.95: critical, accept break-even or small loss
+     */
+    private getTimeAwareSellPriceCap(
+        periodProgress: number,
+        currentMid: number,
+        buyPrice: number
+    ): number | null {
+        if (periodProgress >= 0.95) {
+            // Final 5%: accept break-even or up to 2% loss to ensure exit
+            return Math.max(0.01, buyPrice - 0.02);
+        } else if (periodProgress >= 0.85) {
+            // Final 15%: cap at mid + 0.3% (tight, likely to fill)
+            return Math.min(0.99, currentMid + 0.003);
+        } else if (periodProgress >= 0.70) {
+            // Final 30%: cap at mid + 1.5%
+            return Math.min(0.99, currentMid + 0.015);
+        }
+        return null;  // No cap — use normal pricing
+    }
+
     private async placeSellOrder(trade: ActiveTrade, features: Record<string, number>, regime?: MarketRegime): Promise<void> {
         const buyPrice = trade.buyOrder.targetBuyPrice ?? 0.5;
         const minSellPrice = Math.min(0.99, buyPrice + this.minProfitMargin);  // Floor based on minProfitMargin
+        const periodProgress = features.periodProgress ?? 0;
 
         let sellPrice: number;
 
@@ -1894,10 +2065,28 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
             // Use ExitModel suggested price (max expected value), but enforce minProfitMargin floor
             sellPrice = Math.max(minSellPrice, Math.min(0.99, enhancedPrediction.suggestedPrice));
 
+            // Apply time-aware cap: lower sell target if period is near expiry
+            const timeAwareCap = this.getTimeAwareSellPriceCap(periodProgress, currentMid, buyPrice);
+            if (timeAwareCap !== null && sellPrice > timeAwareCap) {
+                this.writeLog(`[TIME_AWARE] Capping sell from ${sellPrice.toFixed(3)} to ${timeAwareCap.toFixed(3)} (progress: ${(periodProgress * 100).toFixed(0)}%)`);
+                sellPrice = timeAwareCap;
+            }
+
             this.writeLog(`ExitModel initial sell: offset=${(enhancedPrediction.suggestedOffset * 100).toFixed(1)}%, EV=${(enhancedPrediction.expectedValue * 100).toFixed(2)}, P(fill)=${(enhancedPrediction.fillProbability * 100).toFixed(0)}%, price=${sellPrice.toFixed(3)} (min=${minSellPrice.toFixed(3)})`);
         } else {
             // Fallback to targetProfitMargin when ExitModel not ready
+            const pmarketPrices = this.getCurrentPolymarketPrices();
+            const currentMid = pmarketPrices
+                ? (trade.direction === 'UP' ? pmarketPrices.upMid : pmarketPrices.downMid)
+                : buyPrice;
             sellPrice = Math.min(0.99, buyPrice + this.targetProfitMargin);
+
+            // Still apply time-aware cap in fallback mode
+            const timeAwareCap = this.getTimeAwareSellPriceCap(periodProgress, currentMid, buyPrice);
+            if (timeAwareCap !== null && sellPrice > timeAwareCap) {
+                this.writeLog(`[TIME_AWARE] Capping fallback sell from ${sellPrice.toFixed(3)} to ${timeAwareCap.toFixed(3)} (progress: ${(periodProgress * 100).toFixed(0)}%)`);
+                sellPrice = timeAwareCap;
+            }
         }
 
         // Sell timeout derived from ExitModel using fill probability
@@ -2106,6 +2295,12 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
         for (const sample of readySamples) {
             const pmarketPrices = this.getCurrentPolymarketPrices();
             if (pmarketPrices) {
+                // Note on training signal: we're training on the market price
+                // convergenceWindowMs after the prediction was made. This gives
+                // the model a "predict short-term price movement" objective.
+                // However, period-end training (applyNoTradePenalty, trainOnExpiredSell)
+                // trains on resolution prices (0 or 1), creating a conflicting objective.
+                // TODO: Separate these into two model heads or use a unified training objective.
                 this.fairValueModel.train(
                     sample.features,
                     pmarketPrices.upMid,
