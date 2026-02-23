@@ -93,6 +93,7 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
     private activeTrades: ActiveTrade[] = [];
     private tradeCounter: number = 0;
     private tradesThisPeriod: number = 0;
+    private directionsTradedThisPeriod: Set<'UP' | 'DOWN'> = new Set();
 
     // Win rate tracking for confidence calibration
     // Tracks actual directional outcomes vs predictions over a rolling window
@@ -520,7 +521,9 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
                     const upResolvedYes = endPrices.upMid > 0.70;
 
                     // For each distinct direction traded this period, record outcome
-                    const directionsTraded = new Set(this.activeTrades.map(t => t.direction));
+                    const directionsTraded = this.directionsTradedThisPeriod.size > 0
+                        ? new Set(this.directionsTradedThisPeriod)
+                        : new Set(this.activeTrades.map(t => t.direction));
                     for (const direction of directionsTraded) {
                         const wasCorrect = direction === 'UP' ? upResolvedYes : !upResolvedYes;
                         this.winRateWindow.push({ predicted: direction as 'UP' | 'DOWN', wasCorrect });
@@ -544,6 +547,8 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
                             this.writeLog(`[WIN_RATE] ✅ Win rate recovered to ${(winRate * 100).toFixed(1)}%. Trading RESUMED.`);
                         }
                     }
+
+                    this.directionsTradedThisPeriod.clear();
                 }
             }
 
@@ -611,6 +616,7 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
 
         this.activeTrades = [];
         this.tradesThisPeriod = 0;
+        this.directionsTradedThisPeriod.clear();
         // Note: lastUpPrice, lastDownPrice, lastUpBook, lastDownBook, lastUpDepth, lastDownDepth
         // are NOT cleared anywhere - the new subscription's onPrice/onBook callbacks will overwrite
         // them when new data arrives. This prevents "No PM prices" spam at period boundaries,
@@ -2179,6 +2185,7 @@ export class SuddenArb extends QuantBot implements QuantBotRun {
                     };
                     this.activeTrades.push(trade);
                     this.tradesThisPeriod++;
+                    this.directionsTradedThisPeriod.add(direction);
 
                     // Create theoretical exit tracker for training enhanced ExitModel
                     const priceData = direction === 'UP' ? this.lastUpPrice : this.lastDownPrice;
