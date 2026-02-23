@@ -79,6 +79,11 @@ export class TestEvaluatorStage extends BasePipelineStage {
             );
 
             if (meetsRequirements) {
+                // Stop the running test bot before promoting it to the
+                // PROD_CANDIDATE state so it no longer consumes test capacity
+                // or continues trading in test mode while awaiting approval.
+                this.botManager.removeBot(bot.botId);
+
                 // Transition: TEST_RUNNING -> TEST_EVALUATED -> PROD_CANDIDATE
                 this.pipelineDb.updateBotState(bot.botId, BotLifecycleState.TEST_EVALUATED, {
                     testPnl: metrics.pnl,

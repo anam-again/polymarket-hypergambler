@@ -20,6 +20,8 @@ import type { PipelineStageConfig } from './types.js';
 
 export interface BotPromoterConfig extends PipelineStageConfig {
     maxTestBots: number;
+    /** Optional global cap that includes non-pipeline managed bots */
+    globalTestLimit?: number;
 }
 
 // ============================================================================
@@ -46,12 +48,16 @@ export class BotPromoterStage extends BasePipelineStage {
     }
 
     public async runOnce(): Promise<void> {
-        // Count current test bots managed by the pipeline
         const activeCount = this.botManager.getActiveBotCount().test;
-        const slotsAvailable = this.promoterConfig.maxTestBots - activeCount;
+        const globalLimit = this.promoterConfig.globalTestLimit ?? this.promoterConfig.maxTestBots;
+        const effectiveMax = Math.min(this.promoterConfig.maxTestBots, globalLimit);
+        const slotsAvailable = Math.max(0, effectiveMax - activeCount);
 
         if (slotsAvailable <= 0) {
-            console.log(`[${this.name}] No test slots available (${activeCount}/${this.promoterConfig.maxTestBots})`);
+            const limitReason = effectiveMax < this.promoterConfig.maxTestBots
+                ? `${activeCount}/${effectiveMax} (global max reached)`
+                : `${activeCount}/${this.promoterConfig.maxTestBots}`;
+            console.log(`[${this.name}] No test slots available (${limitReason})`);
             return;
         }
 

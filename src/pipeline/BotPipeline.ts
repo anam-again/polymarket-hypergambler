@@ -79,7 +79,7 @@ export class BotPipeline {
 
         this.promoter = new BotPromoterStage(
             this.pipelineDb,
-            this.config.promoter,
+            { ...this.config.promoter, globalTestLimit: this.config.maxConcurrentBots.test },
             this.botManager,
             { ...this.commonTestProps, PROD_MODE: false },
         );
@@ -160,10 +160,16 @@ export class BotPipeline {
             return false;
         }
 
-        // First remove from test runtime (it may still be running as test)
-        this.botManager.removeBot(botId);
+        const activeProdBots = this.botManager.getActiveBotCount().prod;
+        if (activeProdBots >= this.config.maxConcurrentBots.prod) {
+            console.warn(
+                `[BotPipeline] Cannot approve bot ${botId}: prod limit (${this.config.maxConcurrentBots.prod}) reached`
+            );
+            return false;
+        }
 
-        // Create prod bot instance
+        // Create prod bot instance first so we only stop the test bot once
+        // we know the prod bot can be instantiated successfully.
         const bot = loadBotFromLifecycleRecord(record, {
             ...this.commonProdProps,
             PROD_MODE: true,
@@ -172,6 +178,13 @@ export class BotPipeline {
         if (!bot) {
             console.error(`[BotPipeline] Failed to instantiate prod bot ${botId}`);
             return false;
+        }
+
+        // Remove any running test instance before starting prod mode to avoid
+        // having duplicate bots trading simultaneously.
+        const removed = this.botManager.removeBot(botId);
+        if (!removed) {
+            console.log(`[BotPipeline] No existing test bot ${botId} to remove (may have been stopped already).`);
         }
 
         // Add to prod runtime

@@ -211,9 +211,15 @@ export class PipelineDatabase {
 
     /**
      * Gets prod bot metrics over a rolling window.
+     * Uses the later of prodStartTimestamp or (now - windowMs) to ensure we
+     * only evaluate true production performance (and not historical test data).
      */
     public getProdBotMetrics(botId: string, windowMs: number): BotMetrics {
-        return this.getTestBotMetrics(botId, Date.now() - windowMs);
+        const bot = this.getBotById(botId);
+        const windowStart = Date.now() - windowMs;
+        const prodStart = bot?.prodStartTimestamp ?? null;
+        const cutoff = prodStart ? Math.max(prodStart, windowStart) : windowStart;
+        return this.getTestBotMetrics(botId, cutoff);
     }
 
     // =========================================================================
